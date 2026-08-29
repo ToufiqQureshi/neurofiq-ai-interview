@@ -69,20 +69,25 @@ export function Repositories() {
     );
   }, [repos, query]);
 
+  // The limit check reads `selected` directly rather than running inside a
+  // setSelected updater. Updaters have to be pure — React calls them twice in
+  // StrictMode — so raising the error in there fired the side effect twice.
   const toggle = (fullName: string) => {
     setError('');
-    setSelected(prev => {
-      if (prev.includes(fullName)) return prev.filter(n => n !== fullName);
-      if (prev.length >= remaining) {
-        setError(
-          remaining === 0
-            ? `You've used all ${limit} analysis slots.`
-            : `You can pick ${remaining} more repositor${remaining === 1 ? 'y' : 'ies'} on the free tier.`,
-        );
-        return prev;
-      }
-      return [...prev, fullName];
-    });
+
+    if (selected.includes(fullName)) {
+      setSelected(selected.filter(n => n !== fullName));
+      return;
+    }
+    if (selected.length >= remaining) {
+      setError(
+        remaining === 0
+          ? `You've used all ${limit} analysis slots.`
+          : `You can pick ${remaining} more repositor${remaining === 1 ? 'y' : 'ies'} on the free tier.`,
+      );
+      return;
+    }
+    setSelected([...selected, fullName]);
   };
 
   // Start every selected analysis, then follow the first one. The rest keep
@@ -177,7 +182,7 @@ export function Repositories() {
       )}
 
       {error && (
-        <div className="bg-crit-soft border border-crit/20 text-crit rounded-xl px-4 py-3 text-sm">
+        <div role="alert" className="bg-crit-soft border border-crit/20 text-crit rounded-xl px-4 py-3 text-sm">
           {error}
         </div>
       )}
