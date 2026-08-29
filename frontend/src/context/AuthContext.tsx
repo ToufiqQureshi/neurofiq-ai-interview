@@ -1,7 +1,7 @@
 import { createContext, useContext, useEffect, useState } from 'react';
 
 interface User {
-  id: number;
+  id: string;
   github_username: string;
   email: string;
   avatar_url: string;
@@ -24,7 +24,6 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    // Check if the user's session is still valid
     fetch(`${import.meta.env.VITE_API_URL}/auth/me`, { credentials: 'include' })
       .then(r => r.ok ? r.json() : null)
       .then(d => setUser(d?.user || null))

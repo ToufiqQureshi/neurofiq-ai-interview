@@ -20,7 +20,6 @@ import (
 
 var GithubOAuthConfig *oauth2.Config
 
-// InitOAuth sets up the OAuth configuration using our .env variables
 func InitOAuth() {
 	GithubOAuthConfig = &oauth2.Config{
 		ClientID:     os.Getenv("GITHUB_CLIENT_ID"),
@@ -31,8 +30,6 @@ func InitOAuth() {
 	}
 }
 
-// generateOAuthState returns a cryptographically random, URL-safe string used
-// as the OAuth CSRF `state` token.
 func generateOAuthState() (string, error) {
 	b := make([]byte, 32)
 	if _, err := rand.Read(b); err != nil {
@@ -41,7 +38,6 @@ func generateOAuthState() (string, error) {
 	return base64.URLEncoding.EncodeToString(b), nil
 }
 
-// HandleGithubLogin redirects the user to GitHub's consent page
 func HandleGithubLogin(c *gin.Context) {
 	state, err := generateOAuthState()
 	if err != nil {
@@ -50,8 +46,6 @@ func HandleGithubLogin(c *gin.Context) {
 		return
 	}
 
-	// Stash the state in the session so the callback can verify it came from
-	// this same browser, preventing login-CSRF.
 	session := sessions.Default(c)
 	session.Set("oauth_state", state)
 	if err := session.Save(); err != nil {
@@ -61,12 +55,9 @@ func HandleGithubLogin(c *gin.Context) {
 	}
 
 	url := GithubOAuthConfig.AuthCodeURL(state)
-
-	// c.Redirect is a Gin function that sends an HTTP 302 redirect response
 	c.Redirect(http.StatusTemporaryRedirect, url)
 }
 
-// HandleGithubCallback is called by GitHub after the user logs in
 func HandleGithubCallback(c *gin.Context) {
 	log.Println("[oauth] callback hit:", c.Request.URL.String())
 
@@ -78,7 +69,6 @@ func HandleGithubCallback(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid state"})
 		return
 	}
-	// One-time use: clear it immediately so it can't be replayed.
 	session.Delete("oauth_state")
 
 	code := c.Query("code")
@@ -88,16 +78,13 @@ func HandleGithubCallback(c *gin.Context) {
 		return
 	}
 
-	// Exchange the code for a token
 	token, err := GithubOAuthConfig.Exchange(context.Background(), code)
 	if err != nil {
 		log.Println("[oauth] FAIL: token exchange:", err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to exchange token"})
 		return
 	}
-	log.Println("[oauth] token exchange OK")
 
-	// Fetch user details from GitHub
 	client := GithubOAuthConfig.Client(context.Background(), token)
 	resp, err := client.Get("https://api.github.com/user")
 	if err != nil {
@@ -119,8 +106,6 @@ func HandleGithubCallback(c *gin.Context) {
 		return
 	}
 
-	// GitHub omits the email on /user when the user has it set to private.
-	// Fall back to the primary verified address from /user/emails (needs the user:email scope).
 	if githubUser.Email == "" {
 		if emailResp, err := client.Get("https://api.github.com/user/emails"); err == nil {
 			defer emailResp.Body.Close()
@@ -139,15 +124,11 @@ func HandleGithubCallback(c *gin.Context) {
 			}
 		}
 	}
-	log.Printf("[oauth] github user OK: id=%d login=%s email=%q\n", githubUser.ID, githubUser.Login, githubUser.Email)
 
-	// Lookup or create user in DB
 	var user models.User
 	result := config.DB.Where("github_id = ?", githubUser.ID).First(&user)
 
 	if result.Error != nil {
-		log.Println("[oauth] no existing user row (lookup error:", result.Error, ") -- creating new one")
-		// User not found, create new
 		user = models.User{
 			GithubID:        githubUser.ID,
 			GithubUsername:  githubUser.Login,
@@ -161,21 +142,14 @@ func HandleGithubCallback(c *gin.Context) {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to create user"})
 			return
 		}
-		log.Println("[oauth] created user id:", user.ID)
 	} else {
-		// User exists, update last login (and backfill email if we can now resolve one)
 		user.LastLoginAt = time.Now()
 		if user.Email == "" && githubUser.Email != "" {
 			user.Email = githubUser.Email
 		}
-		if err := config.DB.Save(&user).Error; err != nil {
-			log.Println("[oauth] WARN: failed to update last_login_at:", err)
-		}
-		log.Println("[oauth] existing user id:", user.ID)
+		_ = config.DB.Save(&user).Error
 	}
 
-	// Save the token and user ID in the session cookie (state was already
-	// cleared above; reuse the same session handle)
 	session.Set("user_id", user.ID)
 	session.Set("github_token", token.AccessToken)
 
@@ -184,9 +158,7 @@ func HandleGithubCallback(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to save session"})
 		return
 	}
-	log.Println("[oauth] session saved for user_id:", user.ID, "-- redirecting to dashboard")
 
-	// Redirect back to the frontend dashboard
 	frontendURL := os.Getenv("FRONTEND_URL")
 	if frontendURL == "" {
 		frontendURL = "http://localhost:5173"
@@ -194,30 +166,31 @@ func HandleGithubCallback(c *gin.Context) {
 	c.Redirect(http.StatusTemporaryRedirect, frontendURL+"/dashboard")
 }
 
-// HandleAuthMe checks the session cookie and returns the current logged-in user
 func HandleAuthMe(c *gin.Context) {
 	session := sessions.Default(c)
 	userID := session.Get("user_id")
 
 	if userID == nil {
-		log.Println("[auth/me] no user_id in session (cookie missing or empty)")
 		c.JSON(http.StatusUnauthorized, gin.H{"error": "Not authenticated"})
 		return
 	}
-	log.Printf("[auth/me] session user_id = %v (%T)\n", userID, userID)
 
 	var user models.User
 	if err := config.DB.Where("id = ?", userID).First(&user).Error; err != nil {
-		log.Println("[auth/me] FAIL: db lookup for user_id", userID, ":", err)
-		// Session exists but user deleted from DB? Clear session
 		session.Clear()
 		session.Save()
 		c.JSON(http.StatusUnauthorized, gin.H{"error": "User not found"})
 		return
 	}
-	log.Println("[auth/me] OK, resolved user:", user.GithubUsername)
 
 	c.JSON(http.StatusOK, gin.H{
 		"user": user,
 	})
+}
+
+func HandleLogout(c *gin.Context) {
+	session := sessions.Default(c)
+	session.Clear()
+	_ = session.Save()
+	c.JSON(http.StatusOK, gin.H{"ok": true})
 }

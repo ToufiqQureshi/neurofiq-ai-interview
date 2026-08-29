@@ -10,6 +10,11 @@ services:
     environment:
       - PYTHON_WORKER_URL=http://ai-worker:8000
       - INTERNAL_SECRET=${INTERNAL_SECRET}
+      - DATABASE_URL=${DATABASE_URL}
+      - SESSION_SECRET=${SESSION_SECRET}
+      - APP_ENV=${APP_ENV:-development}
+      - FRONTEND_URL=${FRONTEND_URL:-http://localhost:5173}
+      - OAUTH_REDIRECT_URL=${OAUTH_REDIRECT_URL:-http://localhost:8080/auth/github/callback}
       - SUPABASE_URL=${SUPABASE_URL}
       - SUPABASE_SERVICE_ROLE_KEY=${SUPABASE_SERVICE_ROLE_KEY}
       - GITHUB_CLIENT_ID=${GITHUB_CLIENT_ID}
@@ -32,6 +37,7 @@ services:
       - "8000:8000"
     environment:
       - INTERNAL_SECRET=${INTERNAL_SECRET}
-      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
+      - DEEPSEEK_API_KEY=${DEEPSEEK_API_KEY}
+      - EXA_API_KEY=${EXA_API_KEY}
     volumes:
       - ./ai-worker:/app

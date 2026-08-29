@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"os"
 )
 
 type QAItem struct {
@@ -20,17 +19,18 @@ type EvaluatePayload struct {
 }
 
 func CallPythonEvaluationWorker(payload EvaluatePayload) (string, float64, error) {
-	workerURL := os.Getenv("PYTHON_WORKER_URL")
-	if workerURL == "" {
-		workerURL = "http://localhost:8001"
+	jsonData, err := json.Marshal(payload)
+	if err != nil {
+		return "", 0, err
 	}
-
-	jsonData, _ := json.Marshal(payload)
-	req, _ := http.NewRequest("POST", workerURL+"/internal/evaluate-answer", bytes.NewBuffer(jsonData))
+	req, err := http.NewRequest("POST", workerURL()+"/internal/evaluate-answer", bytes.NewBuffer(jsonData))
+	if err != nil {
+		return "", 0, err
+	}
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("X-Internal-Secret", os.Getenv("INTERNAL_SECRET"))
+	req.Header.Set("X-Internal-Secret", internalSecret())
 
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := workerHTTPClient().Do(req)
 	if err != nil {
 		return "", 0, err
 	}
@@ -44,7 +44,6 @@ func CallPythonEvaluationWorker(payload EvaluatePayload) (string, float64, error
 	var result struct {
 		OverallScore float64 `json:"overall_score"`
 	}
-	// We extract the score to save it in DB directly, but we also save the full raw JSON.
 	if err := json.Unmarshal(body, &result); err != nil {
 		return "", 0, fmt.Errorf("failed to parse AI evaluation JSON: %w", err)
 	}

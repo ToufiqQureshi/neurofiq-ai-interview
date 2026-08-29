@@ -13,7 +13,7 @@ export function AnalysisProgress() {
     if (!repoId) return;
 
     const repoFullName = decodeURIComponent(repoId);
-    setStep(0); // Fetching file structure...
+    setStep(0);
 
     const startAnalysis = async () => {
       try {
@@ -45,8 +45,10 @@ export function AnalysisProgress() {
              setAnalysis(parsedAnalysis);
              setTimeout(() => setStep(3), 1000);
            }
+        } else if (data.status === 'failed' || data.status === 'not_found') {
+           setError(data.error || 'Analysis failed. Go back and retry this repository.');
         } else if (data.status === 'processing') {
-           setStep(1); // Polling state
+           setStep(1);
            pollStatus();
         }
       } catch (err: any) {
@@ -74,12 +76,15 @@ export function AnalysisProgress() {
                setAnalysis(parsedAnalysis);
                setTimeout(() => setStep(3), 1000);
              }
+           } else if (data.status === 'failed' || data.status === 'not_found') {
+             clearInterval(interval);
+             setError(data.error || 'Analysis failed. Go back and retry this repository.');
            }
          } catch (err: any) {
            clearInterval(interval);
            setError(err.message);
          }
-       }, 3000); // Poll every 3 seconds
+       }, 3000);
     };
 
     startAnalysis();
@@ -98,23 +103,19 @@ export function AnalysisProgress() {
   return (
     <div className="min-h-screen bg-paper text-ink flex items-center justify-center p-4">
       <div className="max-w-2xl w-full bg-surface rounded-2xl p-8 border border-line shadow-sm">
-
         {error ? (
           <div className="text-center space-y-6">
             <AlertTriangle className="w-12 h-12 text-crit mx-auto" />
             <h2 className="font-display text-2xl font-semibold text-crit">Analysis Failed</h2>
             <p className="text-ink-soft">{error}</p>
-            <Link to="/dashboard" className="inline-block mt-4 text-accent hover:underline">Back to Dashboard</Link>
+            <Link to="/repositories" className="inline-block mt-4 text-accent hover:underline">Back to repositories</Link>
           </div>
         ) : step < 3 ? (
           <div className="text-center space-y-6">
             <Loader2 className="w-12 h-12 text-accent animate-spin mx-auto" />
             <h2 className="font-display text-2xl font-semibold">{steps[step]}</h2>
             <div className="w-full bg-line h-2 rounded-full overflow-hidden">
-              <div
-                className="bg-accent h-full transition-all duration-500"
-                style={{ width: `${(step / 3) * 100}%` }}
-              ></div>
+              <div className="bg-accent h-full transition-all duration-500" style={{ width: `${(step / 3) * 100}%` }}></div>
             </div>
           </div>
         ) : (
@@ -126,7 +127,6 @@ export function AnalysisProgress() {
               <h2 className="font-display text-3xl font-bold mb-2 text-ink">Analysis Complete</h2>
               <p className="text-ink-faint">{decodeURIComponent(repoId || '')}</p>
             </div>
-
             <div className="grid grid-cols-2 gap-4">
               <div className="bg-paper p-4 rounded-xl border border-line">
                 <div className="flex items-center gap-2 mb-2 text-ink-faint text-xs font-mono uppercase tracking-wider">
@@ -144,7 +144,6 @@ export function AnalysisProgress() {
                 </div>
                 {(() => {
                   const raw = analysis?.overall_complexity || "Unknown";
-                  // Older cached analyses stored a full sentence here instead of a short label.
                   const label = raw.split(/[:.]/)[0].trim();
                   return (
                     <>
@@ -157,7 +156,6 @@ export function AnalysisProgress() {
                 })()}
               </div>
             </div>
-
             <div className="pt-4 flex gap-3">
               <Link to={`/interview/${encodeURIComponent(repoId || '')}?mode=text`} className="flex-1 bg-surface border border-line-strong hover:bg-paper text-ink py-3 rounded-full font-semibold transition-colors text-center">
                 Start Text Interview
@@ -168,7 +166,6 @@ export function AnalysisProgress() {
             </div>
           </div>
         )}
-
       </div>
     </div>
   );
