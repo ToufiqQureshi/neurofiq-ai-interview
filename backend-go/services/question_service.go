@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"os"
 
 	"github.com/ToufiqQureshi/neurofiq-ai-interview/backend-go/config"
 	"github.com/ToufiqQureshi/neurofiq-ai-interview/backend-go/models"
@@ -18,24 +17,21 @@ type GenerateQuestionsPayload struct {
 }
 
 func GetOrGenerateQuestions(userID string, repoFullName string) ([]models.Question, error) {
-	// 1. Fetch analysis from DB
+	if !ValidRepoFullName(repoFullName) {
+		return nil, fmt.Errorf("invalid repository name")
+	}
+
 	var profile models.GithubProfile
 	if err := config.DB.Where("user_id = ? AND repo_full_name = ?", userID, repoFullName).First(&profile).Error; err != nil {
-		return nil, fmt.Errorf("repo analysis not found for user: %v", err)
+		return nil, fmt.Errorf("repo analysis not found for user")
+	}
+	if profile.StrategyUsed == "pending" {
+		return nil, fmt.Errorf("analysis is still running")
+	}
+	if profile.StrategyUsed == "failed" || profile.AnalysisJSON == "" || profile.AnalysisJSON == "null" {
+		return nil, fmt.Errorf("analysis is not ready — retry analyzing this repository")
 	}
 
-	// 2. Try to find cached/reusable questions in the DB
-	// For MVP, we'll try to find any 5 reusable questions for this specific repo name,
-	// or just generic reusable ones if we want to simulate the tech-stack matching.
-	var cachedQuestions []models.Question
-	config.DB.Where("reusable = ? AND language = ?", true, repoFullName).Limit(5).Find(&cachedQuestions)
-
-	if len(cachedQuestions) >= 5 {
-		// YAGNI / Cost-Saving: Use cached questions!
-		return cachedQuestions, nil
-	}
-
-	// 3. Fallback: Call Python AI worker to generate new questions
 	payload := GenerateQuestionsPayload{
 		RepoFullName: repoFullName,
 		AnalysisData: profile.AnalysisJSON,
@@ -46,10 +42,9 @@ func GetOrGenerateQuestions(userID string, repoFullName string) ([]models.Questi
 		return nil, err
 	}
 
-	// 4. Save newly generated questions to DB for future reuse
 	for i := range newQuestions {
 		newQuestions[i].Reusable = true
-		newQuestions[i].Language = repoFullName // Using repoFullName as the 'tech stack' group for MVP
+		newQuestions[i].Language = repoFullName
 		config.DB.Create(&newQuestions[i])
 	}
 
@@ -57,17 +52,18 @@ func GetOrGenerateQuestions(userID string, repoFullName string) ([]models.Questi
 }
 
 func callPythonQuestionGenerator(payload GenerateQuestionsPayload) ([]models.Question, error) {
-	workerURL := os.Getenv("PYTHON_WORKER_URL")
-	if workerURL == "" {
-		workerURL = "http://localhost:8001"
+	jsonData, err := json.Marshal(payload)
+	if err != nil {
+		return nil, err
 	}
-
-	jsonData, _ := json.Marshal(payload)
-	req, _ := http.NewRequest("POST", workerURL+"/internal/generate-questions", bytes.NewBuffer(jsonData))
+	req, err := http.NewRequest("POST", workerURL()+"/internal/generate-questions", bytes.NewBuffer(jsonData))
+	if err != nil {
+		return nil, err
+	}
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("X-Internal-Secret", os.Getenv("INTERNAL_SECRET"))
+	req.Header.Set("X-Internal-Secret", internalSecret())
 
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := workerHTTPClient().Do(req)
 	if err != nil {
 		return nil, err
 	}

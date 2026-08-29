@@ -7,7 +7,6 @@ import (
 	"github.com/ToufiqQureshi/neurofiq-ai-interview/backend-go/services"
 )
 
-// HandleGetQuestions fetches or generates questions for an interview.
 func HandleGetQuestions(c *gin.Context) {
 	userID := c.MustGet("user_id").(string)
 
@@ -19,12 +18,22 @@ func HandleGetQuestions(c *gin.Context) {
 
 	questions, err := services.GetOrGenerateQuestions(userID, repoFullName)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
+	}
+
+	public := make([]gin.H, 0, len(questions))
+	for _, q := range questions {
+		public = append(public, gin.H{
+			"id":            q.ID,
+			"question_text": q.QuestionText,
+			"difficulty":    q.Difficulty,
+			"category":      q.Category,
+		})
 	}
 
 	c.JSON(http.StatusOK, gin.H{
 		"message":   "Questions retrieved successfully",
-		"questions": questions,
+		"questions": public,
 	})
 }
