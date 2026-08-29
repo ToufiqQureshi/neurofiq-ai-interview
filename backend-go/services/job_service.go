@@ -693,7 +693,51 @@ func syncJobsFromCareersPage(company models.Company) (int, error) {
 		})
 	}
 
+	if !careersPageResultLooksReal(rows, company.Name) {
+		return 0, nil
+	}
 	return replaceJobsForCompany(company.ID, rows)
+}
+
+// maxCareersPageRoles is a sanity ceiling for a single careers page. A
+// company genuinely listing more than this runs a real ATS, which the
+// earlier tiers would have found — so a huge result here means we read the
+// wrong kind of list.
+const maxCareersPageRoles = 60
+
+// careersPageResultLooksReal rejects LLM extractions that clearly aren't job
+// openings.
+//
+// This exists because of a real failure: an education platform's careers page
+// linked to a "career options" guidance article, and the extraction happily
+// returned 295 "jobs" — Actor, Actuary, Addiction Counselor, Aerospace
+// Engineer… an alphabetical list of professions. Bad data is worse than none.
+func careersPageResultLooksReal(rows []models.Job, companyName string) bool {
+	if len(rows) == 0 {
+		return true // nothing to store, nothing to doubt
+	}
+
+	if len(rows) > maxCareersPageRoles {
+		log.Printf("careers page for %s returned %d roles — above the sane ceiling, discarding",
+			companyName, len(rows))
+		return false
+	}
+
+	// A real listing carries at least some location or department metadata.
+	// A generic list of profession names carries neither.
+	withMeta := 0
+	for _, r := range rows {
+		if r.Location != "" || r.Department != "" {
+			withMeta++
+		}
+	}
+	if len(rows) >= 5 && withMeta == 0 {
+		log.Printf("careers page for %s returned %d roles with no location or department at all — discarding",
+			companyName, len(rows))
+		return false
+	}
+
+	return true
 }
 
 // careersPathGuesses are the conventional places a careers page lives.
@@ -765,6 +809,10 @@ func containsHiringMarker(body string) bool {
 // real board — without following that link those companies look empty.
 var jobsLinkRe = regexp.MustCompile(`(?is)<a[^>]+href=["']([^"']+)["'][^>]*>([^<]{0,80}?(?:view\s+(?:all\s+)?(?:open|job|position|role)|current\s+opening|open\s+position|open\s+role|see\s+(?:all\s+)?job|explore\s+(?:open\s+)?role|browse\s+job|all\s+opening|job\s+opening)[^<]{0,40})</a>`)
 
+// guidancePageRe matches URLs that are career *advice* rather than career
+// *openings* — a distinction that cost us 295 fake job rows once.
+var guidancePageRe = regexp.MustCompile(`(?i)career-(option|guide|advice|counsel|path|choice)|/blog/|/article|after-12th|course`)
+
 // findJobsListingLink looks for a link from a careers page to the page that
 // actually lists roles. Returns an absolute URL, or "" if none found.
 func findJobsListingLink(pageHTML, baseURL string) string {
@@ -784,6 +832,13 @@ func findJobsListingLink(pageHTML, baseURL string) string {
 		abs := base.ResolveReference(ref)
 		if abs.String() == baseURL {
 			continue // links back to itself
+		}
+		// Education and career-advice sites link to "career options" and
+		// "career guide" articles from their careers page. Those are lists
+		// of professions, not openings — following one produced 295 bogus
+		// "jobs" once.
+		if guidancePageRe.MatchString(abs.String()) {
+			continue
 		}
 		return abs.String()
 	}
