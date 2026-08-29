@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import { Loader2, Briefcase } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
-import { saveInvite } from '../lib/invite';
+import { saveInvite, clearInvite } from '../lib/invite';
 
 type Invite = {
   role_title: string;
@@ -23,6 +23,13 @@ export function InviteLanding() {
 
   useEffect(() => {
     if (!token) return;
+
+    // Drop whatever was held before looking this one up. Opening a second
+    // invite link, or opening one that turns out to be dead, must not leave
+    // the previous recruiter's token in storage for a later interview to pick
+    // up.
+    clearInvite();
+
     fetch(`${import.meta.env.VITE_API_URL}/api/public/invites/${encodeURIComponent(token)}`)
       .then(async res => {
         const data = await res.json().catch(() => null);
@@ -36,7 +43,10 @@ export function InviteLanding() {
         // its own so an abandoned invite cannot attach to a later run.
         saveInvite(token, data.role_title);
       })
-      .catch(err => setError(err.message));
+      .catch(err => {
+        clearInvite();
+        setError(err.message);
+      });
   }, [token]);
 
   if (error) {

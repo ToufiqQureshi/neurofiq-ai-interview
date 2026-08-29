@@ -31,13 +31,15 @@ export function InterviewSession() {
     if (!repoId || requestedRepo.current === repoId) return;
     requestedRepo.current = repoId;
 
-    // Deliberately no AbortController. React StrictMode mounts, unmounts and
-    // remounts this effect in development: aborting on cleanup killed the only
-    // request the ref guard would ever allow, and the page sat on "Generating
-    // tailored questions..." forever. The request is already paid for, so let
-    // it finish and just don't touch state if we've gone away.
-    let active = true;
-
+    // Staleness is decided by the ref, not by an effect-local flag.
+    //
+    // StrictMode mounts, cleans up, then mounts again on the same instance.
+    // An effect-local flag is set false by that cleanup, while the remount is
+    // turned away by the ref guard — so the one request in flight resolves
+    // into a dead closure and the page sits on "Generating tailored
+    // questions..." forever. The ref survives the remount, so testing against
+    // it accepts that response while still dropping one for a repo the user
+    // has since navigated away from.
     fetch(`${import.meta.env.VITE_API_URL}/api/interviews/questions?repo_full_name=${encodeURIComponent(repoId)}`, {
       credentials: 'include',
     })
@@ -52,7 +54,7 @@ export function InterviewSession() {
       return data;
     })
     .then(data => {
-      if (!active) return;
+      if (requestedRepo.current !== repoId) return; // a different repo is loading now
       const list = Array.isArray(data) ? data : data?.questions;
       if (Array.isArray(list) && list.length > 0) {
         setQuestions(list);
@@ -62,11 +64,10 @@ export function InterviewSession() {
       }
     })
     .catch(err => {
+      if (requestedRepo.current !== repoId) return;
       requestedRepo.current = null; // let a retry through
-      if (active) setError(err.message);
+      setError(err.message);
     });
-
-    return () => { active = false; };
   }, [repoId]);
 
   // AI Speaking (Text-to-Speech) - PONYTAIL: Native Web Speech API, $0 cost
@@ -183,15 +184,17 @@ export function InterviewSession() {
       });
 
       const data = await res.json().catch(() => null);
-      // Cleared whether or not the submission succeeded: a held-over invite
-      // would otherwise attach itself to the candidate's next, unrelated
-      // practice interview and spend one of its uses on it.
-      clearInvite();
       if (!res.ok) throw new Error(data?.error || 'Submission failed');
       navigate(`/report/${data.session_id}`);
     } catch (err: any) {
       setError(err.message);
       setIsSubmitting(false);
+    } finally {
+      // In `finally`, not after the response: a network rejection never
+      // reaches the lines above, and a held-over invite would then attach
+      // itself to the candidate's next, unrelated practice interview and
+      // spend one of its uses on it.
+      clearInvite();
     }
   };
 

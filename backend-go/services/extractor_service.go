@@ -353,11 +353,23 @@ func processZip(zipData []byte) ([]CodeSnippet, string, []string, error) {
 			log.Printf("extractor: skipping unreadable file %s: %v", name, err)
 			continue
 		}
-		content, err := io.ReadAll(io.LimitReader(rc, maxFileReadBytes))
+		// Clamp the read to what is left of the archive-wide budget, plus one
+		// byte so an over-limit member is detectable. Checking only before the
+		// read let a member that starts just under the limit add another
+		// maxFileReadBytes on top of it.
+		remaining := maxDecompressedBytes - decompressed
+		readLimit := int64(maxFileReadBytes)
+		if remaining < readLimit {
+			readLimit = remaining + 1
+		}
+		content, err := io.ReadAll(io.LimitReader(rc, readLimit))
 		rc.Close()
 		if err != nil {
 			log.Printf("extractor: skipping unreadable file %s: %v", name, err)
 			continue
+		}
+		if int64(len(content)) > remaining {
+			return nil, "", nil, fmt.Errorf("repository expands beyond the %d MB analysis limit", maxDecompressedBytes>>20)
 		}
 		decompressed += int64(len(content))
 

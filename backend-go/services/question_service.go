@@ -56,24 +56,18 @@ func GetOrGenerateQuestions(userID string, repoFullName string) ([]models.Questi
 		return cached, nil
 	}
 
-	// 3. Miss. Serialize per repository before generating, so two tabs opening
-	// the interview at the same moment do not both pay for a set. The lock is
-	// released when this transaction ends; the same advisory-lock pattern
-	// guards the analysis quota in HandleAnalyzeRepo.
-	lockTx := config.DB.Begin()
-	if lockTx.Error == nil {
-		defer lockTx.Rollback()
-		if err := lockTx.Exec("SELECT pg_advisory_xact_lock(hashtext(?))", "questions:"+repoFullName).Error; err == nil {
-			// Whoever held the lock may have just filled the cache.
-			var afterLock []models.Question
-			lockTx.Where("reusable = ? AND language = ? AND fingerprint = ?", true, repoFullName, fingerprint).
-				Order("created_at asc").Limit(questionsPerInterview).Find(&afterLock)
-			if len(afterLock) >= questionsPerInterview {
-				return afterLock, nil
-			}
-		}
-	}
-
+	// 3. Miss: generate a fresh set.
+	//
+	// Deliberately NOT serialized with an advisory lock. That lock is
+	// transaction-scoped, so holding it across the worker call would pin a
+	// pooled database connection for the length of an LLM round trip — up to
+	// 90 seconds — and every concurrent request for the same repository would
+	// queue behind it holding one too. A pool of 25 is exhausted long before
+	// the worker answers, which turns a duplicated call into an outage.
+	//
+	// The duplicate is cheap and rare by comparison: the interview page
+	// requests once per repository, the paid endpoints are rate-limited per
+	// user, and the write below discards a set that lost the race.
 	payload := GenerateQuestionsPayload{
 		RepoFullName:   repoFullName,
 		AnalysisData:   profile.AnalysisJSON,
@@ -104,6 +98,18 @@ func GetOrGenerateQuestions(userID string, repoFullName string) ([]models.Questi
 	if tx.Error != nil {
 		return newQuestions, nil // usable now; just not cached
 	}
+
+	// Another request may have finished generating while we were waiting on
+	// the worker. Take its set rather than writing a second one: this is what
+	// keeps a lost race from leaving ten rows behind for one analysis.
+	var raced []models.Question
+	tx.Where("reusable = ? AND language = ? AND fingerprint = ?", true, repoFullName, fingerprint).
+		Order("created_at asc").Limit(questionsPerInterview).Find(&raced)
+	if len(raced) >= questionsPerInterview {
+		tx.Rollback()
+		return raced, nil
+	}
+
 	for i := range newQuestions {
 		newQuestions[i].Reusable = true
 		newQuestions[i].Language = repoFullName
