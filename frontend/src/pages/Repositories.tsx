@@ -4,15 +4,32 @@ import { Link, useNavigate } from 'react-router-dom';
 
 export function Repositories() {
   const [repos, setRepos] = useState<any[]>([]);
+  const [analysisStatus, setAnalysisStatus] = useState<Record<string, string>>({});
+  const [used, setUsed] = useState(0);
+  const [limit, setLimit] = useState(3);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState('');
   const [query, setQuery] = useState('');
   const navigate = useNavigate();
 
   useEffect(() => {
     fetch(`${import.meta.env.VITE_API_URL}/api/repos`, { credentials: 'include' })
-      .then(r => r.ok ? r.json() : (r.status === 401 && navigate('/auth'), null))
-      .then(d => setRepos(d?.repos || []))
-      .catch(console.error)
+      .then(r => {
+        if (r.status === 401) {
+          navigate('/auth');
+          return null;
+        }
+        if (!r.ok) throw new Error('Could not load repositories');
+        return r.json();
+      })
+      .then(d => {
+        if (!d) return;
+        setRepos(d.repos || []);
+        setAnalysisStatus(d.analysis_status || {});
+        setUsed(d.analyses_used || 0);
+        setLimit(d.analyses_limit || 3);
+      })
+      .catch(err => setError(err.message))
       .finally(() => setLoading(false));
   }, [navigate]);
 
@@ -25,7 +42,7 @@ export function Repositories() {
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div>
           <h1 className="font-display text-2xl font-extrabold text-ink">Repositories</h1>
-          <p className="text-sm text-ink-faint mt-1">Select a repository to begin an AI-driven technical interview.</p>
+          <p className="text-sm text-ink-faint mt-1">Pick any of your repos. Free tier: {used}/{limit} analyses used. You choose which three.</p>
         </div>
 
         <div className="relative w-full sm:w-72">
@@ -43,6 +60,8 @@ export function Repositories() {
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
         {loading ? (
            <div className="col-span-full text-center py-12 text-sm text-ink-faint bg-surface border border-line rounded-xl">Loading repositories...</div>
+        ) : error ? (
+           <div className="col-span-full text-center py-12 text-sm text-crit bg-surface border border-line rounded-xl">{error}</div>
         ) : repos.length === 0 ? (
            <div className="col-span-full text-center py-12 text-sm text-ink-faint bg-surface border border-line rounded-xl">No repositories found. Ensure you have granted GitHub access.</div>
         ) : filteredRepos.length === 0 ? (
@@ -70,9 +89,15 @@ export function Repositories() {
               {repo.description || "No description provided for this repository."}
             </p>
 
-            <Link to={`/analyze/${encodeURIComponent(repo.full_name)}`} className="block w-full py-2.5 text-center text-xs font-semibold text-white bg-ink hover:bg-black rounded-full transition-colors">
-              Start Interview
-            </Link>
+            {(() => {
+              const status = analysisStatus[repo.full_name];
+              const label = status === 'pending' ? 'Analysis running…' : status === 'failed' ? 'Retry analysis' : status && status !== 'failed' ? 'Continue interview' : 'Analyze & interview';
+              return (
+                <Link to={`/analyze/${encodeURIComponent(repo.full_name)}`} className="block w-full py-2.5 text-center text-xs font-semibold text-white bg-ink hover:bg-black rounded-full transition-colors">
+                  {label}
+                </Link>
+              );
+            })()}
           </div>
         ))}
       </div>

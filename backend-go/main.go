@@ -20,8 +20,7 @@ import (
 	"github.com/ToufiqQureshi/neurofiq-ai-interview/backend-go/services"
 )
 
-// ipLimiters holds one token bucket per client IP (5 req/sec, burst of 10).
-var ipLimiters sync.Map // map[string]*rate.Limiter
+var ipLimiters sync.Map
 
 func getIPLimiter(ip string) *rate.Limiter {
 	if l, ok := ipLimiters.Load(ip); ok {
@@ -33,27 +32,20 @@ func getIPLimiter(ip string) *rate.Limiter {
 }
 
 func main() {
-	// 1. Load environment variables from .env file
-	// We use "../.env" because main.go is in backend-go/, but .env is in the root directory.
 	if err := godotenv.Load("../.env"); err != nil {
 		log.Println("Warning: No .env file found or error reading it. Assuming env vars are injected by host.")
 	}
 
-	// 2. Connect to the Postgres database via GORM
 	config.ConnectDB()
 
-	// AutoMigrate the new schema models
 	if err := config.DB.AutoMigrate(&models.User{}, &models.GithubProfile{}, &models.Question{}, &models.InterviewSession{}, &models.Company{}, &models.Job{}, &models.ScrapeUsage{}); err != nil {
 		log.Fatalf("Migration failed: %v", err)
 	}
 
-	// Initialize OAuth config
 	auth.InitOAuth()
 
-	// 3. Initialize the Gin router with default middleware (logger and recovery)
 	r := gin.Default()
 
-	// Configure CORS
 	frontendURL := os.Getenv("FRONTEND_URL")
 	if frontendURL == "" {
 		frontendURL = "http://localhost:5173"
@@ -66,10 +58,13 @@ func main() {
 		AllowCredentials: true,
 	}))
 
-	// Initialize session middleware
 	sessionSecret := os.Getenv("SESSION_SECRET")
 	if sessionSecret == "" {
+		if os.Getenv("APP_ENV") == "production" {
+			log.Fatal("SESSION_SECRET is required in production")
+		}
 		sessionSecret = "default_secret_for_local_dev"
+		log.Println("Warning: SESSION_SECRET unset; using a local-dev default")
 	}
 	store := cookie.NewStore([]byte(sessionSecret))
 	store.Options(sessions.Options{
@@ -81,9 +76,6 @@ func main() {
 	})
 	r.Use(sessions.Sessions("neurofiq_session", store))
 
-	// 4. Rate Limiter Middleware — one bucket per client IP, so a handful of
-	// legitimate concurrent users can't exhaust a single shared bucket and
-	// lock everyone else out.
 	r.Use(func(c *gin.Context) {
 		limiter := getIPLimiter(c.ClientIP())
 		if !limiter.Allow() {
@@ -94,26 +86,24 @@ func main() {
 		c.Next()
 	})
 
-	// 5. Setup a basic health check endpoint
 	r.GET("/health", func(c *gin.Context) {
-		// c.JSON automatically formats the response as JSON and sets the correct headers
-		c.JSON(http.StatusOK, gin.H{
-			"status": "healthy",
-			"db":     "connected",
-		})
+		sqlDB, err := config.DB.DB()
+		if err != nil || sqlDB.Ping() != nil {
+			c.JSON(http.StatusServiceUnavailable, gin.H{"status": "unhealthy", "db": "down"})
+			return
+		}
+		c.JSON(http.StatusOK, gin.H{"status": "healthy", "db": "connected"})
 	})
 
-	// 6. Auth Routes
 	r.GET("/auth/github/login", auth.HandleGithubLogin)
 	r.GET("/auth/github/callback", auth.HandleGithubCallback)
 	r.GET("/auth/me", auth.HandleAuthMe)
+	r.POST("/auth/logout", auth.HandleLogout)
 
-	// Public company directory ("Job Map") — no auth required
 	r.GET("/api/companies", controllers.HandleGetCompanies)
 	r.GET("/api/companies/:id", controllers.HandleGetCompanyByID)
 	r.GET("/api/companies/:id/jobs", controllers.HandleGetCompanyJobs)
 
-	// 6. API Routes
 	api := r.Group("/api")
 	api.Use(auth.AuthMiddleware())
 	{
@@ -127,25 +117,17 @@ func main() {
 		api.POST("/companies/discover", controllers.HandleTriggerDiscovery)
 	}
 
-	// Automatic company discovery: rotates through seed queries so the Job
-	// Map directory fills itself in without any manual scraping. Run once
-	// immediately so a fresh deploy doesn't sit empty for up to 6h waiting
-	// on the first scheduled tick.
 	go services.RunDiscoveryRotation()
 	discoveryCron := cron.New()
-	// Hourly, matching services.discoveryIntervalSeconds — the rotation
-	// cursor is derived from that interval, so the two must agree.
 	discoveryCron.AddFunc("@every 1h", services.RunDiscoveryRotation)
 	discoveryCron.Start()
 
-	// 7. Determine port and start server
 	port := os.Getenv("PORT")
 	if port == "" {
 		port = "8080"
 	}
 
 	log.Printf("Starting Gin server on port %s", port)
-	// r.Run() blocks forever, keeping the server alive
 	if err := r.Run(":" + port); err != nil {
 		log.Fatalf("Server failed to start: %v", err)
 	}
