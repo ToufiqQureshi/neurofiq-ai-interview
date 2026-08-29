@@ -14,7 +14,6 @@ app = FastAPI()
 INTERNAL_SECRET = os.getenv("INTERNAL_SECRET")
 DEEPSEEK_API_KEY = os.getenv("DEEPSEEK_API_KEY")
 
-# ---- Pydantic Models for incoming payload ----
 class CodeSnippet(BaseModel):
     file: str
     line_range: str
@@ -39,7 +38,6 @@ class ProbingArea(BaseModel):
     file_reference: str = Field(description="The specific file name where this was observed.")
     code_snippet: str = Field(description="A short 3-5 line code snippet showing the exact implementation to base the question on.")
 
-# ---- Pydantic Model for Structured Output (Agno) ----
 class AnalysisResult(BaseModel):
     architecture_patterns: List[str]
     overall_complexity: str = Field(
@@ -64,7 +62,6 @@ class GenerateQuestionsPayload(BaseModel):
     repo_full_name: str
     analysis_data: str
 
-# ---- Pydantic Models for Evaluation ----
 class QAItem(BaseModel):
     question: str
     answer: str
@@ -75,17 +72,16 @@ class EvaluatePayload(BaseModel):
 
 class FeedbackItem(BaseModel):
     question: str
-    score: float # 0 to 10
+    score: float
     strengths: str
     areas_for_improvement: str
     ideal_answer_concept: str
 
 class EvaluationResult(BaseModel):
-    overall_score: float # 0 to 10 weighted average
+    overall_score: float
     overall_feedback: str
     detailed_feedback: List[FeedbackItem]
 
-# ---- Pydantic Models for Company Discovery ----
 class DiscoveredCompany(BaseModel):
     name: str
     website: str = Field(description="Full https:// URL to the company's official homepage")
@@ -103,16 +99,6 @@ class DiscoverCompaniesPayload(BaseModel):
     limit: int = 10
 
 def _discovery_tools():
-    """Search tools for company discovery, best first.
-
-    Exa is preferred because its `category="company"` filter returns company
-    homepages rather than blog posts and listicles about them — which is what
-    DuckDuckGo kept returning, and why so many companies arrived with no
-    usable careers URL.
-
-    DuckDuckGo stays as a keyless fallback so discovery still works if the
-    Exa key is missing or its monthly credits run out.
-    """
     tools = []
     if os.getenv("EXA_API_KEY"):
         tools.append(
@@ -126,10 +112,10 @@ def _discovery_tools():
     tools.append(DuckDuckGoTools())
     return tools
 
-
-# ---- Initialize Agno Agent ----
-# Using Agno framework as requested by user (Supports tools, TTS, STT later)
 analysis_agent = None
+questions_agent = None
+evaluation_agent = None
+discovery_agent = None
 if DEEPSEEK_API_KEY:
     analysis_agent = Agent(
         model=DeepSeek(id="deepseek-chat", api_key=DEEPSEEK_API_KEY),
@@ -173,14 +159,10 @@ if DEEPSEEK_API_KEY:
         ],
     )
 
-# ---- Dependencies ----
 def verify_internal_secret(x_internal_secret: str = Header(None)):
-    # Fail closed: if INTERNAL_SECRET isn't configured, reject every request
-    # instead of falling back to a source-visible default.
     if not INTERNAL_SECRET or x_internal_secret != INTERNAL_SECRET:
         raise HTTPException(status_code=403, detail="forbidden")
 
-# ---- Routes ----
 @app.get("/internal/health")
 async def health_check():
     return {"status": "healthy"}
@@ -189,22 +171,13 @@ async def health_check():
 async def analyze_repo(payload: AnalyzePayload):
     if not analysis_agent:
         raise HTTPException(status_code=500, detail="DEEPSEEK_API_KEY not configured for Agno Agent")
-
-    # 1. Build the prompt
     prompt = f"Repo: {payload.repo_full_name}\n\nDirectory Structure:\n{payload.structure_summary.directory_tree}\n\nCode Snippets:\n"
     for snippet in payload.code_snippets:
         prompt += f"\n--- {snippet.file} ---\n{snippet.content}\n"
-    
     prompt += "\nPlease analyze this codebase and extract the required architectural insights."
-
-    # 2. Run Agno Agent
     try:
-        # Agno automatically forces the LLM to return data matching the response_model
         run_response = analysis_agent.run(prompt)
-        
-        # run_response.content is already a parsed AnalysisResult object!
         return run_response.content.model_dump()
-
     except Exception as e:
         print(f"Agno Agent Error: {e}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -213,13 +186,10 @@ async def analyze_repo(payload: AnalyzePayload):
 async def generate_questions(payload: GenerateQuestionsPayload):
     if not questions_agent:
         raise HTTPException(status_code=500, detail="DEEPSEEK_API_KEY not configured for Agno Agent")
-        
     prompt = f"Repo: {payload.repo_full_name}\n\nAI Analysis of the codebase (including key code snippets):\n{payload.analysis_data}\n\n"
     prompt += "Based on the analysis, generate exactly 5 deep, technical interview questions. You MUST reference the specific 'code_snippet' and 'file_reference' from the analysis in your questions to make them highly contextual (e.g., 'In file.js, you wrote [snippet], why did you choose this approach over...'). Test the candidate's understanding of their own architecture, design decisions, and code quality."
-    
     try:
         run_response = questions_agent.run(prompt)
-        # Return the list directly so Go can unmarshal into []models.Question
         return [q.model_dump() for q in run_response.content.questions]
     except Exception as e:
         print(f"Agno Agent Error (Questions): {e}")
@@ -229,13 +199,10 @@ async def generate_questions(payload: GenerateQuestionsPayload):
 async def evaluate_answer(payload: EvaluatePayload):
     if not evaluation_agent:
         raise HTTPException(status_code=500, detail="DEEPSEEK_API_KEY not configured for Agno Agent")
-
     prompt = f"Repo context: {payload.repo_full_name}\n\nEvaluate the following Interview Questions and Answers:\n\n"
     for idx, qa in enumerate(payload.qa_list):
         prompt += f"Q{idx+1}: {qa.question}\nCandidate Answer: {qa.answer}\n\n"
-    
     prompt += "Provide a detailed evaluation for each question and an overall score out of 10."
-
     try:
         run_response = evaluation_agent.run(prompt)
         return run_response.content.model_dump()
@@ -247,23 +214,14 @@ async def evaluate_answer(payload: EvaluatePayload):
 async def discover_companies(payload: DiscoverCompaniesPayload):
     if not discovery_agent:
         raise HTTPException(status_code=500, detail="DEEPSEEK_API_KEY not configured for Agno Agent")
-
     prompt = f"Search the web and find up to {payload.limit} real companies matching: {payload.query}. For each, extract the required fields. Skip any company you can't find a real website for."
-
     try:
         run_response = discovery_agent.run(prompt)
         content = run_response.content
-
-        # With tools enabled the agent doesn't always hand back a parsed
-        # model — sometimes it's raw JSON text (or JSON wrapped in a
-        # markdown fence). Normalise all three shapes here rather than
-        # letting the caller 500.
         if hasattr(content, "model_dump"):
             return content.model_dump()
-
         if isinstance(content, dict):
             return CompanyDiscoveryResult(**content).model_dump()
-
         if isinstance(content, str):
             text = content.strip()
             if text.startswith("```"):
@@ -271,9 +229,7 @@ async def discover_companies(payload: DiscoverCompaniesPayload):
                 if text.lstrip().lower().startswith("json"):
                     text = text.lstrip()[4:]
             return CompanyDiscoveryResult(**json.loads(text)).model_dump()
-
         raise ValueError(f"unexpected discovery content type: {type(content).__name__}")
     except Exception as e:
         print(f"Agno Agent Error (Discovery): {e}")
         raise HTTPException(status_code=500, detail=str(e))
-
