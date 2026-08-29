@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strconv"
 	"strings"
 	"sync"
 	"syscall"
@@ -110,8 +111,15 @@ func main() {
 	// Gin trusts every proxy by default, which means any client can set
 	// X-Forwarded-For and pick its own ClientIP — and the rate limiter below
 	// keys on exactly that. Trust only the proxies we actually run behind.
-	if err := r.SetTrustedProxies(trustedProxies()); err != nil {
+	proxies := trustedProxies()
+	if err := r.SetTrustedProxies(proxies); err != nil {
 		log.Fatalf("Invalid TRUSTED_PROXIES: %v", err)
+	}
+	if isProduction && len(proxies) == 0 {
+		log.Println("WARNING: TRUSTED_PROXIES is unset. If this instance runs behind a " +
+			"load balancer, every request will report the balancer's address, the per-IP " +
+			"rate limiter will put all users in one bucket, and a busy minute will 429 " +
+			"everyone. Set TRUSTED_PROXIES to your balancer's CIDR.")
 	}
 
 	// Configure CORS. FRONTEND_URL may hold a comma-separated list so the
@@ -156,21 +164,16 @@ func main() {
 	})
 	r.Use(sessions.Sessions("neurofiq_session", store))
 
-	// 4. Rate limiter — one bucket per client IP, so a handful of legitimate
-	// concurrent users can't exhaust a single shared bucket and lock everyone
-	// else out.
-	r.Use(func(c *gin.Context) {
-		limiter := getLimiter(&ipLimiters, c.ClientIP(), rate.Limit(5), 10)
-		if !limiter.Allow() {
-			c.AbortWithStatusJSON(http.StatusTooManyRequests, gin.H{"error": "Too many requests"})
-			return
-		}
-		c.Next()
-	})
-
-	// 5. Health check. It pings the database, because an API that cannot
-	// reach Postgres is not healthy and should be pulled out of the load
-	// balancer rather than serving 500s.
+	// 4. Health check, registered BEFORE the rate limiter.
+	//
+	// The load balancer polls this constantly from a single address. Behind
+	// the limiter it competes for the same bucket as real traffic, so a busy
+	// minute answers the health probe with 429 and the balancer pulls a
+	// perfectly healthy instance out of rotation — turning a traffic spike
+	// into an outage.
+	//
+	// It pings the database, because an API that cannot reach Postgres is not
+	// healthy and should be drained rather than left serving 500s.
 	r.GET("/health", func(c *gin.Context) {
 		sqlDB, err := config.DB.DB()
 		if err != nil || sqlDB.Ping() != nil {
@@ -178,6 +181,27 @@ func main() {
 			return
 		}
 		c.JSON(http.StatusOK, gin.H{"status": "healthy", "db": "connected"})
+	})
+
+	// 5. Rate limiter — one bucket per client IP, so a handful of legitimate
+	// concurrent users can't exhaust a single shared bucket and lock everyone
+	// else out.
+	//
+	// This is only true while ClientIP is really per-client. Behind a proxy
+	// with TRUSTED_PROXIES unset, every request carries the balancer's
+	// address, all users land in ONE bucket, and the limiter stops being a
+	// per-abuser control and becomes a global cap. The startup check below
+	// makes that misconfiguration loud instead of silent, and the ceiling is
+	// tunable so an operator is never stuck with a number we guessed.
+	ipRate := envFloat("RATE_LIMIT_RPS", 10)
+	ipBurst := envInt("RATE_LIMIT_BURST", 30)
+	r.Use(func(c *gin.Context) {
+		limiter := getLimiter(&ipLimiters, c.ClientIP(), rate.Limit(ipRate), ipBurst)
+		if !limiter.Allow() {
+			c.AbortWithStatusJSON(http.StatusTooManyRequests, gin.H{"error": "Too many requests"})
+			return
+		}
+		c.Next()
 	})
 
 	// 6. Auth routes.
@@ -347,6 +371,26 @@ func safely(name string, fn func()) {
 		}
 	}()
 	fn()
+}
+
+// envInt and envFloat read a tunable with a sane default, so an operator can
+// change a limit without a redeploy of new code.
+func envInt(name string, fallback int) int {
+	if raw := os.Getenv(name); raw != "" {
+		if n, err := strconv.Atoi(raw); err == nil && n > 0 {
+			return n
+		}
+	}
+	return fallback
+}
+
+func envFloat(name string, fallback float64) float64 {
+	if raw := os.Getenv(name); raw != "" {
+		if f, err := strconv.ParseFloat(raw, 64); err == nil && f > 0 {
+			return f
+		}
+	}
+	return fallback
 }
 
 // allowedOrigins reads the browser origins permitted to call this API.

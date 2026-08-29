@@ -102,9 +102,14 @@ func HandleSubmitInterview(c *gin.Context) {
 	}
 
 	// An invite is optional; when present it has to be live.
+	//
+	// Only *checked* here, never consumed. Redemption happens after the
+	// evaluation succeeds (below): spending the single use up front means a
+	// worker outage or a failed save burns the candidate's one shot at the
+	// link, and they have no way to get it back.
 	var invite *models.InterviewInvite
 	if reqBody.InviteToken != "" {
-		found, err := services.RedeemInvite(reqBody.InviteToken)
+		found, err := services.LookupInvite(reqBody.InviteToken)
 		if err != nil {
 			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 			return
@@ -133,6 +138,18 @@ func HandleSubmitInterview(c *gin.Context) {
 	}
 
 	// 2. Save the session report.
+	// The scoring succeeded, so now the invite is actually being used. This
+	// is the atomic check-and-increment: if another candidate consumed the
+	// last use while this interview was being scored, we find out here.
+	if invite != nil {
+		redeemed, err := services.RedeemInvite(reqBody.InviteToken)
+		if err != nil {
+			c.JSON(http.StatusConflict, gin.H{"error": err.Error()})
+			return
+		}
+		invite = redeemed
+	}
+
 	session := models.InterviewSession{
 		UserID:        userID,
 		RepoFullName:  reqBody.RepoFullName,
@@ -149,6 +166,11 @@ func HandleSubmitInterview(c *gin.Context) {
 
 	if err := config.DB.Create(&session).Error; err != nil {
 		log.Printf("submit: failed to save session for user=%s: %v", userID, err)
+		// Hand the use back: the interview did not survive, so the link
+		// should still work.
+		if invite != nil {
+			services.ReleaseInviteUse(reqBody.InviteToken)
+		}
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to save session to DB"})
 		return
 	}

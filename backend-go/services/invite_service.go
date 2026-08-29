@@ -4,6 +4,7 @@ import (
 	"crypto/rand"
 	"encoding/base32"
 	"fmt"
+	"log"
 	"strings"
 	"time"
 
@@ -175,4 +176,16 @@ func newInviteToken() (string, error) {
 		return "", err
 	}
 	return strings.ToLower(base32.StdEncoding.WithPadding(base32.NoPadding).EncodeToString(buf)), nil
+}
+
+// ReleaseInviteUse gives back a use that was consumed for an interview that
+// then failed to save. Without it, a database hiccup silently costs the
+// candidate their single-use link with nothing to show for it.
+func ReleaseInviteUse(token string) {
+	err := config.DB.Model(&models.InterviewInvite{}).
+		Where("token = ? AND uses > 0", token).
+		UpdateColumn("uses", config.DB.Raw("uses - 1")).Error
+	if err != nil {
+		log.Printf("invite: failed to release a use for a failed interview: %v", err)
+	}
 }

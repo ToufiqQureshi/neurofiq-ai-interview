@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import { Loader2, Briefcase } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
+import { saveInvite } from '../lib/invite';
 
 type Invite = {
   role_title: string;
@@ -31,8 +32,9 @@ export function InviteLanding() {
       .then((data: Invite) => {
         setInvite(data);
         // Held until the interview is submitted, which is what links the
-        // finished report back to the recruiter who asked for it.
-        sessionStorage.setItem('neurofiq_invite', token);
+        // finished report back to the recruiter who asked for it. Expires on
+        // its own so an abandoned invite cannot attach to a later run.
+        saveInvite(token, data.role_title);
       })
       .catch(err => setError(err.message));
   }, [token]);

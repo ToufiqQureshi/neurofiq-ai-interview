@@ -11,6 +11,12 @@ on:
     branches: [main]
   pull_request:
 
+# Read-only by default. Without this the jobs inherit the repository's default
+# token permissions, which on many repos is read-write — handing every build
+# step, and every dependency it runs, a token that can push to the repo.
+permissions:
+  contents: read
+
 concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true

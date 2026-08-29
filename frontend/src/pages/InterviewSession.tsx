@@ -2,6 +2,7 @@ import { useState, useEffect, useRef } from 'react';
 import { Mic, SkipForward, VolumeX, Send, Loader2, Volume2, MicOff, FileCode2 } from 'lucide-react';
 import { useSearchParams, useParams, useNavigate } from 'react-router-dom';
 import { CameraPreview } from '../components/CameraPreview';
+import { readInvite, clearInvite } from '../lib/invite';
 
 export function InterviewSession() {
   const { repoId } = useParams();
@@ -30,11 +31,15 @@ export function InterviewSession() {
     if (!repoId || requestedRepo.current === repoId) return;
     requestedRepo.current = repoId;
 
-    const controller = new AbortController();
+    // Deliberately no AbortController. React StrictMode mounts, unmounts and
+    // remounts this effect in development: aborting on cleanup killed the only
+    // request the ref guard would ever allow, and the page sat on "Generating
+    // tailored questions..." forever. The request is already paid for, so let
+    // it finish and just don't touch state if we've gone away.
+    let active = true;
 
     fetch(`${import.meta.env.VITE_API_URL}/api/interviews/questions?repo_full_name=${encodeURIComponent(repoId)}`, {
       credentials: 'include',
-      signal: controller.signal,
     })
     .then(async res => {
       const data = await res.json().catch(() => null);
@@ -47,6 +52,7 @@ export function InterviewSession() {
       return data;
     })
     .then(data => {
+      if (!active) return;
       const list = Array.isArray(data) ? data : data?.questions;
       if (Array.isArray(list) && list.length > 0) {
         setQuestions(list);
@@ -56,12 +62,11 @@ export function InterviewSession() {
       }
     })
     .catch(err => {
-      if (err.name === 'AbortError') return;
       requestedRepo.current = null; // let a retry through
-      setError(err.message);
+      if (active) setError(err.message);
     });
 
-    return () => controller.abort();
+    return () => { active = false; };
   }, [repoId]);
 
   // AI Speaking (Text-to-Speech) - PONYTAIL: Native Web Speech API, $0 cost
@@ -173,13 +178,16 @@ export function InterviewSession() {
           qa_list: qaList,
           mode: isVoiceMode ? 'voice' : 'text',
           // Set when the candidate arrived through a recruiter's invite link.
-          invite_token: sessionStorage.getItem('neurofiq_invite') || undefined,
+          invite_token: readInvite()?.token,
         })
       });
 
       const data = await res.json().catch(() => null);
+      // Cleared whether or not the submission succeeded: a held-over invite
+      // would otherwise attach itself to the candidate's next, unrelated
+      // practice interview and spend one of its uses on it.
+      clearInvite();
       if (!res.ok) throw new Error(data?.error || 'Submission failed');
-      sessionStorage.removeItem('neurofiq_invite');
       navigate(`/report/${data.session_id}`);
     } catch (err: any) {
       setError(err.message);
