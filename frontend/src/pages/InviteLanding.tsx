@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import { Loader2, Briefcase } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
@@ -21,8 +21,16 @@ export function InviteLanding() {
   const [invite, setInvite] = useState<Invite | null>(null);
   const [error, setError] = useState('');
 
+  // Which invite this page is actually showing. Opening a second invite link
+  // in the same session leaves the first lookup in flight: without this, a
+  // slower response for the abandoned link would overwrite the stored token
+  // and hand the finished report to the wrong recruiter — and a stale failure
+  // would clear a perfectly good invite and show an error over a valid page.
+  const currentToken = useRef<string | null>(null);
+
   useEffect(() => {
     if (!token) return;
+    currentToken.current = token;
 
     // Drop whatever was held before looking this one up. Opening a second
     // invite link, or opening one that turns out to be dead, must not leave
@@ -37,6 +45,7 @@ export function InviteLanding() {
         return data;
       })
       .then((data: Invite) => {
+        if (currentToken.current !== token) return; // a different invite is open now
         setInvite(data);
         // Held until the interview is submitted, which is what links the
         // finished report back to the recruiter who asked for it. Expires on
@@ -44,6 +53,7 @@ export function InviteLanding() {
         saveInvite(token, data.role_title);
       })
       .catch(err => {
+        if (currentToken.current !== token) return;
         clearInvite();
         setError(err.message);
       });
