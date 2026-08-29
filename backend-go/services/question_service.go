@@ -58,16 +58,18 @@ func GetOrGenerateQuestions(userID string, repoFullName string) ([]models.Questi
 
 	// 3. Miss: generate a fresh set.
 	//
-	// Deliberately NOT serialized with an advisory lock. That lock is
-	// transaction-scoped, so holding it across the worker call would pin a
+	// The generation itself is deliberately not serialized. An advisory lock
+	// is transaction-scoped, so holding one across this call would pin a
 	// pooled database connection for the length of an LLM round trip — up to
 	// 90 seconds — and every concurrent request for the same repository would
 	// queue behind it holding one too. A pool of 25 is exhausted long before
-	// the worker answers, which turns a duplicated call into an outage.
+	// the worker answers, which turns a duplicated call into an outage. The
+	// write is a different matter: see the short lock below.
 	//
-	// The duplicate is cheap and rare by comparison: the interview page
-	// requests once per repository, the paid endpoints are rate-limited per
-	// user, and the write below discards a set that lost the race.
+	// A duplicated call is cheap and rare by comparison: the interview page
+	// requests once per repository and the paid endpoints are rate-limited per
+	// user. The write below takes a short lock on the cache key, so a set that
+	// loses the race is discarded rather than stored alongside the winner.
 	payload := GenerateQuestionsPayload{
 		RepoFullName:   repoFullName,
 		AnalysisData:   profile.AnalysisJSON,
@@ -89,6 +91,10 @@ func GetOrGenerateQuestions(userID string, repoFullName string) ([]models.Questi
 		return newQuestions, nil
 	}
 
+	// Cache exactly one interview's worth, so what is written back matches
+	// what the read above asks for.
+	newQuestions = newQuestions[:questionsPerInterview]
+
 	// 4. Store them against this analysis so the next load is free.
 	//
 	// A partial write is worse than none: the next request would see fewer
@@ -99,9 +105,24 @@ func GetOrGenerateQuestions(userID string, repoFullName string) ([]models.Questi
 		return newQuestions, nil // usable now; just not cached
 	}
 
-	// Another request may have finished generating while we were waiting on
-	// the worker. Take its set rather than writing a second one: this is what
-	// keeps a lost race from leaving ten rows behind for one analysis.
+	// Lock the cache key for the recheck and the insert.
+	//
+	// The worker call is already done, so this holds a pooled connection for
+	// the length of two local statements rather than an LLM round trip — the
+	// reason the earlier version of this lock had to go. Without it the
+	// recheck below is useless: under READ COMMITTED each request reads in its
+	// own transaction and neither sees the other's uncommitted rows, so two
+	// concurrent misses both find nothing and both insert, leaving ten rows
+	// for one analysis. The key is built outside the call so nothing is
+	// concatenated into the statement itself.
+	lockKey := "questions:" + repoFullName + ":" + fingerprint
+	if err := tx.Exec("SELECT pg_advisory_xact_lock(hashtext(?))", lockKey).Error; err != nil {
+		tx.Rollback()
+		return newQuestions, nil // usable now; just not cached
+	}
+
+	// Another request may have finished generating while we waited on the
+	// worker. Take its set rather than writing a second one.
 	var raced []models.Question
 	tx.Where("reusable = ? AND language = ? AND fingerprint = ?", true, repoFullName, fingerprint).
 		Order("created_at asc").Limit(questionsPerInterview).Find(&raced)
