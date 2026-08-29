@@ -31,7 +31,14 @@ export function AuthChoice() {
           </div>
 
           <button
-            onClick={() => window.location.href = `${import.meta.env.VITE_API_URL}/auth/github/login`}
+            onClick={() => {
+              const api = import.meta.env.VITE_API_URL;
+              if (!api) {
+                alert('VITE_API_URL is not set. Check the frontend .env.');
+                return;
+              }
+              window.location.href = `${api}/auth/github/login`;
+            }}
             className="w-full bg-ink hover:bg-black text-white flex items-center justify-center gap-3 py-3 px-4 rounded-full font-semibold transition-colors"
           >
             <GithubIcon className="w-5 h-5" />
