@@ -1,11 +1,14 @@
 import { useState, useEffect } from 'react';
-import { Target, AlertCircle, RefreshCw, Loader2 } from 'lucide-react';
+import { Target, AlertCircle, RefreshCw, Loader2, Share2, Check, Copy } from 'lucide-react';
 import { Link, useParams } from 'react-router-dom';
 
 export function Report() {
   const { sessionId } = useParams();
   const [report, setReport] = useState<any>(null);
   const [error, setError] = useState('');
+  const [shareSlug, setShareSlug] = useState<string | null>(null);
+  const [sharing, setSharing] = useState(false);
+  const [copied, setCopied] = useState(false);
 
   useEffect(() => {
     if (!sessionId) return;
@@ -28,6 +31,7 @@ export function Report() {
         data.feedback = data.feedback_json;
       }
       setReport(data);
+      setShareSlug(data.share_slug || null);
     })
     .catch(err => setError(err.message));
   }, [sessionId]);
@@ -43,6 +47,41 @@ export function Report() {
       </div>
     );
   }
+
+  const shareUrl = shareSlug ? `${window.location.origin}/r/${shareSlug}` : '';
+
+  // A score on your own architecture is the one thing here worth sending to
+  // somebody. Until this button existed, every finished report died behind
+  // the login.
+  const toggleShare = async () => {
+    setSharing(true);
+    try {
+      const res = await fetch(`${import.meta.env.VITE_API_URL}/api/reports/${sessionId}/share`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify({ public: !shareSlug }),
+      });
+      const data = await res.json().catch(() => null);
+      if (!res.ok) throw new Error(data?.error || 'Could not update sharing');
+      setShareSlug(data.public ? data.slug : null);
+      setCopied(false);
+    } catch (err: any) {
+      setError(err.message);
+    } finally {
+      setSharing(false);
+    }
+  };
+
+  const copyLink = async () => {
+    try {
+      await navigator.clipboard.writeText(shareUrl);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    } catch {
+      // Clipboard access can be blocked; the input below is selectable.
+    }
+  };
 
   const overallFeedback = report.feedback?.overall_feedback || "No overall feedback available.";
   const detailedFeedback = report.feedback?.detailed_feedback || [];
@@ -118,6 +157,48 @@ export function Report() {
             </div>
           );
         })}
+
+        {/* Share */}
+        <div className="bg-surface border border-line rounded-xl p-6 space-y-4">
+          <div className="flex items-start justify-between gap-4 flex-wrap">
+            <div>
+              <h3 className="font-display text-lg font-semibold">Share this report</h3>
+              <p className="text-sm text-ink-soft mt-1 max-w-prose">
+                Anyone with the link sees your score and the assessment — never your answers.
+              </p>
+            </div>
+            <button
+              onClick={toggleShare}
+              disabled={sharing}
+              className={`px-5 py-2.5 rounded-full font-semibold text-sm transition-colors flex items-center gap-2 disabled:opacity-50 ${
+                shareSlug
+                  ? 'bg-surface border border-line-strong text-ink hover:bg-paper'
+                  : 'bg-ink text-white hover:bg-black'
+              }`}
+            >
+              <Share2 className="w-4 h-4" />
+              {sharing ? 'Saving…' : shareSlug ? 'Stop sharing' : 'Create public link'}
+            </button>
+          </div>
+
+          {shareSlug && (
+            <div className="flex items-center gap-2">
+              <input
+                readOnly
+                value={shareUrl}
+                onFocus={(e) => e.currentTarget.select()}
+                className="flex-1 bg-paper border border-line rounded-lg px-3 py-2 font-mono text-xs text-ink-soft outline-none"
+              />
+              <button
+                onClick={copyLink}
+                className="px-4 py-2 rounded-lg border border-line-strong text-sm font-semibold text-ink hover:bg-paper transition-colors flex items-center gap-2"
+              >
+                {copied ? <Check className="w-4 h-4 text-pass" /> : <Copy className="w-4 h-4" />}
+                {copied ? 'Copied' : 'Copy'}
+              </button>
+            </div>
+          )}
+        </div>
 
         {/* Actions */}
         <div className="flex gap-3 justify-end pt-4">

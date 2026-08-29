@@ -1,11 +1,8 @@
 package services
 
 import (
-	"bytes"
 	"encoding/json"
 	"fmt"
-	"io"
-	"net/http"
 )
 
 type QAItem struct {
@@ -18,27 +15,14 @@ type EvaluatePayload struct {
 	QAList       []QAItem `json:"qa_list"`
 }
 
+// CallPythonEvaluationWorker scores a completed interview. It returns the raw
+// feedback JSON (stored verbatim so the report page can render whatever shape
+// the worker produced) alongside the overall score, which we pull out
+// separately because the reports list sorts and averages on it.
 func CallPythonEvaluationWorker(payload EvaluatePayload) (string, float64, error) {
-	jsonData, err := json.Marshal(payload)
+	body, err := postToWorker(workerClient, "/internal/evaluate-answer", payload)
 	if err != nil {
 		return "", 0, err
-	}
-	req, err := http.NewRequest("POST", workerURL()+"/internal/evaluate-answer", bytes.NewBuffer(jsonData))
-	if err != nil {
-		return "", 0, err
-	}
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("X-Internal-Secret", internalSecret())
-
-	resp, err := workerHTTPClient().Do(req)
-	if err != nil {
-		return "", 0, err
-	}
-	defer resp.Body.Close()
-
-	body, _ := io.ReadAll(resp.Body)
-	if resp.StatusCode != 200 {
-		return "", 0, fmt.Errorf("python worker error: %s", string(body))
 	}
 
 	var result struct {
@@ -47,6 +31,5 @@ func CallPythonEvaluationWorker(payload EvaluatePayload) (string, float64, error
 	if err := json.Unmarshal(body, &result); err != nil {
 		return "", 0, fmt.Errorf("failed to parse AI evaluation JSON: %w", err)
 	}
-
 	return string(body), result.OverallScore, nil
 }

@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react';
-import { Mic, SkipForward, VolumeX, Send, Loader2, Volume2, MicOff } from 'lucide-react';
+import { Mic, SkipForward, VolumeX, Send, Loader2, Volume2, MicOff, FileCode2 } from 'lucide-react';
 import { useSearchParams, useParams, useNavigate } from 'react-router-dom';
 import { CameraPreview } from '../components/CameraPreview';
 
@@ -21,22 +21,47 @@ export function InterviewSession() {
   const [isAiSpeaking, setIsAiSpeaking] = useState(false);
   const recognitionRef = useRef<any>(null);
 
+  // Generating questions is a paid LLM call, so it must happen exactly once
+  // per repo. React's StrictMode double-mounts effects in development, and
+  // without this guard every dev page load billed us twice.
+  const requestedRepo = useRef<string | null>(null);
+
   useEffect(() => {
-    if (!repoId) return;
+    if (!repoId || requestedRepo.current === repoId) return;
+    requestedRepo.current = repoId;
+
+    const controller = new AbortController();
+
     fetch(`${import.meta.env.VITE_API_URL}/api/interviews/questions?repo_full_name=${encodeURIComponent(repoId)}`, {
-      credentials: 'include'
+      credentials: 'include',
+      signal: controller.signal,
     })
-    .then(res => res.json())
+    .then(async res => {
+      const data = await res.json().catch(() => null);
+      if (!res.ok) {
+        // The API explains exactly what is wrong — "analysis is still
+        // running", "retry analyzing this repository". Showing our own
+        // generic line instead threw that away.
+        throw new Error(data?.error || 'Could not load questions for this repository.');
+      }
+      return data;
+    })
     .then(data => {
       const list = Array.isArray(data) ? data : data?.questions;
-      if (Array.isArray(list)) {
+      if (Array.isArray(list) && list.length > 0) {
         setQuestions(list);
         setAnswers(new Array(list.length).fill(''));
       } else {
         setError('No questions came back for this repository.');
       }
     })
-    .catch(err => setError(err.message));
+    .catch(err => {
+      if (err.name === 'AbortError') return;
+      requestedRepo.current = null; // let a retry through
+      setError(err.message);
+    });
+
+    return () => controller.abort();
   }, [repoId]);
 
   // AI Speaking (Text-to-Speech) - PONYTAIL: Native Web Speech API, $0 cost
@@ -146,12 +171,15 @@ export function InterviewSession() {
         body: JSON.stringify({
           repo_full_name: decodeURIComponent(repoId || ''),
           qa_list: qaList,
-          mode: isVoiceMode ? 'voice' : 'text'
+          mode: isVoiceMode ? 'voice' : 'text',
+          // Set when the candidate arrived through a recruiter's invite link.
+          invite_token: sessionStorage.getItem('neurofiq_invite') || undefined,
         })
       });
 
-      if (!res.ok) throw new Error('Submission failed');
-      const data = await res.json();
+      const data = await res.json().catch(() => null);
+      if (!res.ok) throw new Error(data?.error || 'Submission failed');
+      sessionStorage.removeItem('neurofiq_invite');
       navigate(`/report/${data.session_id}`);
     } catch (err: any) {
       setError(err.message);
@@ -174,6 +202,7 @@ export function InterviewSession() {
 
   const currentQuestion = questions[currentQuestionIdx];
   const questionText = currentQuestion.question_text || currentQuestion.QuestionText || currentQuestion.question;
+  const snippet: string = currentQuestion.code_snippet || '';
 
   return (
     <div className="min-h-screen bg-paper text-ink flex flex-col">
@@ -237,9 +266,32 @@ export function InterviewSession() {
             </div>
           </div>
 
-          {/* Right Panel: Camera / User */}
-          <div className="flex flex-col">
-            <CameraPreview className="w-full h-full min-h-[300px] object-cover rounded-2xl shadow-sm border border-line" />
+          {/* Right Panel: camera in a voice interview, the code under
+              discussion in a text one. Someone who deliberately chose "Start
+              Text Interview" should not be asked for their webcam. */}
+          <div className="flex flex-col gap-4">
+            {isVoiceMode && (
+              <CameraPreview className="w-full flex-1 min-h-[220px] object-cover rounded-2xl shadow-sm border border-line" />
+            )}
+            {snippet ? (
+              <div className="flex-1 min-h-0 bg-surface border border-line rounded-2xl overflow-hidden flex flex-col">
+                <div className="flex items-center gap-2 px-4 py-3 border-b border-line">
+                  <FileCode2 className="w-4 h-4 text-ink-faint" />
+                  <span className="font-mono text-xs text-ink-soft truncate">
+                    {currentQuestion.file_reference || 'Your code'}
+                  </span>
+                </div>
+                <pre className="flex-1 overflow-auto p-4 text-xs font-mono text-ink-soft leading-relaxed whitespace-pre">
+{snippet}
+                </pre>
+              </div>
+            ) : !isVoiceMode ? (
+              <div className="flex-1 min-h-[300px] bg-surface border border-line rounded-2xl flex items-center justify-center p-8 text-center">
+                <p className="text-sm text-ink-faint">
+                  This question is about your commit history rather than one file.
+                </p>
+              </div>
+            ) : null}
           </div>
 
         </div>

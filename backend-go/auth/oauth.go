@@ -10,16 +10,18 @@ import (
 	"os"
 	"time"
 
-	"github.com/gin-gonic/gin"
-	"github.com/gin-contrib/sessions"
-	"golang.org/x/oauth2"
-	"golang.org/x/oauth2/github"
 	"github.com/ToufiqQureshi/neurofiq-ai-interview/backend-go/config"
 	"github.com/ToufiqQureshi/neurofiq-ai-interview/backend-go/models"
+	"github.com/ToufiqQureshi/neurofiq-ai-interview/backend-go/services"
+	"github.com/gin-contrib/sessions"
+	"github.com/gin-gonic/gin"
+	"golang.org/x/oauth2"
+	"golang.org/x/oauth2/github"
 )
 
 var GithubOAuthConfig *oauth2.Config
 
+// InitOAuth sets up the OAuth configuration using our .env variables.
 func InitOAuth() {
 	GithubOAuthConfig = &oauth2.Config{
 		ClientID:     os.Getenv("GITHUB_CLIENT_ID"),
@@ -30,6 +32,8 @@ func InitOAuth() {
 	}
 }
 
+// generateOAuthState returns a cryptographically random, URL-safe string used
+// as the OAuth CSRF `state` token.
 func generateOAuthState() (string, error) {
 	b := make([]byte, 32)
 	if _, err := rand.Read(b); err != nil {
@@ -38,6 +42,7 @@ func generateOAuthState() (string, error) {
 	return base64.URLEncoding.EncodeToString(b), nil
 }
 
+// HandleGithubLogin redirects the user to GitHub's consent page.
 func HandleGithubLogin(c *gin.Context) {
 	state, err := generateOAuthState()
 	if err != nil {
@@ -46,6 +51,8 @@ func HandleGithubLogin(c *gin.Context) {
 		return
 	}
 
+	// Stash the state in the session so the callback can verify the response
+	// came back to the same browser that started the flow, preventing login-CSRF.
 	session := sessions.Default(c)
 	session.Set("oauth_state", state)
 	if err := session.Save(); err != nil {
@@ -58,6 +65,7 @@ func HandleGithubLogin(c *gin.Context) {
 	c.Redirect(http.StatusTemporaryRedirect, url)
 }
 
+// HandleGithubCallback is called by GitHub after the user logs in.
 func HandleGithubCallback(c *gin.Context) {
 	log.Println("[oauth] callback hit:", c.Request.URL.String())
 
@@ -69,6 +77,7 @@ func HandleGithubCallback(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid state"})
 		return
 	}
+	// One-time use: clear it immediately so it cannot be replayed.
 	session.Delete("oauth_state")
 
 	code := c.Query("code")
@@ -106,6 +115,8 @@ func HandleGithubCallback(c *gin.Context) {
 		return
 	}
 
+	// GitHub omits the email on /user when the user keeps it private. Fall back
+	// to the primary verified address from /user/emails (needs user:email).
 	if githubUser.Email == "" {
 		if emailResp, err := client.Get("https://api.github.com/user/emails"); err == nil {
 			defer emailResp.Body.Close()
@@ -147,7 +158,10 @@ func HandleGithubCallback(c *gin.Context) {
 		if user.Email == "" && githubUser.Email != "" {
 			user.Email = githubUser.Email
 		}
-		_ = config.DB.Save(&user).Error
+		if err := config.DB.Save(&user).Error; err != nil {
+			// Non-fatal: a failed last_login bump must not block a valid login.
+			log.Println("[oauth] WARN: failed to update last_login_at:", err)
+		}
 	}
 
 	session.Set("user_id", user.ID)
@@ -166,6 +180,7 @@ func HandleGithubCallback(c *gin.Context) {
 	c.Redirect(http.StatusTemporaryRedirect, frontendURL+"/dashboard")
 }
 
+// HandleAuthMe checks the session cookie and returns the current user.
 func HandleAuthMe(c *gin.Context) {
 	session := sessions.Default(c)
 	userID := session.Get("user_id")
@@ -188,9 +203,17 @@ func HandleAuthMe(c *gin.Context) {
 	})
 }
 
+// HandleLogout clears the session cookie and drops anything we were holding
+// in memory for this user.
 func HandleLogout(c *gin.Context) {
 	session := sessions.Default(c)
+	if userID, ok := session.Get("user_id").(string); ok && userID != "" {
+		services.InvalidateRepoCache(userID)
+	}
 	session.Clear()
-	_ = session.Save()
+	session.Options(sessions.Options{Path: "/", MaxAge: -1})
+	if err := session.Save(); err != nil {
+		log.Println("[oauth] WARN: failed to clear session on logout:", err)
+	}
 	c.JSON(http.StatusOK, gin.H{"ok": true})
 }

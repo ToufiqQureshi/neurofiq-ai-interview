@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { Outlet, Link, useLocation } from 'react-router-dom';
-import { LayoutDashboard, FolderKanban, FileText, Menu, X, Search, FileUser, FilePenLine, Map } from 'lucide-react';
+import { LayoutDashboard, FolderKanban, FileText, Menu, X, Search, FileUser, FilePenLine, Map, Users, LogOut } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 
 function Avatar({ avatarUrl, name, className }: { avatarUrl?: string; name: string; className?: string }) {
@@ -44,13 +44,22 @@ const navGroups: { label: string; items: NavItem[] }[] = [
   },
 ];
 
+// Shown only to hiring accounts. A candidate never sees this group at all,
+// rather than seeing it disabled — there is nothing here for them to unlock.
+const recruiterGroup = {
+  label: 'Hiring',
+  items: [{ name: 'Candidates', href: '/hiring', icon: Users }] as NavItem[],
+};
+
 export function DashboardLayout() {
   const [isSidebarOpen, setSidebarOpen] = useState(false);
   const location = useLocation();
-  const { user } = useAuth();
+  const { user, logout } = useAuth();
 
   const displayName = user?.github_username || 'Candidate';
   const displayEmail = user?.email || 'No email on file';
+  const isRecruiter = user?.role === 'recruiter' || user?.role === 'admin';
+  const groups = isRecruiter ? [...navGroups, recruiterGroup] : navGroups;
 
   return (
     <div className="min-h-screen bg-paper flex font-sans text-ink">
@@ -85,7 +94,7 @@ export function DashboardLayout() {
         </div>
 
         <div className="px-4 py-6 flex-1 overflow-y-auto space-y-6">
-          {navGroups.map((group) => (
+          {groups.map((group) => (
             <div key={group.label}>
               <div className="mb-2 px-3 text-[10px] font-mono font-semibold text-ink-faint uppercase tracking-wider">
                 {group.label}
@@ -131,7 +140,7 @@ export function DashboardLayout() {
           ))}
         </div>
 
-        <div className="p-4 border-t border-line">
+        <div className="p-4 border-t border-line space-y-1">
           <div className="flex items-center gap-3 px-3 py-2 rounded-lg">
             <Avatar avatarUrl={user?.avatar_url} name={displayName} className="w-8 h-8 flex-shrink-0" />
             <div className="flex-1 min-w-0">
@@ -139,6 +148,13 @@ export function DashboardLayout() {
               <p className="text-[10px] text-ink-faint truncate">{displayEmail}</p>
             </div>
           </div>
+          <button
+            onClick={logout}
+            className="w-full flex items-center gap-3 px-3 py-2 rounded-lg text-sm text-ink-soft hover:bg-paper hover:text-ink transition-colors"
+          >
+            <LogOut className="w-4 h-4 text-ink-faint" />
+            Sign out
+          </button>
         </div>
       </aside>
 

@@ -10,6 +10,7 @@ import (
 	"net/url"
 	"regexp"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/ToufiqQureshi/neurofiq-ai-interview/backend-go/config"
@@ -66,8 +67,8 @@ type greenhouseResponse struct {
 }
 
 type leverJob struct {
-	Text      string `json:"text"`
-	HostedURL string `json:"hostedUrl"`
+	Text       string `json:"text"`
+	HostedURL  string `json:"hostedUrl"`
 	Categories struct {
 		Team     string `json:"team"`
 		Location string `json:"location"`
@@ -116,11 +117,11 @@ type kekaJob struct {
 }
 
 type workableJob struct {
-	Title    string `json:"title"`
-	URL      string `json:"url"`
-	Shortcode string `json:"shortcode"`
+	Title      string `json:"title"`
+	URL        string `json:"url"`
+	Shortcode  string `json:"shortcode"`
 	Department string `json:"department"`
-	Location struct {
+	Location   struct {
 		City    string `json:"city"`
 		Country string `json:"country"`
 	} `json:"location"`
@@ -261,13 +262,16 @@ func countJobsFor(provider, slug string) (int, error) {
 	return 0, fmt.Errorf("unknown provider %q", provider)
 }
 
+// fetchText downloads a page whose address we did not choose.
+//
+// Every URL that reaches here came from an LLM's web search, from a company
+// record it produced, or from an href on a page we scraped. That makes this
+// the one function in the codebase that will happily fetch whatever a third
+// party puts in front of it, so it goes through SafeExternalGet: bounded
+// timeout, and a dialer that refuses loopback, private, and cloud-metadata
+// addresses even when a public hostname resolves to one.
 func fetchText(url string) (string, error) {
-	req, err := http.NewRequest("GET", url, nil)
-	if err != nil {
-		return "", err
-	}
-	req.Header.Set("User-Agent", "Mozilla/5.0 (compatible; NeuroFIQ-JobMap/1.0)")
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := SafeExternalGet(url)
 	if err != nil {
 		return "", err
 	}
@@ -276,8 +280,36 @@ func fetchText(url string) (string, error) {
 	return string(body), err
 }
 
+// atsGet calls one of the applicant-tracking APIs we support. The host is
+// ours to choose, but the slug inside the URL came out of a regex over
+// scraped HTML — so it is validated before it can steer the request
+// somewhere else entirely.
+func atsGet(url string) (*http.Response, error) {
+	return SafeExternalGet(url)
+}
+
+// validATSSlug accepts only the shape a real board identifier takes. Without
+// it a scraped slug of "evil.example.com/x?" turns "https://<slug>.keka.com/…"
+// into a request to a host we never intended to contact.
+func validATSSlug(slug string) bool {
+	if slug == "" || len(slug) > 100 {
+		return false
+	}
+	for _, r := range slug {
+		ok := r == '-' || r == '_' || r == '.' || r == ':' ||
+			(r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9')
+		if !ok {
+			return false
+		}
+	}
+	return !strings.Contains(slug, "..")
+}
+
 func fetchGreenhouseJobs(slug string) ([]greenhouseJob, error) {
-	resp, err := http.Get("https://boards-api.greenhouse.io/v1/boards/" + slug + "/jobs")
+	if !validATSSlug(slug) {
+		return nil, fmt.Errorf("invalid greenhouse slug %q", slug)
+	}
+	resp, err := atsGet("https://boards-api.greenhouse.io/v1/boards/" + slug + "/jobs")
 	if err != nil {
 		return nil, err
 	}
@@ -293,7 +325,10 @@ func fetchGreenhouseJobs(slug string) ([]greenhouseJob, error) {
 }
 
 func fetchLeverJobs(slug string) ([]leverJob, error) {
-	resp, err := http.Get("https://api.lever.co/v0/postings/" + slug + "?mode=json")
+	if !validATSSlug(slug) {
+		return nil, fmt.Errorf("invalid lever slug %q", slug)
+	}
+	resp, err := atsGet("https://api.lever.co/v0/postings/" + slug + "?mode=json")
 	if err != nil {
 		return nil, err
 	}
@@ -309,7 +344,10 @@ func fetchLeverJobs(slug string) ([]leverJob, error) {
 }
 
 func fetchAshbyJobs(slug string) ([]ashbyJob, error) {
-	resp, err := http.Get("https://api.ashbyhq.com/posting-api/job-board/" + slug)
+	if !validATSSlug(slug) {
+		return nil, fmt.Errorf("invalid ashby slug %q", slug)
+	}
+	resp, err := atsGet("https://api.ashbyhq.com/posting-api/job-board/" + slug)
 	if err != nil {
 		return nil, err
 	}
@@ -325,9 +363,12 @@ func fetchAshbyJobs(slug string) ([]ashbyJob, error) {
 }
 
 func fetchSmartRecruitersJobs(slug string) ([]smartRecruitersJob, error) {
+	if !validATSSlug(slug) {
+		return nil, fmt.Errorf("invalid smartrecruiters slug %q", slug)
+	}
 	// limit=100 is the API's max page size; without it you silently get
 	// only the first 10 roles.
-	resp, err := http.Get("https://api.smartrecruiters.com/v1/companies/" + slug + "/postings?limit=100")
+	resp, err := atsGet("https://api.smartrecruiters.com/v1/companies/" + slug + "/postings?limit=100")
 	if err != nil {
 		return nil, err
 	}
@@ -343,10 +384,13 @@ func fetchSmartRecruitersJobs(slug string) ([]smartRecruitersJob, error) {
 }
 
 func fetchKekaJobs(slug string) ([]kekaJob, error) {
+	if !validATSSlug(slug) {
+		return nil, fmt.Errorf("invalid keka slug %q", slug)
+	}
 	// Keka's official developer API is partner-gated, but every Keka-hosted
 	// careers portal exposes this endpoint publicly — it's what the page
 	// itself calls to render its listings.
-	resp, err := http.Get("https://" + slug + ".keka.com/careers/api/jobs/default/active")
+	resp, err := atsGet("https://" + slug + ".keka.com/careers/api/jobs/default/active")
 	if err != nil {
 		return nil, err
 	}
@@ -362,7 +406,10 @@ func fetchKekaJobs(slug string) ([]kekaJob, error) {
 }
 
 func fetchWorkableJobs(slug string) ([]workableJob, error) {
-	resp, err := http.Get("https://apply.workable.com/api/v1/widget/accounts/" + slug + "?details=true")
+	if !validATSSlug(slug) {
+		return nil, fmt.Errorf("invalid workable slug %q", slug)
+	}
+	resp, err := atsGet("https://apply.workable.com/api/v1/widget/accounts/" + slug + "?details=true")
 	if err != nil {
 		return nil, err
 	}
@@ -381,6 +428,9 @@ func fetchWorkableJobs(slug string) ([]workableJob, error) {
 // slug is "tenant:region:site" (see workdayLinkRe). The API pages at 20 per
 // request, so this loops until it has everything.
 func fetchWorkdayJobs(slug string) ([]workdayJob, error) {
+	if !validATSSlug(slug) {
+		return nil, fmt.Errorf("invalid workday slug %q", slug)
+	}
 	parts := strings.Split(slug, ":")
 	if len(parts) != 3 {
 		return nil, fmt.Errorf("bad workday slug %q", slug)
@@ -407,7 +457,7 @@ func fetchWorkdayJobs(slug string) ([]workdayJob, error) {
 		req.Header.Set("Accept", "application/json")
 		req.Header.Set("User-Agent", "Mozilla/5.0 (compatible; NeuroFIQ-JobMap/1.0)")
 
-		resp, err := http.DefaultClient.Do(req)
+		resp, err := externalClient.Do(req)
 		if err != nil {
 			return nil, err
 		}
@@ -875,21 +925,53 @@ func SyncAllCompanyJobs() {
 		return
 	}
 
-	synced, detected := 0, 0
+	// Sync companies in parallel, but bounded.
+	//
+	// This loop used to be strictly sequential, with several network calls
+	// per company. At 67 companies that finishes inside the hour; at a few
+	// thousand it does not, and cron simply starts the next tick on top of
+	// the one still running. A small pool keeps the tick well inside its
+	// window without turning us into a thundering herd against the ATS APIs.
+	const syncConcurrency = 8
+
+	var (
+		mu               sync.Mutex
+		synced, detected int
+		sem              = make(chan struct{}, syncConcurrency)
+		wg               sync.WaitGroup
+	)
+
 	for _, c := range companies {
-		n, err := SyncJobsForCompany(c)
-		if err != nil {
-			// Non-fatal: one company's board being briefly unreachable
-			// shouldn't stop the rest of the sync.
-			continue
-		}
-		if n > 0 {
-			synced += n
-			if c.ATSType == "" {
-				detected++ // had no ATS before this run
+		wg.Add(1)
+		sem <- struct{}{}
+		go func(c models.Company) {
+			defer wg.Done()
+			defer func() { <-sem }()
+			// Gin's Recovery() does not cover goroutines we spawn: a panic in
+			// any one company's parse would otherwise kill the process.
+			defer func() {
+				if r := recover(); r != nil {
+					log.Printf("PANIC syncing jobs for %s: %v", c.Name, r)
+				}
+			}()
+
+			n, err := SyncJobsForCompany(c)
+			if err != nil {
+				// Non-fatal: one company's board being briefly unreachable
+				// shouldn't stop the rest of the sync.
+				return
 			}
-		}
+			if n > 0 {
+				mu.Lock()
+				synced += n
+				if c.ATSType == "" {
+					detected++ // had no ATS before this run
+				}
+				mu.Unlock()
+			}
+		}(c)
 	}
+	wg.Wait()
 	log.Printf("job sync: %d companies checked, %d newly detected, %d open roles total | scrape usage this month: %v",
 		len(companies), detected, synced, ScrapeUsageSummary())
 }

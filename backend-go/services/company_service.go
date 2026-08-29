@@ -1,14 +1,12 @@
 package services
 
 import (
-	"bytes"
 	"encoding/json"
 	"fmt"
 	"io"
 	"log"
 	"net/http"
 	"net/url"
-	"os"
 	"regexp"
 	"strings"
 	"sync"
@@ -283,10 +281,26 @@ func TotalOpenRoles(sector, stage, area, q string) (int64, error) {
 // RunDiscoveryRotation is invoked on a schedule (see main.go cron) and picks
 // the next seed query deterministically from the current time, so the
 // rotation survives restarts without needing extra state in the database.
+// discoveryLeaseName is the key every API instance competes for before
+// running the hourly rotation.
+const discoveryLeaseName = "discovery-rotation"
+
 func RunDiscoveryRotation() {
 	if len(seedQueries) == 0 {
 		return
 	}
+
+	// Only one instance runs this tick. The cron scheduler lives inside the
+	// API process, so scaling to two containers would otherwise mean two
+	// discovery runs an hour: double the LLM spend, double the scraper
+	// credits, and every job board fetched twice. The lease is slightly
+	// shorter than the interval so a crashed instance frees it before the
+	// next tick is due.
+	if !AcquireCronLease(discoveryLeaseName, 55*time.Minute) {
+		log.Printf("company discovery rotation: another instance holds the lease, skipping")
+		return
+	}
+	defer ReleaseCronLease(discoveryLeaseName)
 	// The clock is the cursor: derive which query is next from the current
 	// hour rather than storing a position. Restart-proof, redeploy-proof,
 	// no cursor table to keep in sync. Must match the cron interval in
@@ -310,35 +324,15 @@ func RunDiscoveryRotation() {
 }
 
 func callDiscoveryAgent(query string, limit int) ([]discoveredCompanyDTO, error) {
-	workerURL := os.Getenv("PYTHON_WORKER_URL")
-	if workerURL == "" {
-		workerURL = "http://localhost:8001"
-	}
-
-	payload := map[string]interface{}{"query": query, "limit": limit}
-	jsonData, _ := json.Marshal(payload)
-
-	req, err := http.NewRequest("POST", workerURL+"/internal/discover-companies", bytes.NewBuffer(jsonData))
-	if err != nil {
-		return nil, err
-	}
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("X-Internal-Secret", os.Getenv("INTERNAL_SECRET"))
-
 	// The discovery agent does a live web search plus an LLM call, so it's
 	// slow — but it must never hang forever. Without a timeout a stuck
 	// worker blocks the whole cron tick, including the job sync that runs
-	// after it.
-	client := &http.Client{Timeout: 3 * time.Minute}
-	resp, err := client.Do(req)
+	// after it. discoveryClient carries the 3-minute ceiling.
+	payload := map[string]interface{}{"query": query, "limit": limit}
+
+	body, err := postToWorker(discoveryClient, "/internal/discover-companies", payload)
 	if err != nil {
 		return nil, err
-	}
-	defer resp.Body.Close()
-
-	body, _ := io.ReadAll(resp.Body)
-	if resp.StatusCode != 200 {
-		return nil, fmt.Errorf("python worker error: %s", string(body))
 	}
 
 	var parsed discoverCompaniesResponse
@@ -461,7 +455,7 @@ func geocodeOnce(area string) (*float64, *float64, error) {
 	}
 	req.Header.Set("User-Agent", "NeuroFIQ-JobMap/1.0 (contact: tech.revmerito@gmail.com)")
 
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := externalClient.Do(req)
 	if err != nil {
 		return nil, nil, err
 	}

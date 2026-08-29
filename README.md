@@ -40,12 +40,23 @@ You can't bluff that. It's your code.
                                 A scoring pass keeps only the architecturally
                                 significant files, capped at 60k characters.
 4. Interview                    5 questions built from your actual code
-                                snippets. Text or voice ($0 — browser Web
+                                snippets, shown beside the code they came
+                                from. One of the five comes from your commit
+                                history. Text or voice ($0 — browser Web
                                 Speech API, no streaming vendor).
 5. Report                       0-10 on correctness, depth, clarity and
                                 trade-off awareness — plus, per question,
                                 what a strong answer would have covered.
+6. Share                        One click mints a public link. Score and
+                                assessment travel; your answers don't.
 ```
+
+**The questions your history writes.** The archive says what the code is now.
+The commit log is the only record of what it used to be — so one question comes
+from there: work that got revisited, a decision the messages show being
+reversed. "You rewrote this auth middleware three times in one week last
+March — what did the first two get wrong?" is not a question another product
+can ask you.
 
 ---
 
@@ -79,6 +90,17 @@ access** — by rule, not by accident. That makes it a pure function
 **Why the split:** Python is bad at high-concurrency I/O; Go has no AI
 ecosystem. Forcing either to do both bakes a permanent weakness into your
 hottest path.
+
+---
+
+## For companies
+
+The candidate side and the hiring side run on the same loop. A recruiter mints
+an invite link; the candidate redeems it by taking the same interview on their
+own repository, scored on the same rubric; the recruiter gets everyone back
+ranked, with the full report.
+
+Nobody pays to be interviewed. Companies pay for signal.
 
 ---
 
@@ -168,6 +190,15 @@ curl localhost:8080/health
 curl "localhost:8080/api/companies?hiring=1"   # public — companies with open roles
 ```
 
+### Tests
+
+```bash
+cd backend-go && go build ./... && go vet ./... && go test -race ./...
+cd frontend  && npm run lint && npm run build
+```
+
+CI runs exactly this on every push and pull request.
+
 ---
 
 ## Engineering notes
@@ -197,6 +228,28 @@ Some decisions worth knowing about, and the bugs behind them:
   placeholder *with a 404 status but a valid PNG body* — it decodes fine, so
   `onError` never fires. Detection is by `naturalWidth`, not by error.
 
+- **`.tsx` does not end in `.ts`.** The file scorer matched source files by
+  suffix against `.go/.py/.ts/.js`, so a React codebase — including this repo's
+  own frontend — contributed zero files and the interview was built from
+  `package.json` alone. Java, Rust, Ruby, C# and the rest scored zero too. One
+  four-line predicate, and the product's central claim was quietly false for
+  most of GitHub.
+
+- **`break` where `continue` belonged.** Files are packed into the prompt
+  highest-score-first, and the budget check exited the loop instead of skipping
+  the file. A single oversized `main.go` sorts first, blows the budget, and
+  leaves the model with nothing at all.
+
+- **A URL blocklist doesn't stop SSRF; a dialer does.** Every URL the Job Map
+  fetches comes from an LLM's web search, and a string check on the hostname
+  loses to both a 302 and an A record pointing at `169.254.169.254`. The guard
+  runs in `net.Dialer.Control`, after resolution, on the address actually being
+  dialled.
+
+- **A signed cookie is not a private one.** The session carries a GitHub OAuth
+  token. Signing proves we issued the cookie; it does nothing to stop whoever
+  holds it from reading the contents. Two keys, not one.
+
 ---
 
 ## Documentation
@@ -211,7 +264,8 @@ Some decisions worth knowing about, and the bugs behind them:
 
 ## Status
 
-Actively built in public. Core interview loop and Job Map are working;
-billing, deployment and gRPC migration are in progress.
+Actively built in public. The core interview loop, shareable reports, the
+recruiter side and the Job Map are working. Billing, deployment and the gRPC
+migration are in progress.
 
 Issues and PRs welcome.
