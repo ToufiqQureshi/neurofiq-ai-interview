@@ -1,0 +1,49 @@
+@import "tailwindcss";
+
+@theme {
+  --font-display: "Inter", ui-sans-serif, system-ui, sans-serif;
+  --font-sans: "Inter", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+
+  --color-paper: #fbfbfa;
+  --color-surface: #ffffff;
+  --color-ink: #0a0a0a;
+  --color-ink-soft: #5c5c5c;
+  --color-ink-faint: #9a9a9a;
+  --color-line: #e8e8e6;
+  --color-line-strong: #d8d8d5;
+
+  --color-accent: #15803d;
+  --color-accent-dark: #0f6630;
+  --color-accent-soft: #e9f6ee;
+
+  --color-pass: #15803d;
+  --color-pass-soft: #e9f6ee;
+  --color-warn: #9c7c11;
+  --color-warn-soft: #f7f1de;
+  --color-crit: #c62f3a;
+  --color-crit-soft: #fbe9ea;
+  --color-info: #3a5fb0;
+  --color-info-soft: #e9edf9;
+  --color-soon: #9a9a9a;
+  --color-soon-soft: #f0f0ee;
+}
+
+@layer base {
+  html {
+    background: var(--color-paper);
+  }
+  body {
+    @apply bg-paper text-ink antialiased;
+    font-family: var(--font-sans);
+  }
+  h1, h2, h3 {
+    font-family: var(--font-display);
+    font-weight: 800;
+    letter-spacing: -0.01em;
+    text-wrap: balance;
+  }
+  ::selection {
+    background: var(--color-accent-soft);
+  }
+}
