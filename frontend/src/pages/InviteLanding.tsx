@@ -30,7 +30,22 @@ export function InviteLanding() {
 
   useEffect(() => {
     if (!token) return;
+
+    // Two guards, because they catch different things. The ref rejects a
+    // response for an invite the page has moved on from; `active` rejects one
+    // that arrives after this lookup was abandoned entirely — the ref lives on
+    // the component, so on unmount it still matches and a late success would
+    // quietly persist an invite the candidate navigated away from before it
+    // even rendered.
+    let active = true;
     currentToken.current = token;
+
+    // Nothing from the previous invite may survive into this one: the old
+    // invitation would stay on screen while the new one loads, and because the
+    // error branch renders first, an error left over from a dead link would
+    // keep showing "Invite unavailable" over a perfectly good invite.
+    setInvite(null);
+    setError('');
 
     // Drop whatever was held before looking this one up. Opening a second
     // invite link, or opening one that turns out to be dead, must not leave
@@ -45,7 +60,7 @@ export function InviteLanding() {
         return data;
       })
       .then((data: Invite) => {
-        if (currentToken.current !== token) return; // a different invite is open now
+        if (!active || currentToken.current !== token) return;
         setInvite(data);
         // Held until the interview is submitted, which is what links the
         // finished report back to the recruiter who asked for it. Expires on
@@ -53,10 +68,15 @@ export function InviteLanding() {
         saveInvite(token, data.role_title);
       })
       .catch(err => {
-        if (currentToken.current !== token) return;
+        if (!active || currentToken.current !== token) return;
         clearInvite();
         setError(err.message);
       });
+
+    return () => {
+      active = false;
+      if (currentToken.current === token) currentToken.current = null;
+    };
   }, [token]);
 
   if (error) {
