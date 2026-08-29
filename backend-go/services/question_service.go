@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"log"
 
 	"github.com/ToufiqQureshi/neurofiq-ai-interview/backend-go/config"
 	"github.com/ToufiqQureshi/neurofiq-ai-interview/backend-go/models"
@@ -55,7 +56,24 @@ func GetOrGenerateQuestions(userID string, repoFullName string) ([]models.Questi
 		return cached, nil
 	}
 
-	// 3. Miss: generate a fresh set.
+	// 3. Miss. Serialize per repository before generating, so two tabs opening
+	// the interview at the same moment do not both pay for a set. The lock is
+	// released when this transaction ends; the same advisory-lock pattern
+	// guards the analysis quota in HandleAnalyzeRepo.
+	lockTx := config.DB.Begin()
+	if lockTx.Error == nil {
+		defer lockTx.Rollback()
+		if err := lockTx.Exec("SELECT pg_advisory_xact_lock(hashtext(?))", "questions:"+repoFullName).Error; err == nil {
+			// Whoever held the lock may have just filled the cache.
+			var afterLock []models.Question
+			lockTx.Where("reusable = ? AND language = ? AND fingerprint = ?", true, repoFullName, fingerprint).
+				Order("created_at asc").Limit(questionsPerInterview).Find(&afterLock)
+			if len(afterLock) >= questionsPerInterview {
+				return afterLock, nil
+			}
+		}
+	}
+
 	payload := GenerateQuestionsPayload{
 		RepoFullName:   repoFullName,
 		AnalysisData:   profile.AnalysisJSON,
@@ -68,6 +86,13 @@ func GetOrGenerateQuestions(userID string, repoFullName string) ([]models.Questi
 	}
 	if len(newQuestions) == 0 {
 		return nil, fmt.Errorf("the question generator returned nothing for this repository")
+	}
+	// A short set must never be cached. The read above treats fewer than five
+	// rows as a miss, so caching four would regenerate and insert four more on
+	// every single load — the table grows without bound and the five questions
+	// returned come from two different generations.
+	if len(newQuestions) < questionsPerInterview {
+		return newQuestions, nil
 	}
 
 	// 4. Store them against this analysis so the next load is free.
@@ -90,7 +115,10 @@ func GetOrGenerateQuestions(userID string, repoFullName string) ([]models.Questi
 			return newQuestions, nil
 		}
 	}
-	tx.Commit()
+	if err := tx.Commit().Error; err != nil {
+		// Nothing was cached; the interview still runs on this set.
+		log.Printf("questions: could not cache the set for %s: %v", repoFullName, err)
+	}
 
 	return newQuestions, nil
 }

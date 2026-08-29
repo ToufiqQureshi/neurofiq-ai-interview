@@ -1,8 +1,9 @@
 package controllers
 
 import (
+	"errors"
+	"log"
 	"net/http"
-	"strings"
 
 	"github.com/ToufiqQureshi/neurofiq-ai-interview/backend-go/services"
 	"github.com/gin-gonic/gin"
@@ -20,14 +21,18 @@ func HandleGetQuestions(c *gin.Context) {
 
 	questions, err := services.GetOrGenerateQuestions(userID, repoFullName)
 	if err != nil {
-		// "Analyze the repo first" is the caller's problem; the AI worker
-		// being unreachable is ours. Returning 400 for both left the frontend
-		// unable to tell a user error from an outage.
-		status := http.StatusBadRequest
-		if strings.Contains(err.Error(), "ai worker") {
-			status = http.StatusBadGateway
+		// "Analyze the repo first" is the caller's problem and its text is
+		// written for them. The worker being unreachable is ours: that error
+		// carries the worker's own response body, which may hold a provider
+		// message or a stack trace, so it is logged and never returned.
+		if errors.Is(err, services.ErrWorkerUnavailable) {
+			log.Printf("questions: worker failure for user=%s repo=%s: %v", userID, repoFullName, err)
+			c.JSON(http.StatusBadGateway, gin.H{
+				"error": "The question service is unavailable right now. Please try again in a moment.",
+			})
+			return
 		}
-		c.JSON(status, gin.H{"error": err.Error()})
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
 

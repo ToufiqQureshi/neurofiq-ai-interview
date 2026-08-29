@@ -11,6 +11,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -32,8 +33,12 @@ import (
 // visitor is one client's token bucket plus the time we last saw it, so the
 // limiter can forget clients that have gone away.
 type visitor struct {
-	limiter  *rate.Limiter
-	lastSeen time.Time
+	limiter *rate.Limiter
+	// Unix nanoseconds, atomic: written by every request goroutine and read
+	// by the housekeeping cron. sync.Map protects the map, not the value it
+	// stores, and a time.Time is several words — a torn read could evict a
+	// bucket that is in active use.
+	lastSeen atomic.Int64
 }
 
 // ipLimiters holds one token bucket per client IP (5 req/sec, burst of 10).
@@ -47,23 +52,29 @@ var (
 )
 
 func getLimiter(store *sync.Map, key string, r rate.Limit, burst int) *rate.Limiter {
-	now := time.Now()
+	now := time.Now().UnixNano()
 	if v, ok := store.Load(key); ok {
 		vis := v.(*visitor)
-		vis.lastSeen = now
+		vis.lastSeen.Store(now)
 		return vis.limiter
 	}
-	vis := &visitor{limiter: rate.NewLimiter(r, burst), lastSeen: now}
+	vis := &visitor{limiter: rate.NewLimiter(r, burst)}
+	vis.lastSeen.Store(now)
 	actual, _ := store.LoadOrStore(key, vis)
-	return actual.(*visitor).limiter
+	// Refresh on the losing side of the race too: otherwise a bucket only
+	// ever reached through this path never has its timestamp touched and
+	// ages out while it is still being used.
+	existing := actual.(*visitor)
+	existing.lastSeen.Store(now)
+	return existing.limiter
 }
 
 // sweepLimiters drops buckets nobody has used recently. A bucket at rest is
 // indistinguishable from a fresh one, so forgetting it costs nothing.
 func sweepLimiters(store *sync.Map, idleFor time.Duration) {
-	cutoff := time.Now().Add(-idleFor)
+	cutoff := time.Now().Add(-idleFor).UnixNano()
 	store.Range(func(key, value interface{}) bool {
-		if value.(*visitor).lastSeen.Before(cutoff) {
+		if value.(*visitor).lastSeen.Load() < cutoff {
 			store.Delete(key)
 		}
 		return true
@@ -322,7 +333,7 @@ func main() {
 	// the next instance can pick it up immediately instead of waiting out the
 	// remaining TTL.
 	<-scheduler.Stop().Done()
-	services.ReleaseCronLease("discovery-rotation")
+	services.ReleaseCronLease(services.DiscoveryLeaseName)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()

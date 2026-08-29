@@ -76,6 +76,11 @@ const (
 
 	// maxFileReadBytes caps a single member of the archive.
 	maxFileReadBytes = 2 << 20 // 2 MB
+
+	// maxSkipMemberBytes is the point at which a member is skipped outright
+	// rather than partially read. Well past any real source file, so this
+	// only ever catches dumps, fixtures, and vendored blobs.
+	maxSkipMemberBytes = 16 << 20 // 16 MB
 )
 
 // sourceLanguages maps a file extension to the language it represents.
@@ -265,9 +270,13 @@ func downloadZip(repoFullName, branch, token string) ([]byte, error) {
 	}
 	// Bounded read: an unbounded io.ReadAll here is an out-of-memory kill
 	// switch that any user can pull by pointing us at a large repository.
+	// ReadCapped fails for a broken transfer as well as for the size cap, so
+	// the real cause is wrapped rather than every failure being reported as
+	// "too large" — a flaky download should not tell the user their repo is
+	// oversized.
 	data, err := ReadCapped(resp.Body, maxZipDownloadBytes)
 	if err != nil {
-		return nil, fmt.Errorf("repository archive too large to analyze (limit %d MB)", maxZipDownloadBytes>>20)
+		return nil, fmt.Errorf("could not read the repository archive (limit %d MB): %w", maxZipDownloadBytes>>20, err)
 	}
 	return data, nil
 }
@@ -322,10 +331,20 @@ func processZip(zipData []byte) ([]CodeSnippet, string, []string, error) {
 			continue
 		}
 
-		// Refuse the whole archive rather than expanding a zip bomb: the
-		// compressed size we already checked says nothing about this.
-		if decompressed+int64(f.UncompressedSize64) > maxDecompressedBytes {
+		// Two different bounds, and they are not the same check.
+		//
+		// The archive-wide one guards against a zip bomb: the compressed size
+		// we already checked says nothing about what it expands to, so refuse
+		// once real expansion passes the limit.
+		if decompressed >= maxDecompressedBytes {
 			return nil, "", nil, fmt.Errorf("repository expands beyond the %d MB analysis limit", maxDecompressedBytes>>20)
+		}
+		// The per-member one just skips. A single huge member — a scored
+		// 250 MB .sql dump, say — is not a reason to fail somebody's entire
+		// analysis, and we would only ever read maxFileReadBytes of it. Real
+		// expansion stays bounded by the accumulator above.
+		if int64(f.UncompressedSize64) > maxSkipMemberBytes {
+			continue
 		}
 
 		rc, err := f.Open()

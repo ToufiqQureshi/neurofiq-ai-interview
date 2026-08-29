@@ -125,6 +125,8 @@ func HandleSubmitInterview(c *gin.Context) {
 	// 1. Call the Python AI worker to evaluate the answers.
 	feedbackJSON, score, err := services.CallPythonEvaluationWorker(payload)
 	if err != nil {
+		// Logged in full, reported generically: this error can carry the
+		// worker's raw response body.
 		log.Printf("submit: evaluation failed for user=%s repo=%s: %v", userID, reqBody.RepoFullName, err)
 		c.JSON(http.StatusBadGateway, gin.H{"error": "Could not score this interview right now. Your answers were not lost — try submitting again."})
 		return

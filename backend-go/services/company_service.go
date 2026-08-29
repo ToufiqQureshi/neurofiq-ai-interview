@@ -283,7 +283,7 @@ func TotalOpenRoles(sector, stage, area, q string) (int64, error) {
 // rotation survives restarts without needing extra state in the database.
 // discoveryLeaseName is the key every API instance competes for before
 // running the hourly rotation.
-const discoveryLeaseName = "discovery-rotation"
+const DiscoveryLeaseName = "discovery-rotation"
 
 func RunDiscoveryRotation() {
 	if len(seedQueries) == 0 {
@@ -296,11 +296,17 @@ func RunDiscoveryRotation() {
 	// credits, and every job board fetched twice. The lease is slightly
 	// shorter than the interval so a crashed instance frees it before the
 	// next tick is due.
-	if !AcquireCronLease(discoveryLeaseName, 55*time.Minute) {
+	if !AcquireCronLease(DiscoveryLeaseName, 55*time.Minute) {
 		log.Printf("company discovery rotation: another instance holds the lease, skipping")
 		return
 	}
-	defer ReleaseCronLease(discoveryLeaseName)
+	// Deliberately NOT released when the run finishes. Each process registers
+	// its own "@every 1h" schedule, so instance ticks are not aligned: if A
+	// finishes at :05 and B ticks at :25, B would take the freed lease and —
+	// because the query index is derived from the current hour — run the
+	// identical query again. That is exactly the duplicated LLM spend and
+	// duplicated board fetching the lease exists to prevent. The 55-minute
+	// TTL covers the rest of the interval; shutdown releases it explicitly.
 	// The clock is the cursor: derive which query is next from the current
 	// hour rather than storing a position. Restart-proof, redeploy-proof,
 	// no cursor table to keep in sync. Must match the cron interval in

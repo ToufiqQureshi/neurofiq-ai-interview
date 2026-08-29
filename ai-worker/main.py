@@ -230,7 +230,10 @@ def _history_block(stats: CommitStats) -> str:
     if stats.first_commit_at and stats.last_commit_at:
         lines.append(f"Active from {stats.first_commit_at} to {stats.last_commit_at}.")
     if stats.notable_commits:
-        lines.append("Recent substantive commits (newest first):")
+        # collectCommitStats ranks by how often a subject recurs, not by date —
+        # the repeatedly-revisited work is the interesting part. Label it
+        # accurately so the agent does not make a claim about ordering.
+        lines.append("Recent substantive commits (most-revisited work first):")
         for c in stats.notable_commits:
             lines.append(f"- {c.date}: {c.message}")
     return "\n".join(lines) + "\n"

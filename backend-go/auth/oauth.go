@@ -192,8 +192,12 @@ func HandleAuthMe(c *gin.Context) {
 
 	var user models.User
 	if err := config.DB.Where("id = ?", userID).First(&user).Error; err != nil {
+		// Session points at a user row that is gone — clear it so the browser
+		// stops presenting a cookie we will never accept.
 		session.Clear()
-		session.Save()
+		if err := session.Save(); err != nil {
+			log.Println("[auth/me] WARN: failed to clear a session for a missing user:", err)
+		}
 		c.JSON(http.StatusUnauthorized, gin.H{"error": "User not found"})
 		return
 	}

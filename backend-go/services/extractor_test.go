@@ -3,6 +3,7 @@ package services
 import (
 	"archive/zip"
 	"bytes"
+	"fmt"
 	"strings"
 	"testing"
 )
@@ -95,38 +96,70 @@ func TestProcessZipCoversNonWebLanguages(t *testing.T) {
 	}
 }
 
-// A single file bigger than the whole budget used to `break` the packing loop.
-// Because files are sorted by score, that meant the highest-scoring file
-// emptied the prompt instead of filling it.
-func TestProcessZipOneHugeFileDoesNotStarveTheRest(t *testing.T) {
-	huge := strings.Repeat("x", MaxTotalCharacters*2)
-	small := strings.Repeat("// small service file\n", 50)
+// The packing loop used to `break` when a file did not fit. Files are sorted
+// by score, so the first oversized one ended the loop and everything below it
+// was lost — including small files that would have fitted in what was left.
+//
+// The discriminator is lastsmall.go: it scores lowest, so it sorts last, and it
+// is only ever reached if packing continues past a file that did not fit.
+func TestProcessZipKeepsPackingPastAFileThatDoesNotFit(t *testing.T) {
+	files := map[string]string{
+		// Entrypoint plus oversized: scores highest, sorts first, and is
+		// truncated to MaxFileCharacters when packed.
+		"main.go": strings.Repeat("x", MaxTotalCharacters*2),
+		// Small and at the root, so it scores lowest and sorts last.
+		"lastsmall.go": strings.Repeat("// tail\n", 60),
+	}
+	// Enough mid-scoring files to exhaust the budget before the loop reaches
+	// lastsmall.go. Each truncates to MaxFileCharacters, so ten of them are
+	// well past MaxTotalCharacters.
+	for i := 0; i < 10; i++ {
+		files[fmt.Sprintf("services/svc%02d.go", i)] = strings.Repeat("// service line\n", 800)
+	}
 
-	zipData := buildZip(t, map[string]string{
-		"main.go":               huge, // scores highest, sorts first
-		"services/billing.go":   small,
-		"services/accounts.go":  small,
-		"controllers/http.go":   small,
-		"internal/scheduler.go": small,
-	})
-
-	snippets, _, _, err := processZip(zipData)
+	snippets, _, _, err := processZip(buildZip(t, files))
 	if err != nil {
 		t.Fatalf("processZip: %v", err)
 	}
-	if len(snippets) < 4 {
-		t.Fatalf("expected the smaller files to still be packed, got %d: %v", len(snippets), snippetFiles(snippets))
+
+	packed := snippetFiles(snippets)
+	if !contains(packed, "lastsmall.go") {
+		t.Errorf("packing stopped at the first file that did not fit; "+
+			"lastsmall.go should still have been packed into the remaining budget. Got %v", packed)
 	}
 
 	total := 0
-	for _, s := range snippets {
-		if len(s.Content) > MaxFileCharacters+64 {
-			t.Errorf("file %s exceeded the per-file cap: %d chars", s.File, len(s.Content))
+	for _, snip := range snippets {
+		if len(snip.Content) > MaxFileCharacters+64 {
+			t.Errorf("file %s exceeded the per-file cap: %d chars", snip.File, len(snip.Content))
 		}
-		total += len(s.Content)
+		total += len(snip.Content)
 	}
 	if total > MaxTotalCharacters {
 		t.Errorf("total budget exceeded: %d > %d", total, MaxTotalCharacters)
+	}
+	if len(snippets) < 5 {
+		t.Errorf("expected the budget to be filled with several files, got %d: %v", len(snippets), packed)
+	}
+}
+
+// A member far larger than anything we would read should be skipped, not fail
+// the whole analysis: a scored .sql dump used to take the repository with it.
+func TestProcessZipSkipsAnOversizedMemberWithoutFailing(t *testing.T) {
+	files := map[string]string{
+		"db/dump.sql":      strings.Repeat("a", maxSkipMemberBytes+1024),
+		"services/real.go": strings.Repeat("// code\n", 60),
+	}
+	snippets, _, _, err := processZip(buildZip(t, files))
+	if err != nil {
+		t.Fatalf("an oversized member should be skipped, not fail the analysis: %v", err)
+	}
+	packed := snippetFiles(snippets)
+	if !contains(packed, "services/real.go") {
+		t.Errorf("expected the real source file to survive, got %v", packed)
+	}
+	if contains(packed, "db/dump.sql") {
+		t.Errorf("the oversized member should not have been packed, got %v", packed)
 	}
 }
 

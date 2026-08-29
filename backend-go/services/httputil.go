@@ -3,6 +3,7 @@ package services
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -145,6 +146,11 @@ func ReadCapped(r io.Reader, max int64) ([]byte, error) {
 	return data, nil
 }
 
+// ErrWorkerUnavailable wraps every failure to get an answer out of the Python
+// worker. Callers classify on this rather than on the error string: a reworded
+// message should not silently change an HTTP status code.
+var ErrWorkerUnavailable = errors.New("ai worker unavailable")
+
 func internalSecret() string { return os.Getenv("INTERNAL_SECRET") }
 
 func workerURL() string {
@@ -171,16 +177,19 @@ func postToWorker(client *http.Client, path string, payload interface{}) ([]byte
 
 	resp, err := client.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("ai worker unreachable: %w", err)
+		return nil, fmt.Errorf("%w: %v", ErrWorkerUnavailable, err)
 	}
 	defer resp.Body.Close()
 
 	body, err := ReadCapped(resp.Body, 8<<20) // 8 MB — far above any real response
 	if err != nil {
-		return nil, fmt.Errorf("ai worker response unreadable: %w", err)
+		return nil, fmt.Errorf("%w: response unreadable: %v", ErrWorkerUnavailable, err)
 	}
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("ai worker returned %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
+		// The worker's body can carry a provider error or a stack trace. It
+		// belongs in our logs, never in a candidate's browser — the handler
+		// logs this and answers with a fixed message.
+		return nil, fmt.Errorf("%w: status %d: %s", ErrWorkerUnavailable, resp.StatusCode, strings.TrimSpace(string(body)))
 	}
 	return body, nil
 }

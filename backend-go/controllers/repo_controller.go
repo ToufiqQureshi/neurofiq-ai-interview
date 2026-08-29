@@ -102,7 +102,12 @@ func HandleAnalyzeRepo(c *gin.Context) {
 	// ceiling again.
 	var used int64
 	if err := tx.Model(&models.GithubProfile{}).
-		Where("user_id = ? AND strategy_used <> ?", userID, "failed").
+		// COALESCE, because strategy_used is nullable: SQL drops NULL rows
+		// from `strategy_used <> 'failed'` entirely, while HandleGetRepos
+		// counts them in Go as used. Without this the two disagree and the
+		// quota check is the looser of the pair.
+		Where("COALESCE(strategy_used, '') <> ?", "failed").
+		Where("user_id = ?", userID).
 		Count(&used).Error; err != nil {
 		tx.Rollback()
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to start analysis"})

@@ -193,11 +193,14 @@ curl "localhost:8080/api/companies?hiring=1"   # public — companies with open 
 ### Tests
 
 ```bash
-cd backend-go && go build ./... && go vet ./... && go test -race ./...
-cd frontend  && npm run lint && npm run build
+(cd backend-go && gofmt -l . && go build ./... && go vet ./... && go test -race ./...)
+(cd frontend  && npm ci && npm run lint && npm run build)
+(cd ai-worker && python -m compileall -q main.py)
 ```
 
-CI runs exactly this on every push and pull request.
+Each line runs in a subshell, so they all start from the repository root.
+
+CI runs the same three groups on pull requests and on pushes to `main`.
 
 ---
 

@@ -30,6 +30,10 @@ jobs:
         working-directory: backend-go
     steps:
       - uses: actions/checkout@v4
+        with:
+          # Don't leave the token in .git/config where any later step, or any
+          # dependency those steps run, could read it.
+          persist-credentials: false
 
       - uses: actions/setup-go@v5
         with:
@@ -62,6 +66,10 @@ jobs:
         working-directory: ai-worker
     steps:
       - uses: actions/checkout@v4
+        with:
+          # Don't leave the token in .git/config where any later step, or any
+          # dependency those steps run, could read it.
+          persist-credentials: false
 
       - uses: actions/setup-python@v5
         with:
@@ -81,6 +89,10 @@ jobs:
         working-directory: frontend
     steps:
       - uses: actions/checkout@v4
+        with:
+          # Don't leave the token in .git/config where any later step, or any
+          # dependency those steps run, could read it.
+          persist-credentials: false
 
       - uses: actions/setup-node@v4
         with:

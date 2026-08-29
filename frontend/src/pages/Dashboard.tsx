@@ -4,6 +4,7 @@ import { useAuth } from '../context/AuthContext';
 
 export function Dashboard() {
   const [reports, setReports] = useState<any[]>([]);
+  const [quota, setQuota] = useState({ used: 0, limit: 3 });
   const [loading, setLoading] = useState(true);
   const navigate = useNavigate();
   const { user } = useAuth();
@@ -14,6 +15,19 @@ export function Dashboard() {
       .then(d => setReports(Array.isArray(d) ? d : []))
       .catch(console.error)
       .finally(() => setLoading(false));
+
+    // The analysis quota comes from the endpoint that owns it. Deriving it
+    // from completed reports undercounts: a repository analyzed but never
+    // interviewed holds a slot and produces no report, so the dashboard used
+    // to promise slots the backend would refuse.
+    fetch(`${import.meta.env.VITE_API_URL}/api/repos`, { credentials: 'include' })
+      .then(r => (r.ok ? r.json() : null))
+      .then(d => {
+        if (d) setQuota({ used: d.analyses_used ?? 0, limit: d.analyses_limit ?? 3 });
+      })
+      .catch(() => {
+        // Non-fatal: the rest of the dashboard still renders.
+      });
   }, [navigate]);
 
   const totalInterviews = reports.length;
@@ -21,7 +35,7 @@ export function Dashboard() {
     ? Math.round(reports.reduce((acc, curr) => acc + (curr.overall_score || 0), 0) / totalInterviews * 10)
     : 0;
   const connectedRepos = new Set(reports.map(r => r.repo_full_name)).size;
-  const freeRemaining = Math.max(3 - connectedRepos, 0);
+  const freeRemaining = Math.max(quota.limit - quota.used, 0);
 
   return (
     <div className="p-6 md:p-8 max-w-7xl mx-auto space-y-5">
