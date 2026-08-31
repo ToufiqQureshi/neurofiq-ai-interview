@@ -304,9 +304,13 @@ Wellfound, no Cutshort. Our approach is right; the gap is scale, not method.
 1. **Retry failed extractions** (~1h). Classplus, Physics Wallah, Extramarks
    have careers URLs but returned 0 jobs. Worth a second pass with a tweaked
    prompt or longer wait — these are companies we *know* are hiring.
-2. **Follow "View Openings" links** (~1h). Many `/careers` pages are marketing
-   pages that link to the real listing page. Currently we only read the first
-   page, so those companies look empty.
+2. ~~**Follow "View Openings" links.**~~ **Shipped.** `findJobsListingLink`
+   in `job_service.go` follows a careers page's link to the real listing page
+   when the first page yields nothing. Note the guard that came with it: an
+   education site linked to a *career-advice* article and the extraction
+   returned 295 professions as "jobs", so `guidancePageRe` skips advice URLs
+   and `careersPageResultLooksReal` rejects extractions that are too large or
+   carry no location/department metadata at all.
 3. **Direct Exa lookup for careers URLs from Go** (~45 min). Finding a careers
    page is a *lookup*, not a judgment call — a direct Exa call
    (`site:company.com careers`) skips the LLM tokens entirely. Cheaper than
