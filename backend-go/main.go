@@ -100,7 +100,7 @@ func main() {
 	// AutoMigrate the schema models.
 	if err := config.DB.AutoMigrate(
 		&models.User{}, &models.GithubProfile{}, &models.Question{},
-		&models.InterviewSession{}, &models.InterviewInvite{},
+		&models.InterviewSession{},
 		&models.Company{}, &models.Job{}, &models.ScrapeUsage{},
 		&models.CronLease{},
 	); err != nil {
@@ -226,11 +226,9 @@ func main() {
 	r.GET("/api/companies/:id", controllers.HandleGetCompanyByID)
 	r.GET("/api/companies/:id/jobs", controllers.HandleGetCompanyJobs)
 
-	// Public, link-only routes. A shared report and an interview invite are
-	// both authorised by holding an unguessable URL, so they sit outside the
-	// session middleware on purpose.
+	// Public, link-only route. A shared report is authorised by holding an
+	// unguessable URL, so it sits outside the session middleware on purpose.
 	r.GET("/api/public/reports/:slug", controllers.HandleGetPublicReport)
-	r.GET("/api/public/invites/:token", controllers.HandleLookupInvite)
 
 	// 7. Authenticated API routes.
 	api := r.Group("/api")
@@ -255,18 +253,6 @@ func main() {
 		}
 
 		api.POST("/reports/:id/share", controllers.HandleShareReport)
-
-		// The hiring side. Same interview loop, same rubric — the only
-		// difference is who started it.
-		recruiter := api.Group("/recruiter")
-		recruiter.Use(controllers.RecruiterMiddleware())
-		{
-			recruiter.GET("/invites", controllers.HandleListInvites)
-			recruiter.POST("/invites", controllers.HandleCreateInvite)
-			recruiter.POST("/invites/:id/revoke", controllers.HandleRevokeInvite)
-			recruiter.GET("/candidates", controllers.HandleRankedCandidates)
-			recruiter.GET("/reports/:id", controllers.HandleGetRecruiterReport)
-		}
 	}
 
 	// 8. Background schedules.

@@ -2,7 +2,6 @@ import { useState, useEffect, useRef } from 'react';
 import { Mic, SkipForward, VolumeX, Send, Loader2, Volume2, MicOff, FileCode2 } from 'lucide-react';
 import { useSearchParams, useParams, useNavigate } from 'react-router-dom';
 import { CameraPreview } from '../components/CameraPreview';
-import { readInvite, clearInvite } from '../lib/invite';
 
 export function InterviewSession() {
   const { repoId } = useParams();
@@ -178,8 +177,6 @@ export function InterviewSession() {
           repo_full_name: decodeURIComponent(repoId || ''),
           qa_list: qaList,
           mode: isVoiceMode ? 'voice' : 'text',
-          // Set when the candidate arrived through a recruiter's invite link.
-          invite_token: readInvite()?.token,
         })
       });
 
@@ -189,12 +186,6 @@ export function InterviewSession() {
     } catch (err: any) {
       setError(err.message);
       setIsSubmitting(false);
-    } finally {
-      // In `finally`, not after the response: a network rejection never
-      // reaches the lines above, and a held-over invite would then attach
-      // itself to the candidate's next, unrelated practice interview and
-      // spend one of its uses on it.
-      clearInvite();
     }
   };
 

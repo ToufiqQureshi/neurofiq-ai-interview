@@ -93,14 +93,15 @@ hottest path.
 
 ---
 
-## For companies
+## Sharing a report
 
-The candidate side and the hiring side run on the same loop. A recruiter mints
-an invite link; the candidate redeems it by taking the same interview on their
-own repository, scored on the same rubric; the recruiter gets everyone back
-ranked, with the full report.
+The candidate owns the result. Finishing an interview produces a private
+report; turning sharing on mints an unguessable link the candidate can send
+to whoever they want, and turning it off makes that link 404 immediately.
 
-Nobody pays to be interviewed. Companies pay for signal.
+The shared page carries the questions, the scores and the assessment. The
+candidate's own answers stay private — a recruiter sees how the reasoning was
+judged, not the raw transcript.
 
 ---
 
@@ -267,8 +268,8 @@ Some decisions worth knowing about, and the bugs behind them:
 
 ## Status
 
-Actively built in public. The core interview loop, shareable reports, the
-recruiter side and the Job Map are working. Billing, deployment and the gRPC
-migration are in progress.
+Actively built in public. The core interview loop, shareable reports and the
+Job Map are working. Billing, deployment and the gRPC migration are in
+progress.
 
 Issues and PRs welcome.

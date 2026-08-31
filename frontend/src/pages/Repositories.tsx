@@ -1,7 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Search, GitBranch, Check, Loader2, RotateCcw, ArrowRight } from 'lucide-react';
 import { Link, useNavigate } from 'react-router-dom';
-import { readInvite, clearInvite } from '../lib/invite';
 
 type Repo = {
   id: number;
@@ -32,7 +31,6 @@ export function Repositories() {
   const [query, setQuery] = useState('');
   const [selected, setSelected] = useState<string[]>([]);
   const [starting, setStarting] = useState(false);
-  const [invite, setInvite] = useState(() => readInvite());
   const navigate = useNavigate();
 
   useEffect(() => {
@@ -160,26 +158,6 @@ export function Repositories() {
           />
         </div>
       </div>
-
-      {/* An invite decides who receives this report and spends one of the
-          link's uses, so it is shown rather than left invisible in storage. */}
-      {invite && (
-        <div className="bg-accent-soft border border-accent/20 rounded-xl px-4 py-3 flex items-center justify-between gap-4 flex-wrap">
-          <p className="text-sm text-ink-soft">
-            Interviewing for <span className="font-semibold text-ink">{invite.roleTitle}</span>. Your
-            report goes to the hiring team when you finish.
-          </p>
-          <button
-            onClick={() => {
-              clearInvite();
-              setInvite(null);
-            }}
-            className="text-xs font-semibold text-ink-soft hover:text-ink underline underline-offset-2"
-          >
-            Practise on my own instead
-          </button>
-        </div>
-      )}
 
       {error && (
         <div role="alert" className="bg-crit-soft border border-crit/20 text-crit rounded-xl px-4 py-3 text-sm">

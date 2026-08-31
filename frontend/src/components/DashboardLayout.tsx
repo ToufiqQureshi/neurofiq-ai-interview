@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { Outlet, Link, useLocation } from 'react-router-dom';
-import { LayoutDashboard, FolderKanban, FileText, Menu, X, Search, FileUser, FilePenLine, Map, Users, LogOut } from 'lucide-react';
+import { LayoutDashboard, FolderKanban, FileText, Menu, X, Search, FileUser, FilePenLine, Map, LogOut } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 
 function Avatar({ avatarUrl, name, className }: { avatarUrl?: string; name: string; className?: string }) {
@@ -44,13 +44,6 @@ const navGroups: { label: string; items: NavItem[] }[] = [
   },
 ];
 
-// Shown only to hiring accounts. A candidate never sees this group at all,
-// rather than seeing it disabled — there is nothing here for them to unlock.
-const recruiterGroup = {
-  label: 'Hiring',
-  items: [{ name: 'Candidates', href: '/hiring', icon: Users }] as NavItem[],
-};
-
 export function DashboardLayout() {
   const [isSidebarOpen, setSidebarOpen] = useState(false);
   const location = useLocation();
@@ -58,8 +51,7 @@ export function DashboardLayout() {
 
   const displayName = user?.github_username || 'Candidate';
   const displayEmail = user?.email || 'No email on file';
-  const isRecruiter = user?.role === 'recruiter' || user?.role === 'admin';
-  const groups = isRecruiter ? [...navGroups, recruiterGroup] : navGroups;
+  const groups = navGroups;
 
   return (
     <div className="min-h-screen bg-paper flex font-sans text-ink">

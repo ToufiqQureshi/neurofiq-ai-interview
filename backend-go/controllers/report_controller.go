@@ -32,7 +32,6 @@ type SubmitInterviewReq struct {
 	RepoFullName string            `json:"repo_full_name" binding:"required"`
 	QAList       []services.QAItem `json:"qa_list" binding:"required"`
 	Mode         string            `json:"mode"`
-	InviteToken  string            `json:"invite_token"`
 }
 
 func HandleSubmitInterview(c *gin.Context) {
@@ -101,22 +100,6 @@ func HandleSubmitInterview(c *gin.Context) {
 		return
 	}
 
-	// An invite is optional; when present it has to be live.
-	//
-	// Only *checked* here, never consumed. Redemption happens after the
-	// evaluation succeeds (below): spending the single use up front means a
-	// worker outage or a failed save burns the candidate's one shot at the
-	// link, and they have no way to get it back.
-	var invite *models.InterviewInvite
-	if reqBody.InviteToken != "" {
-		found, err := services.LookupInvite(reqBody.InviteToken)
-		if err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
-			return
-		}
-		invite = found
-	}
-
 	payload := services.EvaluatePayload{
 		RepoFullName: reqBody.RepoFullName,
 		QAList:       reqBody.QAList,
@@ -140,18 +123,6 @@ func HandleSubmitInterview(c *gin.Context) {
 	}
 
 	// 2. Save the session report.
-	// The scoring succeeded, so now the invite is actually being used. This
-	// is the atomic check-and-increment: if another candidate consumed the
-	// last use while this interview was being scored, we find out here.
-	if invite != nil {
-		redeemed, err := services.RedeemInvite(reqBody.InviteToken)
-		if err != nil {
-			c.JSON(http.StatusConflict, gin.H{"error": err.Error()})
-			return
-		}
-		invite = redeemed
-	}
-
 	session := models.InterviewSession{
 		UserID:        userID,
 		RepoFullName:  reqBody.RepoFullName,
@@ -162,17 +133,9 @@ func HandleSubmitInterview(c *gin.Context) {
 		InterviewType: "code_interview",
 		Mode:          mode,
 	}
-	if invite != nil {
-		session.InviteID = &invite.ID
-	}
 
 	if err := config.DB.Create(&session).Error; err != nil {
 		log.Printf("submit: failed to save session for user=%s: %v", userID, err)
-		// Hand the use back: the interview did not survive, so the link
-		// should still work.
-		if invite != nil {
-			services.ReleaseInviteUse(reqBody.InviteToken)
-		}
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to save session to DB"})
 		return
 	}
@@ -304,7 +267,13 @@ func HandleGetPublicReport(c *gin.Context) {
 	}
 
 	var owner models.User
-	config.DB.Select("github_username", "avatar_url").Where("id = ?", session.UserID).First(&owner)
+	// Non-fatal: a report whose owner row has gone missing still has a
+	// score and feedback worth showing, so the page renders without the
+	// byline rather than 404ing.
+	if err := config.DB.Select("github_username", "avatar_url").
+		Where("id = ?", session.UserID).First(&owner).Error; err != nil {
+		log.Printf("public report: owner lookup failed for session=%s: %v", session.ID, err)
+	}
 
 	// Only the question, the score, and the assessment travel. The
 	// candidate's own answers stay private.

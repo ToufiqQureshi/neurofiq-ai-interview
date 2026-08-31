@@ -24,9 +24,5 @@ type InterviewSession struct {
 	// both fields back so the old link 404s immediately.
 	SharedAt *time.Time `json:"shared_at,omitempty"`
 
-	// InviteID links this session to the recruiter invite it was taken under,
-	// if any. Nil for a candidate practising on their own.
-	InviteID *string `gorm:"type:uuid;index" json:"invite_id,omitempty"`
-
 	CreatedAt time.Time `json:"created_at"`
 }
