@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"log"
 	"net/http"
 	"net/url"
 	"regexp"
@@ -12,25 +11,11 @@ import (
 	"sync"
 	"time"
 
+	"gorm.io/gorm"
+
 	"github.com/ToufiqQureshi/neurofiq-ai-interview/backend-go/config"
 	"github.com/ToufiqQureshi/neurofiq-ai-interview/backend-go/models"
-	"gorm.io/gorm"
-	"gorm.io/gorm/clause"
 )
-
-type discoveredCompanyDTO struct {
-	Name        string `json:"name"`
-	Website     string `json:"website"`
-	Description string `json:"description"`
-	Sector      string `json:"sector"`
-	Stage       string `json:"stage"`
-	Area        string `json:"area"`
-	CareersURL  string `json:"careers_url"`
-}
-
-type discoverCompaniesResponse struct {
-	Companies []discoveredCompanyDTO `json:"companies"`
-}
 
 var nonSlugChars = regexp.MustCompile(`[^a-z0-9]+`)
 
@@ -79,132 +64,6 @@ func findDuplicateCompany(name, domain string) *models.Company {
 		}
 	}
 	return nil
-}
-
-// Seed queries are generated as city × sector × phrasing rather than
-// hand-listed, so coverage grows without maintaining a list by hand.
-//
-// The phrasings matter: asking the same question three different ways
-// surfaces different companies, because the underlying web search returns
-// different results for "AI startups in Bangalore" vs "AI companies hiring
-// in Bangalore".
-var (
-	seedCities = []string{
-		"Bangalore", "Mumbai", "Delhi NCR", "Pune", "Hyderabad", "Chennai",
-		"Gurgaon", "Noida", "Ahmedabad", "Kolkata", "Jaipur", "Indore",
-	}
-	seedSectors = []string{
-		"AI", "Fintech", "SaaS", "Healthtech", "Edtech", "D2C",
-		"Logistics", "Deeptech", "Consumer", "Gaming",
-	}
-	seedPhrasings = []string{
-		"%s startups in %s",
-		"funded %s companies in %s",
-		"%s startups hiring in %s",
-	}
-
-	seedQueries = buildSeedQueries()
-)
-
-// discoveryIntervalSeconds must match the cron schedule in main.go — the
-// rotation cursor is derived from it, so a mismatch would skip or repeat
-// queries. Hourly gets through all 360 seeds in ~15 days.
-const discoveryIntervalSeconds = 3600
-
-// buildSeedQueries expands the city/sector/phrasing lists into the full
-// rotation. 12 cities × 10 sectors × 3 phrasings = 360 distinct queries.
-func buildSeedQueries() []string {
-	out := make([]string, 0, len(seedCities)*len(seedSectors)*len(seedPhrasings))
-	for _, city := range seedCities {
-		for _, sector := range seedSectors {
-			for _, phrasing := range seedPhrasings {
-				out = append(out, fmt.Sprintf(phrasing, sector, city))
-			}
-		}
-	}
-	return out
-}
-
-// DiscoverCompanies asks the ai-worker's Agno discovery agent to find real
-// companies for the given query, then upserts them into the companies table
-// (deduped by domain).
-func DiscoverCompanies(query string, limit int) ([]models.Company, error) {
-	dtos, err := callDiscoveryAgent(query, limit)
-	if err != nil {
-		return nil, err
-	}
-
-	var saved []models.Company
-	for _, dto := range dtos {
-		domain := extractDomain(dto.Website)
-		if domain == "" {
-			continue
-		}
-
-		company := models.Company{
-			Name:        dto.Name,
-			Slug:        slugify(dto.Name),
-			Description: dto.Description,
-			Website:     dto.Website,
-			Domain:      domain,
-			Sector:      dto.Sector,
-			Stage:       dto.Stage,
-			Area:        dto.Area,
-			CareersURL:  dto.CareersURL,
-			Source:      "agno-discovery",
-		}
-
-		// Skip anything we already have — same domain, or the same business
-		// under a differently-worded name.
-		if dup := findDuplicateCompany(dto.Name, domain); dup != nil {
-			continue
-		}
-
-		// No careers page, no entry.
-		//
-		// This is a job map: a company that cannot be shown with roles is
-		// noise in it. The agent's search reliably surfaces small D2C shops
-		// alongside real startups — of the companies we had stored with no
-		// careers page at all, 62% were D2C and 88% were pre-Series-A. They
-		// have no careers page because they do not hire.
-		//
-		// The resolver is free (plain HTTP probes of /careers, /jobs and
-		// friends), so this gate costs no scraping credits, only the probe.
-		if company.CareersURL == "" {
-			company.CareersURL = ResolveCareersURL(company)
-		}
-		if company.CareersURL == "" {
-			log.Printf("company discovery: skipping %q — no careers page found", dto.Name)
-			continue
-		}
-
-		if lat, lng, geoErr := geocodeArea(dto.Area); geoErr == nil {
-			company.Lat = lat
-			company.Lng = lng
-		}
-
-		result := config.DB.Clauses(clause.OnConflict{
-			Columns:   []clause.Column{{Name: "domain"}},
-			DoNothing: true,
-		}).Create(&company)
-		if result.Error != nil {
-			log.Printf("company discovery: failed to save %q: %v", dto.Name, result.Error)
-			continue
-		}
-		if result.RowsAffected == 0 {
-			// Domain already existed; ON CONFLICT DO NOTHING skipped the insert.
-			continue
-		}
-		saved = append(saved, company)
-
-		// Pull real open roles for this company right away, so it doesn't
-		// sit with zero jobs until the next cron re-sync.
-		if _, jobErr := SyncJobsForCompany(company); jobErr != nil {
-			log.Printf("company discovery: job sync failed for %q: %v", company.Name, jobErr)
-		}
-	}
-
-	return saved, nil
 }
 
 // CompanyWithJobCount is a Company row annotated with how many currently
@@ -294,77 +153,6 @@ func TotalOpenRoles(sector, stage, area, q string) (int64, error) {
 	var n int64
 	err := dbQuery.Count(&n).Error
 	return n, err
-}
-
-// RunDiscoveryRotation is invoked on a schedule (see main.go cron) and picks
-// the next seed query deterministically from the current time, so the
-// rotation survives restarts without needing extra state in the database.
-// discoveryLeaseName is the key every API instance competes for before
-// running the hourly rotation.
-const DiscoveryLeaseName = "discovery-rotation"
-
-func RunDiscoveryRotation() {
-	if len(seedQueries) == 0 {
-		return
-	}
-
-	// Only one instance runs this tick. The cron scheduler lives inside the
-	// API process, so scaling to two containers would otherwise mean two
-	// discovery runs an hour: double the LLM spend, double the scraper
-	// credits, and every job board fetched twice. The lease is slightly
-	// shorter than the interval so a crashed instance frees it before the
-	// next tick is due.
-	if !AcquireCronLease(DiscoveryLeaseName, 55*time.Minute) {
-		log.Printf("company discovery rotation: another instance holds the lease, skipping")
-		return
-	}
-	// Deliberately NOT released when the run finishes. Each process registers
-	// its own "@every 1h" schedule, so instance ticks are not aligned: if A
-	// finishes at :05 and B ticks at :25, B would take the freed lease and —
-	// because the query index is derived from the current hour — run the
-	// identical query again. That is exactly the duplicated LLM spend and
-	// duplicated board fetching the lease exists to prevent. The 55-minute
-	// TTL covers the rest of the interval; shutdown releases it explicitly.
-	// The clock is the cursor: derive which query is next from the current
-	// hour rather than storing a position. Restart-proof, redeploy-proof,
-	// no cursor table to keep in sync. Must match the cron interval in
-	// main.go, otherwise the rotation skips or repeats queries.
-	idx := int((time.Now().Unix() / int64(discoveryIntervalSeconds)) % int64(len(seedQueries)))
-	query := seedQueries[idx]
-
-	// Discovery and job sync are deliberately independent. Discovery depends
-	// on the AI worker and a live web search, so it's the flakier half — if
-	// it fails we still want to refresh jobs for the companies we already
-	// have, rather than skipping the whole tick.
-	if saved, err := DiscoverCompanies(query, 10); err != nil {
-		log.Printf("company discovery rotation failed for %q: %v", query, err)
-	} else {
-		log.Printf("company discovery rotation: %q -> %d new companies saved", query, len(saved))
-	}
-
-	// Refresh open roles for everything we already track, so closed
-	// postings drop off and newly-posted ones appear.
-	SyncAllCompanyJobs()
-}
-
-func callDiscoveryAgent(query string, limit int) ([]discoveredCompanyDTO, error) {
-	// The discovery agent does a live web search plus an LLM call, so it's
-	// slow — but it must never hang forever. Without a timeout a stuck
-	// worker blocks the whole cron tick, including the job sync that runs
-	// after it. discoveryClient carries the 3-minute ceiling.
-	payload := map[string]interface{}{"query": query, "limit": limit}
-
-	body, err := postToWorker(discoveryClient, "/internal/discover-companies", payload)
-	if err != nil {
-		return nil, err
-	}
-
-	var parsed discoverCompaniesResponse
-	if err := json.Unmarshal(body, &parsed); err != nil {
-		return nil, fmt.Errorf("failed to parse discovery JSON: %w", err)
-	}
-
-	return parsed.Companies, nil
 }
 
 func extractDomain(website string) string {

@@ -3,5 +3,3 @@ uvicorn
 pydantic>=2.9.0
 openai
 agno
-duckduckgo-search
-exa-py

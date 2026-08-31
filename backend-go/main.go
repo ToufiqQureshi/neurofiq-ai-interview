@@ -257,11 +257,11 @@ func main() {
 
 	// 8. Background schedules.
 	//
-	// Automatic company discovery rotates through seed queries so the Job Map
-	// fills itself in without any manual scraping. Run once immediately so a
-	// fresh deploy doesn't sit empty waiting on the first scheduled tick —
-	// the cron lease inside RunDiscoveryRotation makes sure only one instance
-	// actually does the work.
+	// Discovery searches job-board domains and stores the companies behind
+	// the boards it finds, so the Job Map fills itself in without any manual
+	// scraping and without an LLM. Run once immediately so a fresh deploy
+	// doesn't sit empty waiting on the first scheduled tick — the cron lease
+	// inside RunDiscoveryRotation makes sure only one instance does the work.
 	go safely("startup discovery", services.RunDiscoveryRotation)
 
 	scheduler := cron.New()
