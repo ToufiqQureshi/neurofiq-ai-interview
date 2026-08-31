@@ -265,12 +265,23 @@ func main() {
 	go safely("startup discovery", services.RunDiscoveryRotation)
 
 	scheduler := cron.New()
-	// Hourly, matching services.discoveryIntervalSeconds — the rotation
-	// cursor is derived from that interval, so the two must agree.
-	if _, err := scheduler.AddFunc("@every 1h", func() {
+	// Every 3 hours, matching services.discoveryIntervalSeconds — the
+	// rotation cursor is derived from that interval, so the two must agree.
+	//
+	// Discovery is the only metered step; the job sync it triggers is free
+	// and covers every company already stored, so listings stay fresh at this
+	// cadence. Only the rate of finding new boards slows down.
+	if _, err := scheduler.AddFunc("@every 3h", func() {
 		safely("discovery rotation", services.RunDiscoveryRotation)
 	}); err != nil {
 		log.Fatalf("Failed to schedule discovery rotation: %v", err)
+	}
+	// Job syncing stays hourly on its own schedule, so a closed posting drops
+	// off within the hour even between discovery runs.
+	if _, err := scheduler.AddFunc("@every 1h", func() {
+		safely("job sync", services.RunJobSync)
+	}); err != nil {
+		log.Fatalf("Failed to schedule job sync: %v", err)
 	}
 	// Housekeeping: reclaim abandoned analyses and forget idle rate-limit
 	// buckets. Cheap, and it keeps a long-running process from drifting.

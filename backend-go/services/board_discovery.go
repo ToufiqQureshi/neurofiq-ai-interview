@@ -1,12 +1,8 @@
 package services
 
 import (
-	"bytes"
-	"encoding/json"
 	"fmt"
 	"log"
-	"net/http"
-	"os"
 	"regexp"
 	"strings"
 	"time"
@@ -35,6 +31,12 @@ import (
 
 // boardSearchDomains are the ATS hosts a discovery search is restricted to.
 // Every URL returned from one of these is a board, so a hit is a company.
+//
+// Keka, Darwinbox and Workday are here even though their boards live on a
+// per-tenant subdomain (acme.keka.com), because the filter matches the parent
+// domain. Leaving them out was a real gap for this directory in particular:
+// they are the two platforms Indian employers use most, and without them the
+// search only ever surfaced companies on the US-favoured platforms.
 var boardSearchDomains = []string{
 	"boards.greenhouse.io",
 	"job-boards.greenhouse.io",
@@ -42,6 +44,10 @@ var boardSearchDomains = []string{
 	"jobs.ashbyhq.com",
 	"apply.workable.com",
 	"careers.smartrecruiters.com",
+	"keka.com",
+	"darwinbox.in",
+	"darwinbox.com",
+	"myworkdayjobs.com",
 }
 
 // boardSeedQueries rotate the search so the directory keeps widening instead
@@ -74,8 +80,15 @@ func buildBoardSeedQueries() []string {
 
 // discoveryIntervalSeconds must match the cron schedule in main.go — the
 // rotation cursor is derived from it, so a mismatch would skip or repeat
-// queries. Hourly gets through all 120 seeds in ~5 days.
-const discoveryIntervalSeconds = 3600
+// queries.
+//
+// Three-hourly, not hourly. Discovery is the only part of this pipeline that
+// costs a metered call, and the free search allowances are ~1000/month: at
+// one search an hour the rotation alone would spend 720 of them before a
+// single company was looked up. Job syncing still runs hourly, so listings
+// stay just as fresh; it is finding *new* boards that slows down, and a seed
+// query that waits three hours costs nothing.
+const discoveryIntervalSeconds = 3 * 3600
 
 // DiscoveryLeaseName is the cron lease that keeps two instances from running
 // the same discovery tick.
@@ -85,74 +98,14 @@ const DiscoveryLeaseName = "discovery-rotation"
 // resolve to a handful of distinct boards once duplicates collapse.
 const boardResultsPerQuery = 25
 
-// exaClient has its own ceiling: a search is a single request, not an LLM
-// round trip, so it should never hold a cron tick for minutes.
-var exaClient = &http.Client{Timeout: 30 * time.Second}
-
-type exaResult struct {
-	Title string `json:"title"`
-	URL   string `json:"url"`
-}
-
-type exaSearchResponse struct {
-	Results []exaResult `json:"results"`
-}
-
-// exaSearch runs one search, optionally restricted to a set of hosts.
+// maxNewCompaniesPerRun caps how many companies one run will store.
 //
-// Exa rather than a scraper because this is the one step that genuinely needs
-// an index of the whole web: we are looking for board pages we have never
-// seen, and no amount of fetching pages we already know about will surface
-// them.
-func exaSearch(query string, includeDomains []string, numResults int, category string) ([]exaResult, error) {
-	apiKey := os.Getenv("EXA_API_KEY")
-	if apiKey == "" {
-		return nil, fmt.Errorf("EXA_API_KEY not set")
-	}
-
-	body := map[string]interface{}{
-		"query":      query,
-		"numResults": numResults,
-		"type":       "auto",
-	}
-	if len(includeDomains) > 0 {
-		body["includeDomains"] = includeDomains
-	}
-	if category != "" {
-		body["category"] = category
-	}
-	payload, err := json.Marshal(body)
-	if err != nil {
-		return nil, err
-	}
-
-	req, err := http.NewRequest("POST", "https://api.exa.ai/search", bytes.NewBuffer(payload))
-	if err != nil {
-		return nil, err
-	}
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("x-api-key", apiKey)
-
-	resp, err := exaClient.Do(req)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-
-	raw, err := ReadCapped(resp.Body, 4<<20)
-	if err != nil {
-		return nil, err
-	}
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("exa status %d: %.200s", resp.StatusCode, string(raw))
-	}
-
-	var parsed exaSearchResponse
-	if err := json.Unmarshal(raw, &parsed); err != nil {
-		return nil, fmt.Errorf("failed to parse exa response: %w", err)
-	}
-	return parsed.Results, nil
-}
+// Each new company costs a second search to find its website, so an
+// uncapped run against a fruitful query could spend 25 searches in one tick
+// and a good chunk of the month in an afternoon. The boards this run skips
+// are not lost — the rotation comes back around, and a board that exists
+// today still exists next week.
+const maxNewCompaniesPerRun = 5
 
 // boardHit is one distinct board found by a search.
 type boardHit struct {
@@ -258,7 +211,7 @@ func companyNameFromBoard(title, slug string) string {
 
 // boardHitsFor runs one search and returns the distinct boards it found.
 func boardHitsFor(query string, numResults int) []boardHit {
-	results, err := exaSearch(query, boardSearchDomains, numResults, "")
+	results, err := WebSearch(query, boardSearchDomains, numResults)
 	if err != nil {
 		log.Printf("board discovery: search failed for %q: %v", query, err)
 		return nil
@@ -316,7 +269,7 @@ func boardURL(provider, slug string) string {
 // companies table is keyed on domain. One search per newly-seen company, and
 // never for one we already have.
 func resolveCompanyWebsite(name string) string {
-	results, err := exaSearch(name+" official company website", nil, 5, "company")
+	results, err := exaCompanySearch(name+" official company website", 5)
 	if err != nil {
 		log.Printf("board discovery: website lookup failed for %q: %v", name, err)
 		return ""
@@ -334,6 +287,16 @@ func resolveCompanyWebsite(name string) string {
 // DiscoverFromBoards runs one board search and stores the companies behind
 // the boards it finds, along with their open roles.
 func DiscoverFromBoards(query string, limit int) ([]models.Company, error) {
+	if limit <= 0 || limit > maxNewCompaniesPerRun {
+		limit = maxNewCompaniesPerRun
+	}
+	// One search to find boards, then one per company we end up storing.
+	// Stopping before the search is cheaper than discovering mid-run that we
+	// cannot afford the lookups.
+	if remaining := SearchBudgetRemaining(); remaining <= limit {
+		return nil, fmt.Errorf("search budget nearly spent (%d left) — skipping discovery", remaining)
+	}
+
 	hits := boardHitsFor(query, boardResultsPerQuery)
 	if len(hits) == 0 {
 		return nil, nil
@@ -476,14 +439,29 @@ func RunDiscoveryRotation() {
 	idx := int((time.Now().Unix() / int64(discoveryIntervalSeconds)) % int64(len(boardSeedQueries)))
 	query := boardSeedQueries[idx]
 
-	// Discovery and job sync are deliberately independent. Discovery depends
-	// on a live search, so it's the flakier half — if it fails we still want
-	// to refresh roles for the companies we already have.
-	if saved, err := DiscoverFromBoards(query, boardResultsPerQuery); err != nil {
+	if saved, err := DiscoverFromBoards(query, maxNewCompaniesPerRun); err != nil {
 		log.Printf("board discovery rotation failed for %q: %v", query, err)
 	} else {
-		log.Printf("board discovery rotation: %q -> %d new companies saved", query, len(saved))
+		log.Printf("board discovery rotation: %q -> %d new companies saved | search budget left: %d",
+			query, len(saved), SearchBudgetRemaining())
 	}
+}
 
+// JobSyncLeaseName is the cron lease for the hourly role refresh.
+const JobSyncLeaseName = "job-sync"
+
+// RunJobSync refreshes every stored company's roles.
+//
+// It runs on its own hourly schedule rather than on the back of discovery,
+// because the two now tick at different rates: discovery is metered and runs
+// three-hourly, while syncing is free and should keep listings current in
+// between. Its own lease is what stops the two schedules — or two instances —
+// from syncing the same directory at the same time and fetching every board
+// twice.
+func RunJobSync() {
+	if !AcquireCronLease(JobSyncLeaseName, 50*time.Minute) {
+		log.Printf("job sync: another instance holds the lease, skipping")
+		return
+	}
 	SyncAllCompanyJobs()
 }

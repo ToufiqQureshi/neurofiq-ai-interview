@@ -60,11 +60,20 @@ suspect the measurement first.
 
 **Free tiers only.** Keyless Jina reads every page first; Firecrawl (1000
 pages/month, budget guard at 800) is the fallback, and a credit is counted
-only once a call actually returns something. Free paths run before paid ones,
-and detection is cached per company: a week once a board is found, twelve
-hours while none is. The short retry is deliberate — a week-long freeze meant
-every improvement reached the directory a week late. Do not remove a guard to
-make a run finish faster.
+only once a call actually returns something. Search is metered the same way in
+`scrape_usages` — Exa first, Tavily when Exa's month is spent, both guarded at
+800 of their 1000 free calls. Free paths run before paid ones, and detection is
+cached per company: a week once a board is found, twelve hours while none is.
+The short retry is deliberate — a week-long freeze meant every improvement
+reached the directory a week late. Do not remove a guard to make a run finish
+faster.
+
+**Search is the only metered step in discovery, so it is rationed.** One
+search per rotation tick (three-hourly), plus one per newly-stored company to
+find its homepage — capped at `maxNewCompaniesPerRun` (5), which bounds a tick
+at 6 calls. Job syncing is free and stays hourly on its own lease, so listings
+remain fresh while discovery slows. A board skipped by the cap is not lost:
+the rotation comes back.
 
 **Never commit secrets.** `.env` holds live Supabase, GitHub OAuth, DeepSeek,
 Firecrawl and Exa credentials. It is gitignored. Before any commit:
@@ -112,7 +121,10 @@ somewhere public, because visitors are not logged in.
 | 5 | LLM extraction off the careers page | 1 credit |
 
 Boards: Greenhouse, Lever, SmartRecruiters, Ashby, Workable, Keka, Darwinbox,
-Workday — all official public JSON APIs.
+Workday — all official public JSON APIs, and all ten hosts are in the
+discovery search list. Keep those two lists in step: a board we can read but
+never search for is only ever found by accident, and Keka and Darwinbox are
+the platforms Indian employers use most.
 
 Jina runs before Firecrawl everywhere. When Firecrawl went first, an unset key
 or a spent budget took the whole path down and every company without a
@@ -122,7 +134,8 @@ the free product.
 ## Work queue
 
 1. More boards: TalentRecruit (seen on Zepto), Gem (Hasura), Recruitee,
-   Personio, Freshteam.
+   Personio, Freshteam. Add each to `boardSearchDomains` as well as to the
+   reader, or it will only ever be found from a careers page.
 2. Board discovery stores no sector or stage, so those filters miss every
    company it finds. Enrich from the company's own site rather than guessing.
 3. Re-enrich companies after first discovery; stage and description are frozen
