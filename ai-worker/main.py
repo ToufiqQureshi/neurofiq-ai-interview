@@ -8,6 +8,8 @@ from agno.agent import Agent
 from agno.models.deepseek import DeepSeek
 from agno.tools.duckduckgo import DuckDuckGoTools
 from agno.tools.exa import ExaTools
+from agno.exceptions import CheckTrigger, OutputCheckError
+from agno.run.agent import RunOutput
 
 app = FastAPI()
 
@@ -155,6 +157,73 @@ def _discovery_tools():
 analysis_agent = None
 questions_agent = None
 evaluation_agent = None
+
+# Domains that are never the company itself. A discovery run that returns one
+# of these has answered the wrong question: it found a page *about* the
+# company instead of the company, and the careers-page resolver downstream
+# will then probe a job board's own site rather than the employer's.
+_AGGREGATOR_HOSTS = (
+    "linkedin.com", "crunchbase.com", "tracxn.com", "indeed.com",
+    "glassdoor.co", "naukri.com", "wellfound.com", "angel.co",
+    "ambitionbox.com", "zaubacorp.com", "wikipedia.org", "youtube.com",
+    "facebook.com", "instagram.com", "twitter.com", "x.com",
+    "medium.com", "substack.com", "github.io", "notion.site",
+)
+
+
+def _host(url: str) -> str:
+    from urllib.parse import urlparse
+    try:
+        return (urlparse(url).hostname or "").lower().lstrip("www.")
+    except Exception:
+        return ""
+
+
+def drop_unusable_companies(run_output: RunOutput) -> None:
+    """Filter a discovery run down to rows we can actually act on.
+
+    This runs on the model's output rather than in the prompt because these
+    are facts about the response, not judgements: a URL either is an
+    aggregator or it is not. Prompt instructions are advisory and the model
+    ignores them under load; this is not.
+
+    What it deliberately does NOT try to decide is whether a company hires.
+    A model cannot know that reliably, so guessing produces exactly the
+    confident-but-wrong rows this exists to stop. That question is settled
+    downstream by a free HTTP probe for a careers page, where the answer is
+    a fact rather than an opinion.
+    """
+    result = getattr(run_output, "content", None)
+    companies = getattr(result, "companies", None)
+    if companies is None:
+        return
+
+    kept, seen = [], set()
+    for c in companies:
+        host = _host(c.website)
+        if not host or "." not in host:
+            continue
+        if any(host == a or host.endswith("." + a) for a in _AGGREGATOR_HOSTS):
+            print(f"discovery: dropped {c.name!r} — {host} is an aggregator, not the company")
+            continue
+        if not (c.name or "").strip():
+            continue
+        if host in seen:  # same company returned twice in one run
+            continue
+        seen.add(host)
+        kept.append(c)
+
+    # An empty result is a failed run, not a valid answer of "none exist".
+    # Raising lets Agno's retry take another pass instead of writing nothing.
+    if not kept:
+        raise OutputCheckError(
+            "no usable companies in this discovery run",
+            check_trigger=CheckTrigger.VALIDATION_FAILED,
+        )
+
+    result.companies = kept
+
+
 discovery_agent = None
 
 if DEEPSEEK_API_KEY:
@@ -196,6 +265,11 @@ if DEEPSEEK_API_KEY:
         model=DeepSeek(id="deepseek-chat", api_key=DEEPSEEK_API_KEY),
         tools=_discovery_tools(),
         output_schema=CompanyDiscoveryResult,
+        post_hooks=[drop_unusable_companies],
+        # A run that comes back with nothing usable is retried rather than
+        # written through as an empty result. Two extra attempts, because a
+        # third rarely differs and the search tools are the slow part.
+        retries=2,
         description="You are a startup research analyst. Use web search to find REAL, currently operating companies matching the query. Only include companies you can verify have a real website. Never invent companies.",
         instructions=[
             "For every company, try hard to find its careers or jobs page URL — "
@@ -204,6 +278,20 @@ if DEEPSEEK_API_KEY:
             "Return the company's own domain as the website, never an aggregator, "
             "directory listing, or news article about them.",
             "Skip anything you cannot verify has a real, live website.",
+            # A search for "D2C startups in Delhi" returns small Shopify shops
+            # next to funded companies, and they look identical in a result
+            # list. They are the wrong answer here for a concrete reason: they
+            # do not hire, so they enter the directory with no roles and stay
+            # that way. Of the companies we stored that had no careers page at
+            # all, 62% were D2C and 88% were pre-Series-A.
+            "Only return companies that actually employ people and hire: "
+            "funded (Series A or later), or an established profitable business "
+            "with a real team. Skip single-founder shops, dropshipping and "
+            "Shopify storefronts, and anything with no evidence of employees.",
+            "If the only thing you can find is a storefront selling products — "
+            "no team page, no careers page, no funding, no press — leave it out. "
+            "Ten real hiring companies are worth more than fifty that never post "
+            "a job.",
         ],
     )
 

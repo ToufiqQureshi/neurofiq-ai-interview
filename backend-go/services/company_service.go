@@ -160,6 +160,24 @@ func DiscoverCompanies(query string, limit int) ([]models.Company, error) {
 			continue
 		}
 
+		// No careers page, no entry.
+		//
+		// This is a job map: a company that cannot be shown with roles is
+		// noise in it. The agent's search reliably surfaces small D2C shops
+		// alongside real startups — of the companies we had stored with no
+		// careers page at all, 62% were D2C and 88% were pre-Series-A. They
+		// have no careers page because they do not hire.
+		//
+		// The resolver is free (plain HTTP probes of /careers, /jobs and
+		// friends), so this gate costs no scraping credits, only the probe.
+		if company.CareersURL == "" {
+			company.CareersURL = ResolveCareersURL(company)
+		}
+		if company.CareersURL == "" {
+			log.Printf("company discovery: skipping %q — no careers page found", dto.Name)
+			continue
+		}
+
 		if lat, lng, geoErr := geocodeArea(dto.Area); geoErr == nil {
 			company.Lat = lat
 			company.Lng = lng

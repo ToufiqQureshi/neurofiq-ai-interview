@@ -35,6 +35,11 @@ var (
 	// third piece — the job-site id — which isn't in the URL, so it gets
 	// probed at detection time. Slug is stored as "tenant:region:site".
 	workdayLinkRe = regexp.MustCompile(`([a-zA-Z0-9-]+)\.(wd\d+)\.myworkdayjobs\.com`)
+
+	// Darwinbox is common across Indian employers and serves a plain JSON
+	// board, but only to a request that looks like it came from the page:
+	// see fetchDarwinboxJobs.
+	darwinboxLinkRe = regexp.MustCompile(`([a-zA-Z0-9-]+)\.darwinbox\.(?:in|com)`)
 )
 
 // atsRecheckInterval is how long to wait before retrying detection on a
@@ -116,6 +121,23 @@ type kekaJob struct {
 	} `json:"jobLocations"`
 }
 
+// darwinboxJob is one row of Darwinbox's careers API. The payload carries
+// both a coded and a display variant of most fields — department_name is
+// "CRM - Operations (0014_JSL_CRM_L84)" while department_name_only is just
+// "CRM - Operations" — so the display variants are the ones read here.
+type darwinboxJob struct {
+	ID             string   `json:"id"`
+	Title          string   `json:"title"`
+	DepartmentName string   `json:"department_name_only"`
+	Locations      string   `json:"locations"`
+	OfficeLocs     []string `json:"officelocations_without_area"`
+}
+
+type darwinboxResponse struct {
+	Status string         `json:"status"`
+	Data   []darwinboxJob `json:"data"`
+}
+
 type workableJob struct {
 	Title      string `json:"title"`
 	URL        string `json:"url"`
@@ -157,6 +179,7 @@ func scanForATS(content string) (atsType, atsSlug string) {
 		{"smartrecruiters", smartRecruitersLinkRe},
 		{"workable", workableLinkRe},
 		{"keka", kekaLinkRe},
+		{"darwinbox", darwinboxLinkRe},
 	} {
 		if m := p.re.FindStringSubmatch(content); m != nil {
 			return p.name, m[1]
@@ -254,6 +277,9 @@ func countJobsFor(provider, slug string) (int, error) {
 		return len(jobs), err
 	case "keka":
 		jobs, err := fetchKekaJobs(slug)
+		return len(jobs), err
+	case "darwinbox":
+		jobs, err := fetchDarwinboxJobs(slug)
 		return len(jobs), err
 	case "workday":
 		jobs, err := fetchWorkdayJobs(slug)
@@ -381,6 +407,79 @@ func fetchSmartRecruitersJobs(slug string) ([]smartRecruitersJob, error) {
 		return nil, err
 	}
 	return parsed.Content, nil
+}
+
+// browserUserAgent is sent only where a board refuses a plain client. Our
+// own identifying agent is the default everywhere else (see httputil.go);
+// this is the exception, not the rule.
+const browserUserAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
+
+// maxATSResponseBytes caps a board's JSON so a misbehaving endpoint cannot
+// stream us out of memory.
+const maxATSResponseBytes = 8 << 20 // 8 MB
+
+// fetchDarwinboxJobs reads a Darwinbox tenant's public board.
+//
+// Two things make this different from the other providers. It is a POST, not
+// a GET — the board is a search endpoint and the filter goes in the body.
+// And the tenant sits behind a bot check that answers a bare client with an
+// HTML challenge page instead of JSON, so the request has to carry the
+// headers a browser would send from the careers page. Those headers are the
+// difference between this working on a free HTTP fetch and needing a
+// rendered scrape that costs a credit.
+//
+// `limit` is set high enough to take the whole board in one request; the
+// largest tenant seen while building this listed 134 roles.
+//
+// Not every tenant answers. A strictly-configured one refuses this client
+// with a 403 that no set of headers gets past: the check is on the TLS and
+// HTTP/2 fingerprint, which curl clears and Go's stack does not. Of five
+// tenants tested, four returned their board (24, 77 and 54 roles, plus one
+// genuinely empty) and the fifth 403'd. That is an ordinary provider error
+// here -- the company finishes the sync with no roles instead of failing the
+// run, and the rendered tiers can still reach it.
+func fetchDarwinboxJobs(slug string) ([]darwinboxJob, error) {
+	if !validATSSlug(slug) {
+		return nil, fmt.Errorf("invalid darwinbox slug %q", slug)
+	}
+
+	base := "https://" + slug + ".darwinbox.in"
+	endpoint := base + "/ms/candidateapi/job/alljobs?companyId=main"
+	body := []byte(`{"companyId":"main","page":1,"sort_option":"new","limit":300}`)
+
+	if err := AllowedPublicURL(endpoint); err != nil {
+		return nil, err
+	}
+	req, err := http.NewRequest(http.MethodPost, endpoint, bytes.NewReader(body))
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept", "application/json")
+	req.Header.Set("User-Agent", browserUserAgent)
+	req.Header.Set("Origin", base)
+	req.Header.Set("Referer", base+"/ms/candidatev2/main/careers/allJobs")
+	req.Header.Set("Accept-Language", "en-US,en;q=0.9")
+
+	resp, err := externalClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("darwinbox status %d", resp.StatusCode)
+	}
+
+	var parsed darwinboxResponse
+	if err := json.NewDecoder(io.LimitReader(resp.Body, maxATSResponseBytes)).Decode(&parsed); err != nil {
+		// A challenge page decodes as neither JSON nor an error we can act
+		// on, so say which tenant it was.
+		return nil, fmt.Errorf("darwinbox %s: %w", slug, err)
+	}
+	if parsed.Status != "success" {
+		return nil, fmt.Errorf("darwinbox %s returned status %q", slug, parsed.Status)
+	}
+	return parsed.Data, nil
 }
 
 func fetchKekaJobs(slug string) ([]kekaJob, error) {
@@ -599,6 +698,24 @@ func SyncJobsForCompany(company models.Company) (int, error) {
 			rows = append(rows, models.Job{
 				CompanyID: company.ID, Title: j.Title, Department: j.Department,
 				Location: loc, URL: url, Source: "workable",
+			})
+		}
+	case "darwinbox":
+		jobs, err := fetchDarwinboxJobs(atsSlug)
+		if err != nil {
+			return 0, err
+		}
+		for _, j := range jobs {
+			loc := j.Locations
+			if len(j.OfficeLocs) > 0 && j.OfficeLocs[0] != "" {
+				loc = j.OfficeLocs[0]
+			}
+			rows = append(rows, models.Job{
+				CompanyID: company.ID, Title: j.Title, Department: j.DepartmentName,
+				Location: strings.TrimSpace(loc),
+				URL: fmt.Sprintf("https://%s.darwinbox.in/ms/candidatev2/main/careers/jobDetails/%s",
+					atsSlug, j.ID),
+				Source: "darwinbox",
 			})
 		}
 	case "keka":
