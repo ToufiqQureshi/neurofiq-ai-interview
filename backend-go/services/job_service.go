@@ -302,6 +302,17 @@ func fetchText(url string) (string, error) {
 		return "", err
 	}
 	defer resp.Body.Close()
+
+	// A 404 body is still a body, and a site's not-found template routinely
+	// carries the word "careers" in its own navigation. Returning it made a
+	// dead link look like a live careers page, which is how companies ended
+	// up stored against a URL that had 404'd for months — re-rendered on
+	// every sync, at the cost of a scrape credit each time, to extract
+	// nothing.
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return "", fmt.Errorf("status %d for %s", resp.StatusCode, url)
+	}
+
 	body, err := io.ReadAll(io.LimitReader(resp.Body, 500_000)) // cap: don't pull huge pages
 	return string(body), err
 }
@@ -923,8 +934,19 @@ func ResolveCareersURL(company models.Company) string {
 
 	// Treat "careers URL == homepage" as missing — that's the agent
 	// defaulting rather than actually finding a careers page.
+	//
+	// Anything else the agent hands us is checked before it is trusted. It
+	// used to be taken as given, and the cost of that showed up downstream:
+	// of the companies sitting at zero roles, a third pointed at a careers
+	// page that 404s or no longer resolves at all. Every sync then rendered
+	// that dead page and asked a model to find jobs on it — a scraping
+	// credit and an LLM call spent to be told nothing is there.
 	if current != "" && strings.TrimRight(current, "/") != strings.TrimRight(site, "/") {
-		return current
+		if !isAggregatorURL(current) && urlIsAlive(current) {
+			return current
+		}
+		// Fall through to the guesses rather than returning a dead URL.
+		current = ""
 	}
 	if site == "" {
 		return current
@@ -953,6 +975,45 @@ var hiringMarkers = []string{
 // pageLooksLikeCareers fetches a candidate URL and checks it's a real
 // careers page rather than a 404, a soft-404, or a marketing page that
 // happens to use similar words.
+// careersAggregatorHosts are job boards and directories. A careers URL
+// pointing at one is not the company's own page: the agent answered with
+// where the company's jobs are *listed by someone else*, which we cannot
+// parse and should not store as if it were their board.
+var careersAggregatorHosts = []string{
+	"naukri.com", "linkedin.com", "indeed.com", "glassdoor.co",
+	"monsterindia.com", "shine.com", "timesjobs.com", "foundit.in",
+	"wellfound.com", "angel.co", "internshala.com", "ambitionbox.com",
+	"hirist.tech", "cutshort.io", "instahyre.com",
+}
+
+func isAggregatorURL(raw string) bool {
+	parsed, err := url.Parse(strings.TrimSpace(raw))
+	if err != nil {
+		return false
+	}
+	host := strings.TrimPrefix(strings.ToLower(parsed.Hostname()), "www.")
+	for _, a := range careersAggregatorHosts {
+		if host == a || strings.HasSuffix(host, "."+a) {
+			return true
+		}
+	}
+	return false
+}
+
+// urlIsAlive answers only whether the page exists, which is a different
+// question from whether it advertises jobs and has to stay separate from it.
+//
+// Most careers pages worth keeping build their listings in the browser, so
+// their served HTML contains no hiring words at all — judging them by
+// content would throw away perfectly good URLs and send us guessing at
+// /careers paths that are worse than the one the agent found. What we can
+// decide from a plain fetch is whether the URL resolves. A 404 or a dead
+// host is a fact; an empty-looking page is not.
+func urlIsAlive(u string) bool {
+	_, err := fetchText(u)
+	return err == nil
+}
+
 func pageLooksLikeCareers(url string) bool {
 	body, err := fetchText(url)
 	if err != nil || len(body) < 500 {

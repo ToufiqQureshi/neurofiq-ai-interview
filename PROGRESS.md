@@ -1,6 +1,8 @@
 # Progress Log
 
 ## 2026-08-31
+- Configured Free Claude Code proxy (`http://127.0.0.1:8082/admin`) with OpenRouter API integration and set default routing model to `openrouter/z-ai/glm-5.3-flash`.
+- Configured OpenCode (`~/.config/opencode/opencode.json`) with OpenRouter API integration for GLM models (`z-ai/glm-5.3-flash` and `z-ai/glm-5.2`).
 - Merged the launch-hardening branch, minus the recruiter invite funnel: sharing
   is candidate-owned, so a recruiter minting invite links was the wrong
   direction. Removed 1,118 lines across 8 files plus its wiring; the share slug
