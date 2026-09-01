@@ -22,25 +22,38 @@ their curated dataset is their own IP. Everything here is sourced independently.
 ### Pipeline
 
 ```
-Go cron (@every 1h, plus one run at server startup)   [main.go:134-139]
+Go cron @every 3h (plus one run at startup)   ── metered, so it is rationed
   │
-  ├─▶ DiscoverCompanies()                    ── finds NEW companies
-  │     └─▶ POST ai-worker /internal/discover-companies
-  │           └─▶ Agno discovery_agent
-  │                 DeepSeek + ExaTools(category="company")
-  │                 + DuckDuckGoTools as keyless fallback
-  │     └─▶ dedupe by domain AND normalized name  (see §5)
-  │     └─▶ geocode `area` via Nominatim, rate-limited to 1 req/1.1s
+  └─▶ RunDiscoveryRotation()  [board_discovery.go]
+        └─▶ one seed query ("backend engineer jobs in Pune, India")
+        └─▶ WebSearch restricted to the ATS domains   (Exa → Tavily)
+        └─▶ scanForATS(result URL) → provider + slug, straight off the URL
+        └─▶ FetchATSJobs() ── free; proves the board is live and hiring here
+        └─▶ resolveCompanyWebsite() ── one search per NEW company
+        └─▶ dedupe by domain AND normalized name  (see §5)
+        └─▶ geocode `area` via Nominatim, rate-limited to 1 req/1.1s
+        └─▶ max 5 new companies per run
+
+Go cron @every 1h   ── free, so it stays hourly
   │
-  └─▶ SyncAllCompanyJobs()                   ── refreshes jobs for ALL companies
+  └─▶ RunJobSync() → SyncAllCompanyJobs()
         └─▶ per company: resolve careers URL → detect ATS → fetch jobs → upsert
 
 GET /api/companies (public) ──▶ frontend /directory (grid + Leaflet map)
 ```
 
-**The two halves are deliberately independent.** Discovery depends on a live
-web search and the AI worker, so it's the flakier half. If it fails, job sync
-still runs. (This was a bug once — see §6.3.)
+**The two halves are deliberately independent**, and now run on separate
+schedules with a cron lease each. Discovery is the metered half and the
+flakier one; if it fails, or is skipped for budget, job sync still runs.
+(This was a bug once — see §6.3.)
+
+> **⚠ Superseded sections.** §3b below describes the Agno discovery agent
+> (DeepSeek + Exa + DuckDuckGo) that found companies by asking a model which
+> ones exist. That approach is **gone** — it stacked two guesses, whether the
+> company was real and whether it was hiring, and the second mostly failed.
+> The sections are kept because the measurements in them are why the current
+> design looks the way it does. For what runs today, read `CLAUDE.md` and
+> `backend-go/services/board_discovery.go`.
 
 ---
 
@@ -124,7 +137,16 @@ every sync tick. Currently ~130/800 used.
 
 ---
 
-## 3b. Search: Exa (primary) + DuckDuckGo (fallback)
+## 3b. Search: Exa (primary) + DuckDuckGo (fallback)  — SUPERSEDED
+
+> **This describes the deleted discovery agent.** Search now lives in Go, in
+> `backend-go/services/search_provider.go`: Exa first, **Tavily** as the
+> fallback, both metered in `scrape_usages` and both required to support a
+> domain filter. DuckDuckGo is gone — not because it was keyless, but because
+> it cannot restrict results to the board domains, and an unrestricted search
+> of "backend engineer jobs in Pune" returns listicles. A fallback that
+> returns the wrong shape of answer poisons the directory rather than pausing
+> it. Kept below for the measurement in it.
 
 `ai-worker/main.py` → `_discovery_tools()`.
 

@@ -28,6 +28,15 @@ type Company struct {
 	// cron tick re-scrapes every ATS-less company and burns the scraper's
 	// monthly credit allowance on companies that will never have a board.
 	ATSCheckedAt *time.Time `json:"ats_checked_at"`
-	Source       string     `gorm:"default:'agno-discovery'" json:"source"`
-	CreatedAt    time.Time  `gorm:"default:now()" json:"created_at"`
+	// EmptyJobReads counts consecutive syncs that came back with no roles.
+	// One empty read is not evidence a company stopped hiring: an ATS can
+	// answer 200 with an empty array during maintenance, and the careers-page
+	// link scan reads a redesigned page the same way. Clearing on the first
+	// one makes a hiring company look shut and lets the directory flip
+	// between the two states on alternate ticks, so listings survive one
+	// empty read and are cleared on the second. Reset the moment a read finds
+	// anything.
+	EmptyJobReads int       `json:"-"`
+	Source        string    `gorm:"default:'agno-discovery'" json:"source"`
+	CreatedAt     time.Time `gorm:"default:now()" json:"created_at"`
 }

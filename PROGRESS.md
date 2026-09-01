@@ -1,5 +1,45 @@
 # Progress Log
 
+## 2026-09-01
+- Review pass on the board-discovery branch, six fixes. The one that mattered
+  most: `resolveCompanyWebsite` was Exa-only, which quietly made the whole
+  Tavily fallback useless — once Exa's month was spent, discovery still paid
+  Tavily to find boards and then dropped every company for having no website.
+  A run that costs a search and stores nothing. It falls back to `WebSearch`
+  now; `category=company` was a quality win, not a requirement, since
+  `isAggregatorHost` is what actually rejects a LinkedIn page.
+- The 295-professions guard had gone inert on the new default path. Every row
+  the link scan produces carries its own posting URL, and the guard counts a
+  URL as evidence, so it could no longer reject anything read by link. Proved
+  it with a test before changing anything: a linked list of twelve professions
+  sailed through, and an ordinary nav bar stored "Engineering", "Locations" and
+  "Why work here" as jobs. Two new guards — `guidancePageRe` now also runs on
+  the page we start from, not only on the links we follow, and a link whose
+  whole text is a department name is not a role. The residual gap is recorded
+  in `CLAUDE.md` rather than papered over.
+- An empty read no longer clears a company's roles on the first occurrence. An
+  ATS answers 200 with an empty array under maintenance and the link scan reads
+  a redesign as zero; wiping on that made a hiring company look shut and
+  flipped it back an hour later. Second consecutive empty read clears it.
+  Relatedly, `FetchATSJobs` had no `default:` case — an unknown provider
+  returned `(nil, nil)`, which the caller read as "board is empty" and deleted
+  everything. It errors now.
+- `POST /api/companies/discover` got a rate-limit bucket of its own. At the
+  shared paid-group limit (30/min) one account could spend the whole 800-search
+  month in about five minutes, since each call costs up to six searches. Two,
+  then one an hour. Admin-only is still the real fix and is still listed as a
+  gap.
+- Two smaller ones: the ATS vendors are themselves on the domains discovery
+  searches, so `www.keka.com/careers` was reading as a board belonging to a
+  company called "www" — `www`, `j` and friends are rejected now. And the
+  Workday probe is memoised per search: its job-site id is not in the URL, so
+  `scanForATS` probes five candidates live, and twenty postings from one
+  employer meant twenty identical probes.
+- README and `SESSION_JOB_MAP_HANDOFF.md` still described the deleted Agno
+  discovery agent. README is rewritten; the handoff doc's §3b is marked
+  superseded rather than deleted, because the measurement in it is why the
+  current design looks the way it does.
+
 ## 2026-08-31
 - Merged the launch-hardening branch, minus the recruiter invite funnel: sharing
   is candidate-owned, so a recruiter minting invite links was the wrong

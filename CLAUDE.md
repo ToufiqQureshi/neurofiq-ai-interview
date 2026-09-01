@@ -49,9 +49,24 @@ itself. Hand-seeding a company to make a screenshot look better is a lie about
 what the system does. If the pipeline missed something, fix the pipeline.
 
 **Bad data is worse than no data.** An extraction once returned 295 "jobs" that
-were an alphabetical list of professions off a career-advice article. Guards in
-`careersPageResultLooksReal` reject that shape now. When adding a source, ask
-what its garbage looks like and reject it explicitly.
+were an alphabetical list of professions off a career-advice article. Three
+guards stand in that shape's way now, and they are not interchangeable:
+`guidancePageRe` rejects the page before it is read, `departmentTitles` rejects
+a link whose whole text is a section name ("Engineering" is a landing page, not
+a role), and `maxCareersPageRoles` is the ceiling if both are wrong. Note what
+`careersPageResultLooksReal` can no longer do on its own: every row the link
+scan produces carries its own posting URL, and the guard counts that as
+evidence — so it will not reject a linked list of professions. When adding a
+source, ask what its garbage looks like and reject it explicitly.
+
+**An empty read is not the same as "not hiring".** An ATS answers 200 with an
+empty array while it is being reconfigured, and the link scan reads a
+redesigned page as zero. Deleting a company's roles on the first empty read
+made a hiring company look shut and flipped it back an hour later. Listings now
+survive one empty read and clear on the second (`applySyncedJobs`,
+`Company.EmptyJobReads`). For the same reason `FetchATSJobs` errors on a
+provider it does not know instead of returning no rows — silence and zero must
+not look alike.
 
 **Verify before claiming done.** Query the running system and quote the number.
 "Should work" is not a result. Two separate false readings in this project came
@@ -67,6 +82,15 @@ cached per company: a week once a board is found, twelve hours while none is.
 The short retry is deliberate — a week-long freeze meant every improvement
 reached the directory a week late. Do not remove a guard to make a run finish
 faster.
+
+**No single provider may be load-bearing.** `resolveCompanyWebsite` was
+Exa-only, which made the Tavily fallback useless: once Exa's month was spent,
+discovery still paid Tavily to find boards and then dropped every company for
+having no website — a run that costs a search and stores nothing. Exa's
+`category=company` is a quality win, not a requirement; `isAggregatorHost` is
+what actually rejects a LinkedIn page, and it works on any provider's results.
+The same lesson as Firecrawl: check what happens when the good provider is
+gone.
 
 **Search is the only metered step in discovery, so it is rationed.** One
 search per rotation tick (three-hourly), plus one per newly-stored company to
@@ -140,13 +164,15 @@ the free product.
    company it finds. Enrich from the company's own site rather than guessing.
 3. Re-enrich companies after first discovery; stage and description are frozen
    at first-seen values today. Jobs *are* re-synced.
-4. `resolveCompanyWebsite` costs one Exa search per newly-seen company. Fine at
+4. `resolveCompanyWebsite` costs one search per newly-seen company. Fine at
    this volume, worth batching if discovery widens.
 
 Known gaps, not blocking: filters are exact-match against a fixed dropdown;
 `POST /api/companies/discover` is any-authenticated-user rather than
-admin-only; `jobs` and `scrape_usages` have no migration file and exist only
-via AutoMigrate.
+admin-only — it now has a bucket of its own (two, then one an hour) so one
+account cannot spend the month in five minutes, but a limit is not an
+authorisation check; `jobs` and `scrape_usages` have no migration file and
+exist only via AutoMigrate.
 
 ## More detail
 

@@ -49,6 +49,10 @@ type visitor struct {
 var (
 	ipLimiters   sync.Map // map[string]*visitor
 	writeLimiter sync.Map // map[userID]*visitor — the expensive endpoints
+	// discoveryLimiter is separate because discovery is not billed in the
+	// same units as everything else in the paid group: one call spends real
+	// searches out of a small monthly allowance the whole Job Map depends on.
+	discoveryLimiter sync.Map // map[userID]*visitor
 )
 
 func getLimiter(store *sync.Map, key string, r rate.Limit, burst int) *rate.Limiter {
@@ -249,7 +253,22 @@ func main() {
 		{
 			paid.POST("/repos/analyze", controllers.HandleAnalyzeRepo)
 			paid.POST("/interviews/submit", controllers.HandleSubmitInterview)
-			paid.POST("/companies/discover", controllers.HandleTriggerDiscovery)
+		}
+
+		// Discovery is throttled far harder than the rest of the paid group,
+		// because it is the one endpoint that spends a resource the product
+		// cannot buy more of. Each call costs up to
+		// services.MaxNewCompaniesPerRun + 1 metered searches against a free
+		// tier of 800 a month; at the shared write limit one account could
+		// spend the entire month in about five minutes. Two now, then one an
+		// hour — generous for a manual top-up, bounded for everyone else.
+		//
+		// This is a limit, not an authorisation check: the endpoint is still
+		// open to any signed-in user, and admin-only remains the real fix.
+		discover := api.Group("")
+		discover.Use(perUserLimitOn(&discoveryLimiter, rate.Every(time.Hour), 2))
+		{
+			discover.POST("/companies/discover", controllers.HandleTriggerDiscovery)
 		}
 
 		api.POST("/reports/:id/share", controllers.HandleShareReport)
@@ -290,6 +309,7 @@ func main() {
 			services.ReclaimStaleAnalyses(30 * time.Minute)
 			sweepLimiters(&ipLimiters, time.Hour)
 			sweepLimiters(&writeLimiter, time.Hour)
+			sweepLimiters(&discoveryLimiter, 3*time.Hour)
 		})
 	}); err != nil {
 		log.Fatalf("Failed to schedule housekeeping: %v", err)
@@ -344,13 +364,20 @@ func main() {
 // perUserLimit throttles the endpoints that cost money, keyed on the session
 // user rather than the source address.
 func perUserLimit(r rate.Limit, burst int) gin.HandlerFunc {
+	return perUserLimitOn(&writeLimiter, r, burst)
+}
+
+// perUserLimitOn is perUserLimit against a named bucket store, so an endpoint
+// whose cost is not measured in the same units as its neighbours can carry a
+// limit of its own without loosening theirs.
+func perUserLimitOn(store *sync.Map, r rate.Limit, burst int) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		userID, _ := c.Get("user_id")
 		key, _ := userID.(string)
 		if key == "" {
 			key = c.ClientIP()
 		}
-		if !getLimiter(&writeLimiter, key, r, burst).Allow() {
+		if !getLimiter(store, key, r, burst).Allow() {
 			c.AbortWithStatusJSON(http.StatusTooManyRequests, gin.H{
 				"error": "You're going a bit fast. Wait a moment and try again.",
 			})

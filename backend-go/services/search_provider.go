@@ -100,6 +100,18 @@ func providerBudget(p searchProvider) int {
 	return p.defaultBudget
 }
 
+// exaIsAvailable reports whether Exa can serve a call right now: a key is
+// configured and this month's allowance is not spent. Callers that want Exa
+// specifically — for a feature no other provider has — use this to fall back
+// deliberately rather than by catching an error.
+func exaIsAvailable() bool {
+	exa, ok := providerByName("exa")
+	if !ok || os.Getenv(exa.envKey) == "" {
+		return false
+	}
+	return scrapeUsageThisMonth(exa.name) < providerBudget(exa)
+}
+
 // SearchBudgetRemaining reports how many searches are left this month across
 // all configured providers, for logging and for the discovery loop's own
 // decision to stop early.

@@ -598,7 +598,7 @@ func SyncJobsForCompany(company models.Company) (int, error) {
 	if err != nil {
 		return 0, err
 	}
-	return replaceJobsForCompany(company.ID, rows)
+	return applySyncedJobs(company, rows)
 }
 
 // atsRecheckIntervalFor is how long to leave a company alone before looking
@@ -755,9 +755,55 @@ func FetchATSJobs(companyID, atsType, atsSlug string) ([]models.Job, error) {
 				Source: "workday",
 			})
 		}
+	default:
+		// Without this the switch falls through to `return rows, nil` with
+		// rows still nil, and the caller cannot tell "this board has no open
+		// roles" from "nobody here knows how to read this board" — so it
+		// deletes every stored role for the company. An unreadable provider
+		// is an error, not an empty board.
+		return nil, fmt.Errorf("unknown ATS provider %q", atsType)
 	}
 
 	return rows, nil
+}
+
+// applySyncedJobs writes one sync's result to the jobs table, with a single
+// guard: an empty result does not clear a company's listings the first time
+// it happens.
+//
+// Every read feeding this can fail in a way that looks exactly like success.
+// An ATS returns 200 with an empty array while it is being reconfigured; the
+// careers-page link scan depends on markup and reads a redesign as zero. The
+// old behaviour deleted every role on the strength of one such read, so a
+// company that is plainly hiring showed as having nothing — and reappeared an
+// hour later, which is worse than either state on its own.
+//
+// A second consecutive empty read is the company actually saying it has
+// nothing open, and that is when the listings go.
+func applySyncedJobs(company models.Company, rows []models.Job) (int, error) {
+	if len(rows) == 0 && company.EmptyJobReads == 0 {
+		var existing int64
+		config.DB.Model(&models.Job{}).Where("company_id = ?", company.ID).Count(&existing)
+		if existing > 0 {
+			config.DB.Model(&models.Company{}).Where("id = ?", company.ID).
+				Update("empty_job_reads", 1)
+			log.Printf("job sync: %s read empty but has %d stored roles — keeping them until a second empty read",
+				company.Name, existing)
+			return int(existing), nil
+		}
+	}
+
+	n, err := replaceJobsForCompany(company.ID, rows)
+	if err != nil {
+		return 0, err
+	}
+	// Either a read succeeded, or the second empty read has just cleared the
+	// company. Both leave the counter at zero.
+	if company.EmptyJobReads != 0 {
+		config.DB.Model(&models.Company{}).Where("id = ?", company.ID).
+			Update("empty_job_reads", 0)
+	}
+	return n, nil
 }
 
 // replaceJobsForCompany makes the jobs table match `rows` exactly for one
@@ -851,6 +897,19 @@ func syncJobsFromCareersPage(company models.Company) (int, error) {
 		return 0, nil // nothing to read
 	}
 
+	// The page has to be a careers page, not a careers *article*. This is
+	// where the 295 professions came from: a company linked "career options
+	// after 12th" and the extraction read the whole alphabetical list. The
+	// link scan below is, if anything, more willing to believe such a page,
+	// because an article links every profession it names — so the check that
+	// used to sit only on the links we follow now also sits on the page we
+	// start from.
+	if guidancePageRe.MatchString(pageURL) {
+		log.Printf("careers page for %s: %s reads as a guidance article, not a listing — skipping",
+			company.Name, pageURL)
+		return 0, nil
+	}
+
 	// Free first, and in the order the page is cheapest to read.
 	//
 	// This used to open with the Firecrawl extraction, which made a paid
@@ -900,7 +959,7 @@ func syncJobsFromCareersPage(company models.Company) (int, error) {
 	if !careersPageResultLooksReal(rows, company.Name, pageURL) {
 		return 0, nil
 	}
-	return replaceJobsForCompany(company.ID, rows)
+	return applySyncedJobs(company, rows)
 }
 
 // jobLinkPathRe matches the URL shape of one job posting. Careers pages vary
@@ -1014,6 +1073,26 @@ func extractJobsFromPageText(content, pageURL string) []ExtractedJob {
 	return out
 }
 
+// departmentTitles are what a careers page calls its *sections*. As the whole
+// text of a link they point at a department landing page, not at a role —
+// "Engineering" links to /careers/engineering, which the posting-URL pattern
+// happily matches.
+//
+// Matched on the complete title and never as a substring, because every one
+// of these words also appears inside real job titles: "Engineering Manager"
+// and "Head of Design" are roles, "Engineering" and "Design" are not.
+var departmentTitles = map[string]bool{
+	"engineering": true, "sales": true, "design": true, "marketing": true,
+	"operations": true, "product": true, "finance": true, "legal": true,
+	"people": true, "human resources": true, "hr": true, "data": true,
+	"technology": true, "tech": true, "business": true, "corporate": true,
+	"support": true, "customer success": true, "locations": true,
+	"departments": true, "teams": true, "team": true, "students": true,
+	"internships": true, "interns": true, "graduates": true, "leadership": true,
+	"all jobs": true, "all roles": true, "open roles": true, "openings": true,
+	"vacancies": true, "opportunities": true, "positions": true,
+}
+
 // cleanRoleTitle normalises a link's text and returns "" if it cannot be a
 // job title.
 func cleanRoleTitle(raw string) string {
@@ -1023,6 +1102,9 @@ func cleanRoleTitle(raw string) string {
 		return ""
 	}
 	lower := strings.ToLower(title)
+	if departmentTitles[lower] {
+		return ""
+	}
 	for _, bad := range nonRoleTitles {
 		if strings.Contains(lower, bad) {
 			return ""

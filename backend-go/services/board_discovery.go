@@ -135,6 +135,12 @@ type boardHit struct {
 var nonSlugSegments = map[string]bool{
 	"embed": true, "jobs": true, "job": true, "search": true,
 	"api": true, "static": true, "assets": true,
+	// The ATS vendors are themselves on the domains we search, so their own
+	// pages come back too: keka.com returns www.keka.com/careers, which
+	// scans as the board of a company called "www". And "j" is Workable's
+	// per-job share URL (apply.workable.com/j/<code>), which carries no
+	// account slug at all.
+	"www": true, "j": true, "careers": true, "company": true, "companies": true,
 }
 
 // aggregatorHosts are never a company's own site. A "website" on one of these
@@ -232,12 +238,35 @@ func boardHitsFor(query string, numResults int) []boardHit {
 		return nil
 	}
 
+	// scanForATS is free for every provider but Workday, whose job-site id is
+	// not in the URL: it probes the live API for up to five candidate ids,
+	// and each probe can paginate. One search returns many postings from the
+	// same employer, so without memoising, twenty results from one tenant
+	// mean twenty identical probes and a cron tick that runs for minutes.
+	workdayProbe := map[string]string{}
+	scan := func(u string) (string, string) {
+		m := workdayLinkRe.FindStringSubmatch(u)
+		if m == nil {
+			return scanForATS(u)
+		}
+		key := m[1] + ":" + m[2]
+		slug, done := workdayProbe[key]
+		if !done {
+			_, slug = scanForATS(u)
+			workdayProbe[key] = slug
+		}
+		if slug == "" {
+			return "", ""
+		}
+		return "workday", slug
+	}
+
 	seen := map[string]bool{}
 	var hits []boardHit
 	for _, r := range results {
 		// The same regexes that read a board link out of a careers page read
 		// it out of a search result, because both are just the URL.
-		provider, slug := scanForATS(r.URL)
+		provider, slug := scan(r.URL)
 		if provider == "" || slug == "" || nonSlugSegments[strings.ToLower(slug)] {
 			continue
 		}
@@ -305,7 +334,29 @@ func boardURL(provider, slug string) string {
 // companies table is keyed on domain. One search per newly-seen company, and
 // never for one we already have.
 func resolveCompanyWebsite(name string) string {
-	results, err := exaCompanySearch(name+" official company website", 5)
+	query := name + " official company website"
+
+	// Exa's company category returns company sites rather than articles about
+	// them, so it is the better answer whenever we can have it.
+	//
+	// But it must not be the ONLY answer. This lookup used to be Exa-only,
+	// which quietly made the Tavily fallback useless: the moment Exa's month
+	// was spent, discovery still paid Tavily to find boards and then dropped
+	// every single company here for having no website. A run that costs a
+	// search and stores nothing is worse than a run that does not happen.
+	//
+	// category=company is a quality win, not a requirement — isAggregatorHost
+	// below is what actually rejects a LinkedIn or Crunchbase page, and it
+	// works the same on any provider's results.
+	var (
+		results []searchResult
+		err     error
+	)
+	if exaIsAvailable() {
+		results, err = exaCompanySearch(query, 5)
+	} else {
+		results, err = WebSearch(query, nil, 5)
+	}
 	if err != nil {
 		log.Printf("board discovery: website lookup failed for %q: %v", name, err)
 		return ""
