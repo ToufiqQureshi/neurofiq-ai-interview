@@ -185,6 +185,39 @@ func TestManualDiscoveryBudgetCountsOnlyConfiguredProviders(t *testing.T) {
 	}
 }
 
+// The run has to stop on lookups started, not on companies saved. A candidate
+// rejected *after* its website lookup — no site found, or a domain already
+// held — has spent a search all the same, so counting saves let a "5 company"
+// run spend one search per board hit.
+func TestLookupsAreCappedByAttemptNotBySave(t *testing.T) {
+	const limit, plenty, noFloor = 5, 1000, 0
+
+	for lookups := 0; lookups < limit; lookups++ {
+		if !mayStartLookup(lookups, limit, plenty, noFloor) {
+			t.Errorf("lookup %d of %d should be allowed", lookups+1, limit)
+		}
+	}
+	if mayStartLookup(limit, limit, plenty, noFloor) {
+		t.Error("a run must stop once it has started `limit` lookups, however few were saved")
+	}
+}
+
+// A manual run passes the reserve check on entry; it must not then spend
+// through the reserve while the loop is running.
+func TestLookupsStopAtTheReserve(t *testing.T) {
+	const limit, floor = 5, 200
+
+	if !mayStartLookup(0, limit, floor+1, floor) {
+		t.Error("a lookup with budget above the reserve should be allowed")
+	}
+	if mayStartLookup(0, limit, floor, floor) {
+		t.Error("a lookup that would take the budget to the reserve must not start")
+	}
+	if mayStartLookup(0, limit, floor-1, floor) {
+		t.Error("a lookup below the reserve must not start")
+	}
+}
+
 func TestBoardSeedQueriesAreDistinct(t *testing.T) {
 	if len(boardSeedQueries) == 0 {
 		t.Fatal("no seed queries built")

@@ -418,18 +418,43 @@ func DiscoverFromBoardsManual(query string, limit int) ([]models.Company, error)
 			"manual discovery is paused: %d searches left this month and %d of them are reserved for the scheduled rotation",
 			SearchBudgetRemaining(), reserved)
 	}
-	return DiscoverFromBoards(query, limit)
+	return discoverFromBoards(query, limit, schedulerReserve())
 }
 
+// mayStartLookup decides whether another company-website search may begin.
+//
+// Two separate ceilings, and the run stops at whichever comes first:
+//
+//   - lookups against limit. This is the one that was wrong: the loop used to
+//     stop on companies *saved*, but a candidate that is rejected after its
+//     website lookup — no site found, or a domain we already hold — has spent
+//     a search all the same. With 25 board hits a "5 company" run could spend
+//     26 searches, five times what the schedule was budgeted for.
+//   - the remaining budget against floor, so a manual run cannot eat into the
+//     scheduler's reserve part-way through, having passed the check on entry.
+func mayStartLookup(lookups, limit, remaining, floor int) bool {
+	return lookups < limit && remaining > floor
+}
+
+// DiscoverFromBoards is the scheduled entry point: it may spend the whole
+// remaining budget, because the rotation is what the budget is for.
 func DiscoverFromBoards(query string, limit int) ([]models.Company, error) {
+	return discoverFromBoards(query, limit, 0)
+}
+
+// discoverFromBoards runs one search and stores the companies behind the
+// boards it finds. floor is the budget level it will not spend past — zero
+// for the rotation, the scheduler's reserve for a manual run.
+func discoverFromBoards(query string, limit, floor int) ([]models.Company, error) {
 	if limit <= 0 || limit > maxNewCompaniesPerRun {
 		limit = maxNewCompaniesPerRun
 	}
-	// One search to find boards, then one per company we end up storing.
+	// One search to find boards, then at most one per candidate we look up.
 	// Stopping before the search is cheaper than discovering mid-run that we
 	// cannot afford the lookups.
-	if remaining := SearchBudgetRemaining(); remaining <= limit {
-		return nil, fmt.Errorf("search budget nearly spent (%d left) — skipping discovery", remaining)
+	if remaining := SearchBudgetRemaining(); remaining <= limit+floor {
+		return nil, fmt.Errorf("search budget nearly spent (%d left, %d reserved) — skipping discovery",
+			remaining, floor)
 	}
 
 	hits := boardHitsFor(query, boardResultsPerQuery)
@@ -438,6 +463,7 @@ func DiscoverFromBoards(query string, limit int) ([]models.Company, error) {
 	}
 
 	var saved []models.Company
+	lookups := 0
 	for _, hit := range hits {
 		if len(saved) >= limit {
 			break
@@ -480,6 +506,15 @@ func DiscoverFromBoards(query string, limit int) ([]models.Company, error) {
 				hit.Provider, hit.Slug, dup.Name)
 			continue
 		}
+
+		// The metered step. Everything above this line is free, so the count
+		// that matters is of lookups started — not of companies stored.
+		if !mayStartLookup(lookups, limit, SearchBudgetRemaining(), floor) {
+			log.Printf("board discovery: stopping after %d website lookups (limit %d, budget %d, reserved %d)",
+				lookups, limit, SearchBudgetRemaining(), floor)
+			break
+		}
+		lookups++
 
 		website := resolveCompanyWebsite(name)
 		domain := extractDomain(website)

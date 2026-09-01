@@ -93,11 +93,21 @@ The same lesson as Firecrawl: check what happens when the good provider is
 gone.
 
 **Search is the only metered step in discovery, so it is rationed.** One
-search per rotation tick (three-hourly), plus one per newly-stored company to
-find its homepage — capped at `maxNewCompaniesPerRun` (5), which bounds a tick
-at 6 calls. Job syncing is free and stays hourly on its own lease, so listings
-remain fresh while discovery slows. A board skipped by the cap is not lost:
-the rotation comes back.
+search per rotation tick (three-hourly), plus one per company whose homepage
+is *looked up* — count attempts, not saves. That distinction is the whole
+guard: a candidate rejected after its lookup (no site found, domain already
+held) has spent a search too, so a run bounded by companies stored could spend
+one search per board hit — 26, not 6. `mayStartLookup` stops the loop at
+`maxNewCompaniesPerRun` lookups, which is what actually bounds a tick at 6.
+Job syncing is free and stays hourly on its own lease, so listings remain
+fresh while discovery slows. A board skipped by the cap is not lost: the
+rotation comes back.
+
+A quarter of the monthly budget is reserved for the rotation, checked before
+the board search *and* before every lookup — a manual run that passed the
+check on entry must not spend through the reserve while its loop is running.
+`POST /api/companies/discover` is still any-authenticated-user; the reserve
+bounds what they can take, it does not decide who may ask.
 
 **Never commit secrets.** `.env` holds live Supabase, GitHub OAuth, DeepSeek,
 Firecrawl and Exa credentials. It is gitignored. Before any commit:
