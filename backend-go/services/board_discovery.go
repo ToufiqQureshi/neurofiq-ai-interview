@@ -108,6 +108,11 @@ const jobSyncLeaseTTL = jobSyncIntervalSeconds * time.Second
 // resolve to a handful of distinct boards once duplicates collapse.
 const boardResultsPerQuery = 25
 
+// MaxNewCompaniesPerRun is exported so the API can advertise the same ceiling
+// it actually enforces. A handler that accepts 25 and returns 5 is a contract
+// that lies about itself.
+const MaxNewCompaniesPerRun = maxNewCompaniesPerRun
+
 // maxNewCompaniesPerRun caps how many companies one run will store.
 //
 // Each new company costs a second search to find its website, so an

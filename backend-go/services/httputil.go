@@ -25,8 +25,8 @@ var (
 	// round trip, so its ceiling is far higher than a plain page fetch.
 	workerClient = &http.Client{Timeout: 90 * time.Second}
 
-	// exaClient (board_discovery.go) covers the search side. It is a plain
-	// HTTP client with a much shorter ceiling, because a search is one
+	// searchClient (search_provider.go) covers the search side. It is a
+	// plain HTTP client with a much shorter ceiling, because a search is one
 	// request rather than an LLM round trip.
 
 	// downloadClient pulls repository zipballs: large and slow, but bounded.

@@ -69,8 +69,11 @@ func HandleTriggerDiscovery(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "query is required"})
 		return
 	}
-	if req.Limit <= 0 || req.Limit > 25 {
-		req.Limit = 25
+	// The same ceiling the service enforces, not a larger one: each stored
+	// company costs a metered search of its own, and a handler that accepts
+	// 25 while the service caps at 5 promises something it will not deliver.
+	if req.Limit <= 0 || req.Limit > services.MaxNewCompaniesPerRun {
+		req.Limit = services.MaxNewCompaniesPerRun
 	}
 	if len(req.Query) > 200 {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "query is too long"})

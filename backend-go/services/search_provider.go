@@ -76,6 +76,21 @@ var searchProviders = []searchProvider{
 // trip, and it must never hold a cron tick for minutes.
 var searchClient = &http.Client{Timeout: 30 * time.Second}
 
+// providerByName looks a provider up rather than trusting its position in the
+// slice. Reordering the list is a reasonable thing to do — it is the
+// preference order — and an index would silently start charging one
+// provider's spending against another's budget.
+func providerByName(name string) (searchProvider, bool) {
+	for _, p := range searchProviders {
+		if p.name == name {
+			return p, true
+		}
+	}
+	return searchProvider{}, false
+}
+
+// providerBudget is a provider's monthly call ceiling, overridable per
+// deployment so an operator can lower it without a code change.
 func providerBudget(p searchProvider) int {
 	if v := os.Getenv(p.budgetEnv); v != "" {
 		if n, err := strconv.Atoi(v); err == nil && n >= 0 {
@@ -182,11 +197,15 @@ func exaSearchCall(apiKey, query string, includeDomains []string, numResults int
 // reason this lookup is worth a call; Tavily has no equivalent, so this one
 // is Exa-only and simply returns nothing when Exa is unavailable.
 func exaCompanySearch(query string, numResults int) ([]searchResult, error) {
-	apiKey := os.Getenv("EXA_API_KEY")
-	if apiKey == "" {
-		return nil, fmt.Errorf("EXA_API_KEY not set")
+	exa, ok := providerByName("exa")
+	if !ok {
+		return nil, fmt.Errorf("exa is not a configured search provider")
 	}
-	used, budget := scrapeUsageThisMonth("exa"), providerBudget(searchProviders[0])
+	apiKey := os.Getenv(exa.envKey)
+	if apiKey == "" {
+		return nil, fmt.Errorf("%s not set", exa.envKey)
+	}
+	used, budget := scrapeUsageThisMonth(exa.name), providerBudget(exa)
 	if used >= budget {
 		return nil, fmt.Errorf("exa monthly budget reached (%d/%d)", used, budget)
 	}

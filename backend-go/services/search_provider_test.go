@@ -33,6 +33,24 @@ func TestEverySearchProviderIsUsable(t *testing.T) {
 	}
 }
 
+// Looking a provider up by name rather than by slice position matters because
+// the slice order is the preference order, and reordering it is a reasonable
+// thing to do. An index would silently charge Exa's spending against another
+// provider's budget.
+func TestProviderLookupIsByNameNotPosition(t *testing.T) {
+	exa, ok := providerByName("exa")
+	if !ok {
+		t.Fatal("exa is not in the provider list")
+	}
+	if exa.envKey != "EXA_API_KEY" {
+		t.Errorf("looked up the wrong provider: %+v", exa)
+	}
+
+	if _, ok := providerByName("not-a-provider"); ok {
+		t.Error("expected an unknown provider name to report not-found")
+	}
+}
+
 func TestProviderBudgetReadsEnvOverride(t *testing.T) {
 	p := searchProvider{budgetEnv: "TEST_SEARCH_BUDGET", defaultBudget: 800}
 
