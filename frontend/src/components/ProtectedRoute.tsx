@@ -1,9 +1,10 @@
-import { Navigate, Outlet } from 'react-router-dom';
+import { Navigate, Outlet, useLocation } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import { Loader2 } from 'lucide-react';
 
 export function ProtectedRoute() {
-  const { isAuthenticated, loading } = useAuth();
+  const { user, isAuthenticated, loading } = useAuth();
+  const location = useLocation();
 
   if (loading) {
     return (
@@ -13,11 +14,20 @@ export function ProtectedRoute() {
     );
   }
 
-  // If the API checked and you are not authenticated, redirect to /auth
+  // If not authenticated, redirect to /auth
   if (!isAuthenticated) {
     return <Navigate to="/auth" replace />;
   }
 
-  // Otherwise, render the child routes (e.g. DashboardLayout)
+  // If new user not yet onboarded, force /onboarding
+  if (user?.is_onboarded === false && location.pathname !== '/onboarding') {
+    return <Navigate to="/onboarding" replace />;
+  }
+
+  // If already onboarded and hits /onboarding, redirect to /dashboard
+  if (user?.is_onboarded === true && location.pathname === '/onboarding') {
+    return <Navigate to="/dashboard" replace />;
+  }
+
   return <Outlet />;
 }

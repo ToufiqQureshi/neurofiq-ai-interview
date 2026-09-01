@@ -140,12 +140,15 @@ func HandleGithubCallback(c *gin.Context) {
 	result := config.DB.Where("github_id = ?", githubUser.ID).First(&user)
 
 	if result.Error != nil {
+		ghID := githubUser.ID
 		user = models.User{
-			GithubID:        githubUser.ID,
+			GithubID:        &ghID,
 			GithubUsername:  githubUser.Login,
+			FullName:        githubUser.Login,
 			Email:           githubUser.Email,
 			AvatarURL:       githubUser.AvatarURL,
 			GithubConnected: true,
+			IsOnboarded:     false,
 			LastLoginAt:     time.Now(),
 		}
 		if err := config.DB.Create(&user).Error; err != nil {
@@ -177,7 +180,12 @@ func HandleGithubCallback(c *gin.Context) {
 	if frontendURL == "" {
 		frontendURL = "http://localhost:5173"
 	}
-	c.Redirect(http.StatusTemporaryRedirect, frontendURL+"/dashboard")
+	
+	targetPath := "/dashboard"
+	if !user.IsOnboarded {
+		targetPath = "/onboarding"
+	}
+	c.Redirect(http.StatusTemporaryRedirect, frontendURL+targetPath)
 }
 
 // HandleAuthMe checks the session cookie and returns the current user.

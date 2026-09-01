@@ -88,9 +88,7 @@ func JobFacets(sector, stage, area, q string) (fields, levels []FacetCount, err 
 	if stage != "" {
 		dbQuery = dbQuery.Where("companies.stage = ?", stage)
 	}
-	if area != "" {
-		dbQuery = dbQuery.Where("companies.area ILIKE ?", "%"+area+"%")
-	}
+	dbQuery = applyAreaFilter(dbQuery, area, "companies")
 	if q != "" {
 		dbQuery = dbQuery.Where("companies.name ILIKE ? OR companies.description ILIKE ?", "%"+q+"%", "%"+q+"%")
 	}

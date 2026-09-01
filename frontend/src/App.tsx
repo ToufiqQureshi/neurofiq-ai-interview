@@ -1,6 +1,7 @@
 import { BrowserRouter, Routes, Route } from 'react-router-dom';
 import { LandingPage } from './pages/LandingPage';
 import { AuthChoice } from './pages/AuthChoice';
+import { Onboarding } from './pages/Onboarding';
 import { Dashboard } from './pages/Dashboard';
 import { Repositories } from './pages/Repositories';
 import { ReportsList } from './pages/ReportsList';
@@ -26,8 +27,16 @@ function App() {
               for a hiring manager who has never heard of us. */}
           <Route path="/r/:slug" element={<PublicReport />} />
 
-          {/* Authenticated Routes with Sidebar */}
+          {/* Public Directory Route with Sidebar */}
+          <Route element={<DashboardLayout />}>
+            <Route path="/directory" element={<CompanyMap />} />
+          </Route>
+
+          {/* Authenticated Routes */}
           <Route element={<ProtectedRoute />}>
+            <Route path="/onboarding" element={<Onboarding />} />
+
+            {/* Authenticated Routes with Sidebar */}
             <Route element={<DashboardLayout />}>
               <Route path="/dashboard" element={<Dashboard />} />
               <Route path="/repositories" element={<Repositories />} />
@@ -35,7 +44,6 @@ function App() {
               <Route path="/analyze/:repoId" element={<AnalysisProgress />} />
               <Route path="/interview/:repoId" element={<InterviewSession />} />
               <Route path="/report/:sessionId" element={<Report />} />
-              <Route path="/directory" element={<CompanyMap />} />
             </Route>
           </Route>
         </Routes>

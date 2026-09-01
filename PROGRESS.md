@@ -1,6 +1,26 @@
 # Progress Log
 
+## 2026-09-01
+- Built **Floating Company Inspector Drawer (`CompanyDrawer.tsx`)** inspired by BangaloreStartupMap / Airbnb: clicking any startup pin slides in a rich details card on the right containing company bio, funding stage, direct career/website links, active job roles, and 1-Click AI Mock Interview CTA.
+- Optimized Map Layout & Above-the-Fold Viewport: shifted stat cards to Grid-only mode so 2D and 3D map views load immediately visible with zero vertical scroll required.
+- Added **Interactive Open Roles Popup Accordion / Toggle (`CompanyJobList.tsx`)** to both 2D Leaflet and 3D MapLibre popups: candidates can click on `[ 💼 N open roles ▼ ]` directly on any map marker to expand the list of active job postings with 1-Click AI Mock Interview triggers and direct career application links.
+- Cleaned up Map controls: removed duplicate internal 2D/3D toggle from MapLibre canvas, establishing the top-right header `[ ⊞ Grid | 🌐 2D Map | ✨ 3D Map ]` switcher as the single source of truth.
+- Added 3-Way Directory View Switcher (`[ ⊞ Grid | 🌐 2D Map | ✨ 3D Map ]`) allowing candidates and recruiters to toggle between classic Grid Cards, standard 2D Leaflet map, and GPU-accelerated MapLibre GL 3D perspective.
+- Integrated **MapLibre GL (`maplibre-gl`) WebGL 3D Map Engine** (`MapLibreCompanyMap.tsx`) with 55° camera tilt perspective, 3D compass navigation, 2D/3D angle toggle, and city boundary locking.
+- Implemented Strict City Boundary Locking & Zoom Clamping: configured `maxBounds` with `[lng, lat]` format and `minZoom` per Tech Hub so users cannot pan outside or zoom out beyond the chosen urban tech corridor.
+- Built Dead Jobs Auto-Pruner (`PruneDeadJobs` & `POST /api/jobs/prune-dead`) with concurrent HTTP link validation, automatically scanning active job URLs and purging 404/410/expired postings from the database.
+- Implemented BangaloreStartupMap-style precision tech sub-hub geocoding across major Indian tech clusters (HSR Layout, Koramangala, Indiranagar, Bellandur, Whitefield, EGL Domlur, Electronic City, Cyber City, BKC, Powai, Hinjawadi, etc.), eliminating single-point marker stacking.
+- Configured Leaflet MarkerCluster with dynamic city-zoom unclustering (`disableClusteringAtZoom={11}`, `maxClusterRadius={25}`) to display individual circular company logo pins across urban neighborhoods.
+- Added live "Clean Dead Jobs" instant action button on directory header with feedback toasts.
+- Implemented Pan-India Tech Hub filter switcher (All Hubs, Bengaluru, Delhi NCR, Mumbai, Hyderabad, Pune) with instant viewport flying and dynamic cluster zoom.
+- Upgraded Leaflet map to 3D-styled CartoDB/OpenStreetMap tiles and added 1-Click "🎯 Practice AI Mock Interview" action within map popups and job listings.
+
 ## 2026-08-31
+- **Email + Password Authentication & Bcrypt Password Hashing**: Implemented `/auth/register` and `/auth/login` endpoints in Go with `bcrypt.GenerateFromPassword` and `bcrypt.CompareHashAndPassword`, setting session cookies on registration and login.
+- **Candidate Onboarding Flow (`/onboarding`)**: Created a 3-step interactive onboarding wizard (`Onboarding.tsx`) allowing candidates to select their Experience Level (Fresher, Mid-Level, Senior), College/Company, Target Role, Tech Stack badges, LinkedIn profile, and Interview Goals.
+- **Database Schema & Route Guarding**: Updated `models.User` in Go with `PasswordHash`, `FullName`, `ExperienceLevel`, `TargetRole`, `TechStack`, `LinkedInURL`, `IsOnboarded`, and nullable `GithubID`. Configured `ProtectedRoute` in React to automatically redirect un-onboarded candidates to `/onboarding`.
+- **Automated Playwright E2E Test Suite**: Ran full browser verification covering signup -> onboarding wizard -> dashboard landing -> logout -> direct dashboard login with 100% pass rate.
+- **Company Directory Stats Endpoint**: Registered `GET /api/companies/stats` before `GET /api/companies/:id` in `main.go` to provide global directory metrics (total companies, hiring companies, open jobs, fresh postings).
 - Configured Free Claude Code proxy (`http://127.0.0.1:8082/admin`) with OpenRouter API integration and set default routing model to `openrouter/z-ai/glm-5.3-flash`.
 - Configured OpenCode (`~/.config/opencode/opencode.json`) with OpenRouter API integration for GLM models (`z-ai/glm-5.3-flash` and `z-ai/glm-5.2`).
 - Merged the launch-hardening branch, minus the recruiter invite funnel: sharing

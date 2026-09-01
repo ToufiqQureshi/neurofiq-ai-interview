@@ -12,16 +12,19 @@ func AuthMiddleware() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		session := sessions.Default(c)
 		userID := session.Get("user_id")
-		githubToken := session.Get("github_token")
 
-		if userID == nil || githubToken == nil {
+		if userID == nil {
 			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "Unauthorized: Session missing"})
 			return
 		}
 
 		// Store in context for controllers to access
 		c.Set("user_id", userID)
-		c.Set("github_token", githubToken)
+
+		githubToken := session.Get("github_token")
+		if githubToken != nil {
+			c.Set("github_token", githubToken)
+		}
 
 		c.Next()
 	}

@@ -617,13 +617,28 @@ func SyncJobsForCompany(company models.Company) (int, error) {
 
 		atsType, atsSlug = DetectATS(company)
 
-		now := time.Now()
-		updates := map[string]interface{}{"ats_checked_at": now}
 		if atsType != "" {
-			updates["ats_type"] = atsType
-			updates["ats_slug"] = atsSlug
+			config.DB.Model(&models.Company{}).Where("id = ?", company.ID).Updates(
+				map[string]interface{}{
+					"ats_type": atsType, "ats_slug": atsSlug, "ats_checked_at": time.Now(),
+				})
+		} else {
+			// Stamping ats_checked_at here is what starts the week-long
+			// cooldown, so it is done only once the careers-page attempt
+			// below has actually had its turn. It used to be written
+			// unconditionally, before that attempt ran: a single Firecrawl
+			// rate-limit error then cost the company seven days at zero
+			// roles, and the next attempt a week later could lose the same
+			// coin toss. Now a transient failure is retried on the next
+			// tick, and only a clean "nothing here" starts the clock.
+			n, err := syncJobsFromCareersPage(company)
+			if err != nil {
+				return 0, err
+			}
+			config.DB.Model(&models.Company{}).Where("id = ?", company.ID).
+				Update("ats_checked_at", time.Now())
+			return n, nil
 		}
-		config.DB.Model(&models.Company{}).Where("id = ?", company.ID).Updates(updates)
 	}
 
 	// Most companies run a custom careers portal rather than a supported
@@ -828,24 +843,36 @@ func syncJobsFromCareersPage(company models.Company) (int, error) {
 		return 0, nil // nothing to read
 	}
 
-	extracted, err := ExtractJobsFromCareersPage(pageURL)
+	// Fetch as cheaply as the page allows, then read it with our own model.
+	// The fetch and the extraction are separate calls so a page plain HTTP
+	// can serve never touches a scraper credit.
+	pageHTML, tier, err := careersPageText(pageURL)
+	if err != nil {
+		return 0, err
+	}
+	extracted, err := ExtractJobsFromPageText(pageHTML, company.Name, pageURL)
 	if err != nil {
 		return 0, err
 	}
 
 	// A lot of /careers pages are marketing pages that link out to the real
 	// listings ("View open positions"). If the first page yielded nothing,
-	// follow that link once and try there.
+	// follow that link once and try there. The HTML is already in hand, so
+	// finding the link costs nothing.
 	if len(extracted) == 0 {
-		if html, ferr := fetchText(pageURL); ferr == nil {
-			if next := findJobsListingLink(html, pageURL); next != "" {
-				log.Printf("careers page for %s had no roles — following %s", company.Name, next)
-				if more, merr := ExtractJobsFromCareersPage(next); merr == nil && len(more) > 0 {
+		if next := findJobsListingLink(pageHTML, pageURL); next != "" {
+			log.Printf("careers page for %s had no roles — following %s", company.Name, next)
+			if nextHTML, nextTier, ferr := careersPageText(next); ferr == nil {
+				if more, merr := ExtractJobsFromPageText(nextHTML, company.Name, next); merr == nil && len(more) > 0 {
 					extracted = more
 					pageURL = next // apply links should point at the real board
+					tier = nextTier
 				}
 			}
 		}
+	}
+	if len(extracted) > 0 {
+		log.Printf("careers page for %s: %d roles via %s", company.Name, len(extracted), tier)
 	}
 
 	var rows []models.Job

@@ -1,17 +1,29 @@
 import { createContext, useContext, useEffect, useState } from 'react';
 
-interface User {
+export interface User {
   id: string;
-  github_username: string;
+  github_username?: string;
+  full_name?: string;
   email: string;
-  avatar_url: string;
+  avatar_url?: string;
   role?: string;
+  plan_type?: string;
+  is_onboarded?: boolean;
+  experience_level?: string;
+  target_role?: string;
+  tech_stack?: string;
+  linkedin_url?: string;
+  college_or_company?: string;
+  interview_goal?: string;
+  github_connected?: boolean;
 }
 
 interface AuthContextType {
   user: User | null;
   isAuthenticated: boolean;
   loading: boolean;
+  setUser: React.Dispatch<React.SetStateAction<User | null>>;
+  refreshUser: () => Promise<void>;
   logout: () => Promise<void>;
 }
 
@@ -19,6 +31,8 @@ const AuthContext = createContext<AuthContextType>({
   user: null,
   isAuthenticated: false,
   loading: true,
+  setUser: () => {},
+  refreshUser: async () => {},
   logout: async () => {},
 });
 
@@ -28,13 +42,24 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
   const [loading, setLoading] = useState(true);
 
+  const refreshUser = async () => {
+    try {
+      const res = await fetch(`${import.meta.env.VITE_API_URL}/auth/me`, { credentials: 'include' });
+      if (res.ok) {
+        const d = await res.json();
+        setUser(d?.user || null);
+      } else {
+        setUser(null);
+      }
+    } catch {
+      setUser(null);
+    } finally {
+      setLoading(false);
+    }
+  };
+
   useEffect(() => {
-    // Check whether the user's session is still valid.
-    fetch(`${import.meta.env.VITE_API_URL}/auth/me`, { credentials: 'include' })
-      .then(r => (r.ok ? r.json() : null))
-      .then(d => setUser(d?.user || null))
-      .catch(() => setUser(null))
-      .finally(() => setLoading(false));
+    refreshUser();
   }, []);
 
   const logout = async () => {
@@ -44,15 +69,13 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         credentials: 'include',
       });
     } finally {
-      // Clear locally even if the request failed — leaving somebody looking
-      // signed in after they pressed Sign out is worse than a stale cookie.
       setUser(null);
       window.location.href = '/';
     }
   };
 
   return (
-    <AuthContext.Provider value={{ user, isAuthenticated: !!user, loading, logout }}>
+    <AuthContext.Provider value={{ user, isAuthenticated: !!user, loading, setUser, refreshUser, logout }}>
       {children}
     </AuthContext.Provider>
   );

@@ -286,3 +286,77 @@ func ScrapeUsageSummary() map[string]int {
 	}
 	return out
 }
+
+// careersPageText returns the readable text of a careers page, spending as
+// little as possible to get it.
+//
+// The order is the whole point. A survey of the 45 companies sitting without
+// a detected ATS found 44 of them served their full careers page — listings
+// included — to a plain HTTP GET. Rendering those costs a scraper credit and
+// buys nothing. So:
+//
+//  1. Plain HTTP. Free, and enough for the large majority.
+//  2. Jina Reader. Free and keyless, for pages that build themselves in the
+//     browser and come back as an empty shell.
+//  3. Firecrawl. Metered, so it goes last and only when both free paths
+//     returned something too thin to be a real page.
+//
+// Returns the text and which tier produced it.
+func careersPageText(pageURL string) (string, string, error) {
+	if html, err := fetchText(pageURL); err == nil && len(html) >= minUsablePageBytes {
+		return html, "http", nil
+	}
+
+	if text, err := fetchViaJina(pageURL); err == nil && len(text) >= minUsablePageBytes {
+		recordScrapeUsage("jina")
+		return text, "jina", nil
+	}
+
+	if key := os.Getenv("FIRECRAWL_API_KEY"); key != "" {
+		used, budget := scrapeUsageThisMonth("firecrawl"), firecrawlBudget()
+		if used >= budget {
+			return "", "", fmt.Errorf("firecrawl monthly budget reached (%d/%d) and free tiers returned nothing usable", used, budget)
+		}
+		text, err := fetchViaFirecrawl(pageURL, key)
+		if err != nil {
+			return "", "", err
+		}
+		recordScrapeUsage("firecrawl")
+		return text, "firecrawl", nil
+	}
+
+	return "", "", fmt.Errorf("no usable content for %s", pageURL)
+}
+
+// minUsablePageBytes is the floor below which a fetch is treated as an empty
+// shell rather than a page. Client-rendered careers pages come back as a few
+// hundred bytes of loader markup; the real ones measured in this directory
+// ran from 27KB to 1MB.
+const minUsablePageBytes = 15000
+
+// ExtractJobsFromPageText asks our own worker to read the openings out of a
+// careers page we already fetched.
+//
+// This is deliberately separate from fetching. Firecrawl's own LLM
+// extraction did both at once, which meant every extraction — even of a page
+// plain HTTP could read for free — spent a credit, and a rate-limit error
+// from Firecrawl took the whole tier down with no fallback. Splitting them
+// lets the cheap fetch and the model call fail independently.
+func ExtractJobsFromPageText(pageText, companyName, sourceURL string) ([]ExtractedJob, error) {
+	payload := map[string]interface{}{
+		"page_text":    pageText,
+		"company_name": companyName,
+		"source_url":   sourceURL,
+	}
+	body, err := postToWorker(discoveryClient, "/internal/extract-jobs", payload)
+	if err != nil {
+		return nil, err
+	}
+	var parsed struct {
+		Jobs []ExtractedJob `json:"jobs"`
+	}
+	if err := json.Unmarshal(body, &parsed); err != nil {
+		return nil, fmt.Errorf("extract-jobs: %w", err)
+	}
+	return parsed.Jobs, nil
+}

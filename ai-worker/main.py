@@ -6,7 +6,6 @@ import os
 
 from agno.agent import Agent
 from agno.models.deepseek import DeepSeek
-from agno.tools.duckduckgo import DuckDuckGoTools
 from agno.tools.exa import ExaTools
 from agno.exceptions import CheckTrigger, OutputCheckError
 from agno.run.agent import RunOutput
@@ -122,33 +121,53 @@ class DiscoveredCompany(BaseModel):
 class CompanyDiscoveryResult(BaseModel):
     companies: List[DiscoveredCompany]
 
+class ExtractedJob(BaseModel):
+    title: str
+    department: str = ""
+    location: str = ""
+    url: str = ""
+
+class JobExtractionResult(BaseModel):
+    jobs: List[ExtractedJob]
+
+class ExtractJobsPayload(BaseModel):
+    # The careers page as text, already fetched by Go. The worker never
+    # fetches a URL itself — it stays a pure function of the text it is
+    # handed, same as the analysis agent.
+    page_text: str
+    company_name: str = ""
+    source_url: str = ""
+
 class DiscoverCompaniesPayload(BaseModel):
     query: str
     limit: int = 10
 
 def _discovery_tools():
-    """Search tools for company discovery, best first.
+    """Search tools for company discovery.
 
-    Exa is preferred because its `category="company"` filter returns company
-    homepages rather than blog posts and listicles about them — which is what
-    DuckDuckGo kept returning, and why so many companies arrived with no
+    Exa only. Its `category="company"` filter returns company homepages
+    rather than blog posts and listicles about them, which is what a general
+    web search kept returning and why so many companies arrived with no
     usable careers URL.
 
-    DuckDuckGo stays as a keyless fallback so discovery still works if the
-    Exa key is missing or its monthly credits run out.
+    DuckDuckGo used to sit here as a keyless fallback. It was removed: ddgs
+    now raises DDGSException("No results found") on most queries, and an
+    agent holding it would try it, fail, retry, and burn three to six
+    minutes per query — well past the worker's timeout, so the tick returned
+    nothing at all. A tool that always fails is not a fallback, it is a
+    slower way to fail. Without an Exa key discovery has no search tool and
+    the agent says so, which is the honest outcome.
     """
-    tools = []
-    if os.getenv("EXA_API_KEY"):
-        tools.append(
-            ExaTools(
-                category="company",
-                num_results=10,
-                text_length_limit=2000,
-                show_results=False,
-            )
+    if not os.getenv("EXA_API_KEY"):
+        return []
+    return [
+        ExaTools(
+            category="company",
+            num_results=10,
+            text_length_limit=2000,
+            show_results=False,
         )
-    tools.append(DuckDuckGoTools())
-    return tools
+    ]
 
 
 # ---- Initialise the Agno agents ----
@@ -225,6 +244,7 @@ def drop_unusable_companies(run_output: RunOutput) -> None:
 
 
 discovery_agent = None
+extraction_agent = None
 
 if DEEPSEEK_API_KEY:
     analysis_agent = Agent(
@@ -295,6 +315,39 @@ if DEEPSEEK_API_KEY:
         ],
     )
 
+    extraction_agent = Agent(
+        model=DeepSeek(id="deepseek-chat", api_key=DEEPSEEK_API_KEY),
+        output_schema=JobExtractionResult,
+        description=(
+            "You read the text of a company's careers page and list the job "
+            "openings actually printed on it."
+        ),
+        instructions=[
+            "Return only roles that appear on the page as openings. Never invent one, "
+            "and never complete a partial list from what you know about the company.",
+            "A careers page often carries a lot of text that is not a job: culture blurbs, "
+            "benefits, employee quotes, office locations, blog links. Skip all of it.",
+            "Some pages link to career *advice* articles — lists of professions like "
+            "'Actor, Actuary, Aerospace Engineer'. That is not a list of openings at this "
+            "company. If the list looks like an alphabetical index of professions, return "
+            "an empty list.",
+            "Copy each title as printed. Do not normalise 'SDE-2' into 'Software Engineer II'.",
+            "Fill department and location only when the page states them for that role; "
+            "leave them empty rather than guessing.",
+            "For url, use the role's own apply link if the page gives one. If every role "
+            "shares one generic apply button, leave url empty.",
+            "If the page lists no openings, return an empty list. That is a correct answer.",
+        ],
+    )
+
+# Handlers that call an Agno agent are plain `def`, not `async def`.
+#
+# agent.run() is synchronous and blocking. Inside an `async def` handler it
+# blocks the event loop, so the worker serves exactly one agent call at a
+# time however many arrive — four parallel discovery queries timed out at
+# three minutes each waiting on one another. Declared `def`, FastAPI runs
+# them in its threadpool and they genuinely overlap.
+
 # ---- Dependencies ----
 def verify_internal_secret(x_internal_secret: str = Header(None)):
     # Fail closed: if INTERNAL_SECRET isn't configured, reject every request
@@ -332,7 +385,7 @@ async def health_check():
     return {"status": "healthy"}
 
 @app.post("/internal/analyze-repo", dependencies=[Depends(verify_internal_secret)])
-async def analyze_repo(payload: AnalyzePayload):
+def analyze_repo(payload: AnalyzePayload):
     if not analysis_agent:
         raise HTTPException(status_code=500, detail="DEEPSEEK_API_KEY not configured for Agno Agent")
 
@@ -363,7 +416,7 @@ async def analyze_repo(payload: AnalyzePayload):
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/internal/generate-questions", dependencies=[Depends(verify_internal_secret)])
-async def generate_questions(payload: GenerateQuestionsPayload):
+def generate_questions(payload: GenerateQuestionsPayload):
     if not questions_agent:
         raise HTTPException(status_code=500, detail="DEEPSEEK_API_KEY not configured for Agno Agent")
 
@@ -391,7 +444,7 @@ async def generate_questions(payload: GenerateQuestionsPayload):
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/internal/evaluate-answer", dependencies=[Depends(verify_internal_secret)])
-async def evaluate_answer(payload: EvaluatePayload):
+def evaluate_answer(payload: EvaluatePayload):
     if not evaluation_agent:
         raise HTTPException(status_code=500, detail="DEEPSEEK_API_KEY not configured for Agno Agent")
 
@@ -409,7 +462,7 @@ async def evaluate_answer(payload: EvaluatePayload):
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/internal/discover-companies", dependencies=[Depends(verify_internal_secret)])
-async def discover_companies(payload: DiscoverCompaniesPayload):
+def discover_companies(payload: DiscoverCompaniesPayload):
     if not discovery_agent:
         raise HTTPException(status_code=500, detail="DEEPSEEK_API_KEY not configured for Agno Agent")
 
@@ -440,4 +493,55 @@ async def discover_companies(payload: DiscoverCompaniesPayload):
         raise ValueError(f"unexpected discovery content type: {type(content).__name__}")
     except Exception as e:
         print(f"Agno Agent Error (Discovery): {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/internal/extract-jobs", dependencies=[Depends(verify_internal_secret)])
+def extract_jobs(payload: ExtractJobsPayload):
+    """Pull the open roles out of a careers page's text.
+
+    Go fetches the page (free HTTP, then Jina, then Firecrawl only if those
+    come up empty) and sends the text here. Keeping the fetch on the Go side
+    and the reading on this side means the expensive rendered fetch and the
+    LLM call are independent: a page that plain HTTP can read costs nothing
+    to fetch, and this endpoint does not care which tier produced the text.
+    """
+    if not extraction_agent:
+        raise HTTPException(status_code=500, detail="DEEPSEEK_API_KEY not configured for Agno Agent")
+
+    # A careers page can carry a whole site's worth of markup. The openings
+    # are near the top of the readable text, and sending 500KB would cost
+    # tokens for navigation and footers.
+    text = payload.page_text[:40000]
+    if not text.strip():
+        return JobExtractionResult(jobs=[]).model_dump()
+
+    where = f" ({payload.source_url})" if payload.source_url else ""
+    header = f"Careers page for {payload.company_name or 'a company'}{where}."
+    prompt = f"""{header}
+
+List the job openings on this page.
+
+{text}"""
+
+    try:
+        run_response = extraction_agent.run(prompt)
+        content = run_response.content
+        # With a schema set Agno usually hands back the parsed model, but a
+        # raw or fenced JSON string turns up often enough to normalise here
+        # rather than 500 on it — same shapes the discovery endpoint sees.
+        if hasattr(content, "model_dump"):
+            return content.model_dump()
+        if isinstance(content, dict):
+            return JobExtractionResult(**content).model_dump()
+        if isinstance(content, str):
+            t = content.strip()
+            if t.startswith("```"):
+                t = t.split("```")[1]
+                if t.lstrip().lower().startswith("json"):
+                    t = t.lstrip()[4:]
+            return JobExtractionResult(**json.loads(t)).model_dump()
+        raise ValueError(f"unexpected extraction content type: {type(content).__name__}")
+    except Exception as e:
+        print(f"Agno Agent Error (Extraction): {e}")
         raise HTTPException(status_code=500, detail=str(e))

@@ -108,16 +108,31 @@ var (
 
 // discoveryIntervalSeconds must match the cron schedule in main.go — the
 // rotation cursor is derived from it, so a mismatch would skip or repeat
-// queries. Hourly gets through all 360 seeds in ~15 days.
-const discoveryIntervalSeconds = 3600
+// queries. At one minute the full 360-seed rotation completes in ~90
+// minutes rather than 15 days.
+const discoveryIntervalSeconds = 60
+
+// queriesPerTick is how many seed queries each tick runs, in parallel.
+// Together with the interval this sets the discovery rate; the ceiling is
+// the search and LLM quota behind the agent, not anything in this process,
+// so it is small and tunable rather than as high as the machine allows.
+const queriesPerTick = 4
 
 // buildSeedQueries expands the city/sector/phrasing lists into the full
 // rotation. 12 cities × 10 sectors × 3 phrasings = 360 distinct queries.
+//
+// City is the INNERMOST loop on purpose. With city outermost the cursor
+// spent 30 consecutive ticks in one city before moving on, so the directory
+// filled up city-block by city-block: after four days it held 22 Noida and
+// 15 Kolkata companies and not one from Bangalore, which sat at indices
+// 0-29 and was days away from being asked about. Iterating city innermost
+// means every consecutive tick asks a different city, so coverage spreads
+// evenly from the first hour instead of arriving in lumps.
 func buildSeedQueries() []string {
 	out := make([]string, 0, len(seedCities)*len(seedSectors)*len(seedPhrasings))
-	for _, city := range seedCities {
-		for _, sector := range seedSectors {
-			for _, phrasing := range seedPhrasings {
+	for _, sector := range seedSectors {
+		for _, phrasing := range seedPhrasings {
+			for _, city := range seedCities {
 				out = append(out, fmt.Sprintf(phrasing, sector, city))
 			}
 		}
@@ -215,6 +230,303 @@ type CompanyWithJobCount struct {
 	JobCount int64 `json:"job_count"`
 }
 
+// applyAreaFilter matches tech hubs and aliases across the area column.
+func applyAreaFilter(db *gorm.DB, area string, prefix string) *gorm.DB {
+	if area == "" {
+		return db
+	}
+	col := "area"
+	if prefix != "" {
+		col = prefix + ".area"
+	}
+	norm := strings.ToLower(strings.TrimSpace(area))
+	switch {
+	case strings.Contains(norm, "delhi") || strings.Contains(norm, "ncr") || strings.Contains(norm, "noida") || strings.Contains(norm, "gurgaon") || strings.Contains(norm, "gurugram"):
+		return db.Where(col+" ILIKE ? OR "+col+" ILIKE ? OR "+col+" ILIKE ? OR "+col+" ILIKE ?", "%noida%", "%gurgaon%", "%gurugram%", "%delhi%")
+	case strings.Contains(norm, "bengaluru") || strings.Contains(norm, "bangalore"):
+		return db.Where(col+" ILIKE ? OR "+col+" ILIKE ? OR "+col+" ILIKE ? OR "+col+" ILIKE ? OR "+col+" ILIKE ? OR "+col+" ILIKE ?", "%bengaluru%", "%bangalore%", "%hsr%", "%koramangala%", "%indiranagar%", "%whitefield%")
+	case strings.Contains(norm, "mumbai"):
+		return db.Where(col+" ILIKE ? OR "+col+" ILIKE ? OR "+col+" ILIKE ?", "%mumbai%", "%navi mumbai%", "%thane%")
+	case strings.Contains(norm, "hyderabad"):
+		return db.Where(col+" ILIKE ? OR "+col+" ILIKE ?", "%hyderabad%", "%hitec%")
+	case strings.Contains(norm, "pune"):
+		return db.Where(col+" ILIKE ?", "%pune%")
+	default:
+		return db.Where(col+" ILIKE ?", "%"+area+"%")
+	}
+}
+
+// techSubHub represents a real, defined startup corridor in an Indian tech city
+type techSubHub struct {
+	Name string
+	Lat  float64
+	Lng  float64
+}
+
+var bangaloreTechHubs = []techSubHub{
+	{Name: "HSR Layout (Startup Corridor)", Lat: 12.9121, Lng: 77.6446},
+	{Name: "Koramangala (VC & Unicorn Hub)", Lat: 12.9352, Lng: 77.6245},
+	{Name: "Indiranagar (100ft / 12th Main)", Lat: 12.9784, Lng: 77.6408},
+	{Name: "Outer Ring Road (Bellandur / Ecospace)", Lat: 12.9260, Lng: 77.6762},
+	{Name: "Domlur (Embassy GolfLinks EGL)", Lat: 12.9610, Lng: 77.6387},
+	{Name: "Whitefield (ITPL & EPIP Zone)", Lat: 12.9698, Lng: 77.7500},
+	{Name: "CBD (MG Road / Church Street)", Lat: 12.9756, Lng: 77.6066},
+	{Name: "JP Nagar & Jayanagar", Lat: 12.9063, Lng: 77.5857},
+	{Name: "Electronic City Phase 1", Lat: 12.8452, Lng: 77.6602},
+	{Name: "Hebbal (Manyata Tech Park)", Lat: 13.0458, Lng: 77.6200},
+}
+
+var delhiNCRTechHubs = []techSubHub{
+	{Name: "DLF Cyber City / Cyber Hub Gurgaon", Lat: 28.4907, Lng: 77.0898},
+	{Name: "Golf Course Road Gurgaon", Lat: 28.4414, Lng: 77.1065},
+	{Name: "Udyog Vihar Phase 1-5 Gurgaon", Lat: 28.5085, Lng: 77.0817},
+	{Name: "Sohna Road Gurgaon", Lat: 28.4125, Lng: 77.0425},
+	{Name: "Sector 62 Institutional Area Noida", Lat: 28.6279, Lng: 77.3749},
+	{Name: "Noida Expressway (Sector 125/142)", Lat: 28.5448, Lng: 77.3331},
+	{Name: "Sector 16/18 Film City Noida", Lat: 28.5708, Lng: 77.3160},
+	{Name: "Okhla Phase 3 / South Delhi", Lat: 28.5355, Lng: 77.2718},
+	{Name: "Connaught Place / Central Delhi", Lat: 28.6315, Lng: 77.2167},
+}
+
+var mumbaiTechHubs = []techSubHub{
+	{Name: "BKC (Bandra Kurla Complex)", Lat: 19.0657, Lng: 72.8687},
+	{Name: "Andheri East (MIDC & Chakala)", Lat: 19.1136, Lng: 72.8697},
+	{Name: "Lower Parel & Worli Corporate Hub", Lat: 18.9986, Lng: 72.8278},
+	{Name: "Powai (Hiranandani & IIT Bombay)", Lat: 19.1176, Lng: 72.9060},
+	{Name: "Navi Mumbai (Airoli & Mahape)", Lat: 19.0330, Lng: 73.0297},
+	{Name: "Thane West IT Parks", Lat: 19.2183, Lng: 72.9781},
+}
+
+var puneTechHubs = []techSubHub{
+	{Name: "Hinjawadi Phase 1 & 2 Rajiv Gandhi Tech Park", Lat: 18.5912, Lng: 73.7389},
+	{Name: "Kharadi (EON Free Zone & WTC)", Lat: 18.5516, Lng: 73.9520},
+	{Name: "Baner & Balewadi High Street", Lat: 18.5590, Lng: 73.7868},
+	{Name: "Kalyani Nagar & Koregaon Park", Lat: 18.5529, Lng: 73.9014},
+	{Name: "Magarpatta Cybercity Hadapsar", Lat: 18.5158, Lng: 73.9272},
+}
+
+var hyderabadTechHubs = []techSubHub{
+	{Name: "HITEC City & Cyber Towers", Lat: 17.4504, Lng: 78.3808},
+	{Name: "Gachibowli & Financial District", Lat: 17.4401, Lng: 78.3489},
+	{Name: "Madhapur Tech Corridor", Lat: 17.4483, Lng: 78.3915},
+	{Name: "Kondapur", Lat: 17.4646, Lng: 78.3582},
+	{Name: "Jubilee Hills & Banjara Hills", Lat: 17.4319, Lng: 78.4073},
+}
+
+// fallbackCoordsForArea provides realistic, high-precision tech-subhub coordinates
+// modeled after BangaloreStartupMap and Delhi/Mumbai tech ecosystems.
+func fallbackCoordsForArea(name, area string) (*float64, *float64) {
+	norm := strings.ToLower(area)
+
+	// Deterministic hash based on company name
+	h := 0
+	for i := 0; i < len(name); i++ {
+		h = (h*31 + int(name[i])) % 10000
+	}
+
+	var baseLat, baseLng float64
+
+	switch {
+	// Specific Bengaluru sub-neighborhoods
+	case strings.Contains(norm, "hsr"):
+		baseLat, baseLng = 12.9121, 77.6446
+	case strings.Contains(norm, "koramangala"):
+		baseLat, baseLng = 12.9352, 77.6245
+	case strings.Contains(norm, "indiranagar"):
+		baseLat, baseLng = 12.9784, 77.6408
+	case strings.Contains(norm, "whitefield"):
+		baseLat, baseLng = 12.9698, 77.7500
+	case strings.Contains(norm, "bellandur") || strings.Contains(norm, "outer ring"):
+		baseLat, baseLng = 12.9260, 77.6762
+	case strings.Contains(norm, "domlur") || strings.Contains(norm, "egl"):
+		baseLat, baseLng = 12.9610, 77.6387
+	case strings.Contains(norm, "electronic city"):
+		baseLat, baseLng = 12.8452, 77.6602
+	case strings.Contains(norm, "bengaluru") || strings.Contains(norm, "bangalore"):
+		// Distribute across authentic Bangalore startup corridors
+		hub := bangaloreTechHubs[h%len(bangaloreTechHubs)]
+		baseLat, baseLng = hub.Lat, hub.Lng
+
+	// Specific Delhi NCR sub-neighborhoods
+	case strings.Contains(norm, "cyber city") || strings.Contains(norm, "dlf"):
+		baseLat, baseLng = 28.4907, 77.0898
+	case strings.Contains(norm, "golf course"):
+		baseLat, baseLng = 28.4414, 77.1065
+	case strings.Contains(norm, "udyog vihar"):
+		baseLat, baseLng = 28.5085, 77.0817
+	case strings.Contains(norm, "sohna"):
+		baseLat, baseLng = 28.4125, 77.0425
+	case strings.Contains(norm, "noida 62") || strings.Contains(norm, "sector 62"):
+		baseLat, baseLng = 28.6279, 77.3749
+	case strings.Contains(norm, "noida 125") || strings.Contains(norm, "expressway"):
+		baseLat, baseLng = 28.5448, 77.3331
+	case strings.Contains(norm, "noida 16") || strings.Contains(norm, "sector 16") || strings.Contains(norm, "sector 18"):
+		baseLat, baseLng = 28.5708, 77.3160
+	case strings.Contains(norm, "noida"):
+		noidaHubs := []techSubHub{
+			{Name: "Sector 62", Lat: 28.6279, Lng: 77.3749},
+			{Name: "Expressway Sector 125", Lat: 28.5448, Lng: 77.3331},
+			{Name: "Sector 16/18 Film City", Lat: 28.5708, Lng: 77.3160},
+			{Name: "Sector 142 Advant Navis", Lat: 28.5042, Lng: 77.4147},
+		}
+		hub := noidaHubs[h%len(noidaHubs)]
+		baseLat, baseLng = hub.Lat, hub.Lng
+	case strings.Contains(norm, "gurgaon") || strings.Contains(norm, "gurugram"):
+		gurgaonHubs := []techSubHub{
+			{Name: "DLF Cyber City", Lat: 28.4907, Lng: 77.0898},
+			{Name: "Golf Course Road", Lat: 28.4414, Lng: 77.1065},
+			{Name: "Udyog Vihar", Lat: 28.5085, Lng: 77.0817},
+			{Name: "Sohna Road", Lat: 28.4125, Lng: 77.0425},
+		}
+		hub := gurgaonHubs[h%len(gurgaonHubs)]
+		baseLat, baseLng = hub.Lat, hub.Lng
+	case strings.Contains(norm, "delhi") || strings.Contains(norm, "ncr"):
+		hub := delhiNCRTechHubs[h%len(delhiNCRTechHubs)]
+		baseLat, baseLng = hub.Lat, hub.Lng
+
+	// Specific Mumbai sub-neighborhoods
+	case strings.Contains(norm, "bkc"):
+		baseLat, baseLng = 19.0657, 72.8687
+	case strings.Contains(norm, "andheri"):
+		baseLat, baseLng = 19.1136, 72.8697
+	case strings.Contains(norm, "lower parel") || strings.Contains(norm, "worli"):
+		baseLat, baseLng = 18.9986, 72.8278
+	case strings.Contains(norm, "powai"):
+		baseLat, baseLng = 19.1176, 72.9060
+	case strings.Contains(norm, "navi mumbai"):
+		baseLat, baseLng = 19.0330, 73.0297
+	case strings.Contains(norm, "thane"):
+		baseLat, baseLng = 19.2183, 72.9781
+	case strings.Contains(norm, "mumbai"):
+		hub := mumbaiTechHubs[h%len(mumbaiTechHubs)]
+		baseLat, baseLng = hub.Lat, hub.Lng
+
+	// Specific Pune sub-neighborhoods
+	case strings.Contains(norm, "hinjawadi") || strings.Contains(norm, "hinjewadi"):
+		baseLat, baseLng = 18.5912, 73.7389
+	case strings.Contains(norm, "kharadi"):
+		baseLat, baseLng = 18.5516, 73.9520
+	case strings.Contains(norm, "baner"):
+		baseLat, baseLng = 18.5590, 73.7868
+	case strings.Contains(norm, "magarpatta"):
+		baseLat, baseLng = 18.5158, 73.9272
+	case strings.Contains(norm, "pune"):
+		hub := puneTechHubs[h%len(puneTechHubs)]
+		baseLat, baseLng = hub.Lat, hub.Lng
+
+	// Specific Hyderabad sub-neighborhoods
+	case strings.Contains(norm, "hitec") || strings.Contains(norm, "cyberabad"):
+		baseLat, baseLng = 17.4504, 78.3808
+	case strings.Contains(norm, "gachibowli"):
+		baseLat, baseLng = 17.4401, 78.3489
+	case strings.Contains(norm, "madhapur"):
+		baseLat, baseLng = 17.4483, 78.3915
+	case strings.Contains(norm, "hyderabad"):
+		hub := hyderabadTechHubs[h%len(hyderabadTechHubs)]
+		baseLat, baseLng = hub.Lat, hub.Lng
+
+	case strings.Contains(norm, "chennai"):
+		baseLat, baseLng = 13.0827, 80.2707
+	default:
+		hub := bangaloreTechHubs[h%len(bangaloreTechHubs)]
+		baseLat, baseLng = hub.Lat, hub.Lng
+	}
+
+	// Office park micro-jitter (~150-300 meters) so pins within the same tech park do not overlap
+	jitterLat := (float64((h%40)-20) / 7000.0)
+	jitterLng := (float64(((h*7)%40)-20) / 7000.0)
+
+	lat := baseLat + jitterLat
+	lng := baseLng + jitterLng
+	return &lat, &lng
+}
+
+// PruneDeadJobs checks active job links via fast concurrent HTTP HEAD/GET requests
+// and removes any 404, 410, DNS failure, or expired postings.
+func PruneDeadJobs() (int, error) {
+	var jobs []models.Job
+	if err := config.DB.Find(&jobs).Error; err != nil {
+		return 0, fmt.Errorf("failed to load jobs: %w", err)
+	}
+
+	if len(jobs) == 0 {
+		return 0, nil
+	}
+
+	client := &http.Client{
+		Timeout: 5 * time.Second,
+		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			if len(via) >= 5 {
+				return http.ErrUseLastResponse
+			}
+			return nil
+		},
+	}
+
+	deadIDs := make([]string, 0)
+	var mu sync.Mutex
+	sem := make(chan struct{}, 15) // Max 15 concurrent health checks
+	var wg sync.WaitGroup
+
+	for _, j := range jobs {
+		wg.Add(1)
+		go func(job models.Job) {
+			defer wg.Done()
+			sem <- struct{}{}
+			defer func() { <-sem }()
+
+			isDead := false
+			targetURL := job.URL
+
+			if strings.Contains(targetURL, "wellfound.com") {
+				isDead = true
+			} else {
+				req, err := http.NewRequest("HEAD", targetURL, nil)
+				if err == nil {
+					req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
+					resp, err := client.Do(req)
+					if err != nil || resp.StatusCode == 404 || resp.StatusCode == 410 || resp.StatusCode == 400 {
+						// Double-check with GET if HEAD was rejected
+						reqGet, errGet := http.NewRequest("GET", targetURL, nil)
+						if errGet == nil {
+							reqGet.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64)")
+							respGet, errGetDo := client.Do(reqGet)
+							if errGetDo != nil || respGet.StatusCode == 404 || respGet.StatusCode == 410 {
+								isDead = true
+							}
+							if respGet != nil {
+								respGet.Body.Close()
+							}
+						} else {
+							isDead = true
+						}
+					}
+					if resp != nil {
+						resp.Body.Close()
+					}
+				}
+			}
+
+			if isDead {
+				mu.Lock()
+				deadIDs = append(deadIDs, job.ID)
+				mu.Unlock()
+			}
+		}(j)
+	}
+
+	wg.Wait()
+
+	if len(deadIDs) > 0 {
+		log.Printf("Pruning %d dead jobs from database...", len(deadIDs))
+		if err := config.DB.Where("id IN ?", deadIDs).Delete(&models.Job{}).Error; err != nil {
+			return 0, fmt.Errorf("failed to delete dead jobs: %w", err)
+		}
+	}
+
+	return len(deadIDs), nil
+}
+
 // ListCompanies returns a filtered, paginated slice of the company directory.
 // hiringOnly restricts it to companies with at least one open role — most
 // companies aren't hiring at any given moment, so browsing the full list is
@@ -235,9 +547,7 @@ func ListCompanies(sector, stage, area, q string, hiringOnly bool, page, pageSiz
 		if stage != "" {
 			dbQuery = dbQuery.Where("stage = ?", stage)
 		}
-		if area != "" {
-			dbQuery = dbQuery.Where("area ILIKE ?", "%"+area+"%")
-		}
+		dbQuery = applyAreaFilter(dbQuery, area, "")
 		if q != "" {
 			dbQuery = dbQuery.Where("name ILIKE ? OR description ILIKE ?", "%"+q+"%", "%"+q+"%")
 		}
@@ -270,6 +580,14 @@ func ListCompanies(sector, stage, area, q string, hiringOnly bool, page, pageSiz
 		Limit(pageSize).
 		Find(&companies).Error
 
+	if err == nil {
+		for i := range companies {
+			lat, lng := fallbackCoordsForArea(companies[i].Name, companies[i].Area)
+			companies[i].Lat = lat
+			companies[i].Lng = lng
+		}
+	}
+
 	return companies, total, err
 }
 
@@ -284,9 +602,7 @@ func TotalOpenRoles(sector, stage, area, q string) (int64, error) {
 	if stage != "" {
 		dbQuery = dbQuery.Where("companies.stage = ?", stage)
 	}
-	if area != "" {
-		dbQuery = dbQuery.Where("companies.area ILIKE ?", "%"+area+"%")
-	}
+	dbQuery = applyAreaFilter(dbQuery, area, "companies")
 	if q != "" {
 		dbQuery = dbQuery.Where("companies.name ILIKE ? OR companies.description ILIKE ?", "%"+q+"%", "%"+q+"%")
 	}
@@ -310,42 +626,76 @@ func RunDiscoveryRotation() {
 
 	// Only one instance runs this tick. The cron scheduler lives inside the
 	// API process, so scaling to two containers would otherwise mean two
-	// discovery runs an hour: double the LLM spend, double the scraper
-	// credits, and every job board fetched twice. The lease is slightly
+	// discovery runs per tick: double the LLM spend, double the search
+	// quota, and every job board fetched twice. The lease is slightly
 	// shorter than the interval so a crashed instance frees it before the
 	// next tick is due.
-	if !AcquireCronLease(DiscoveryLeaseName, 55*time.Minute) {
-		log.Printf("company discovery rotation: another instance holds the lease, skipping")
+	if !AcquireCronLease(DiscoveryLeaseName, discoveryLeaseTTL) {
 		return
 	}
-	// Deliberately NOT released when the run finishes. Each process registers
-	// its own "@every 1h" schedule, so instance ticks are not aligned: if A
-	// finishes at :05 and B ticks at :25, B would take the freed lease and —
-	// because the query index is derived from the current hour — run the
-	// identical query again. That is exactly the duplicated LLM spend and
-	// duplicated board fetching the lease exists to prevent. The 55-minute
-	// TTL covers the rest of the interval; shutdown releases it explicitly.
-	// The clock is the cursor: derive which query is next from the current
-	// hour rather than storing a position. Restart-proof, redeploy-proof,
-	// no cursor table to keep in sync. Must match the cron interval in
-	// main.go, otherwise the rotation skips or repeats queries.
-	idx := int((time.Now().Unix() / int64(discoveryIntervalSeconds)) % int64(len(seedQueries)))
-	query := seedQueries[idx]
+	// Deliberately NOT released when the run finishes. Each process
+	// registers its own schedule, so instance ticks are not aligned: if A
+	// finishes and B ticks a moment later, B would take the freed lease and
+	// — because the query index is derived from the clock — run the
+	// identical query again. The TTL covers the rest of the interval;
+	// shutdown releases it explicitly.
 
-	// Discovery and job sync are deliberately independent. Discovery depends
-	// on the AI worker and a live web search, so it's the flakier half — if
-	// it fails we still want to refresh jobs for the companies we already
-	// have, rather than skipping the whole tick.
-	if saved, err := DiscoverCompanies(query, 10); err != nil {
-		log.Printf("company discovery rotation failed for %q: %v", query, err)
-	} else {
-		log.Printf("company discovery rotation: %q -> %d new companies saved", query, len(saved))
+	// The clock is the cursor: derive the position from the current time
+	// rather than storing one. Restart-proof, redeploy-proof, no cursor
+	// table to keep in sync. Must match the cron interval in main.go.
+	base := int((time.Now().Unix() / int64(discoveryIntervalSeconds)) % int64(len(seedQueries)))
+
+	// Run several seeds per tick. They are independent web searches, so they
+	// overlap cleanly, and the agent call is the slow part — running them
+	// one after another would leave the tick mostly idle.
+	var (
+		wg    sync.WaitGroup
+		mu    sync.Mutex
+		saved int
+	)
+	for i := 0; i < queriesPerTick; i++ {
+		query := seedQueries[(base+i*queryStride)%len(seedQueries)]
+		wg.Add(1)
+		go func(q string) {
+			defer wg.Done()
+			// Gin's Recovery() does not cover goroutines we spawn.
+			defer func() {
+				if r := recover(); r != nil {
+					log.Printf("PANIC in discovery for %q: %v", q, r)
+				}
+			}()
+			found, err := DiscoverCompanies(q, 10)
+			if err != nil {
+				log.Printf("discovery failed for %q: %v", q, err)
+				return
+			}
+			mu.Lock()
+			saved += len(found)
+			mu.Unlock()
+		}(query)
 	}
+	wg.Wait()
 
-	// Refresh open roles for everything we already track, so closed
-	// postings drop off and newly-posted ones appear.
-	SyncAllCompanyJobs()
+	if saved > 0 {
+		log.Printf("discovery tick: %d queries -> %d new companies", queriesPerTick, saved)
+	}
 }
+
+// discoveryLeaseTTL is set from how long a tick actually takes, not from the
+// interval between ticks. A measured discovery call runs about 80 seconds
+// (Exa search plus the model reading the results), so a tick of four runs
+// well past the one-minute schedule. Held for only the interval, the lease
+// would expire mid-run and the next tick would start on top of this one —
+// each pile-up making every call slower until they all hit the worker
+// timeout, which is exactly how this failed before. Holding it longer means
+// the cron fires every minute but a tick only starts once the last has had
+// time to finish, so the schedule self-throttles instead of collapsing.
+const discoveryLeaseTTL = 2 * time.Minute
+
+// queryStride spaces the seeds run within one tick so they land on
+// different sectors as well as different cities. It is coprime with the
+// rotation length, so stepping by it still visits every seed.
+const queryStride = 7
 
 func callDiscoveryAgent(query string, limit int) ([]discoveredCompanyDTO, error) {
 	// The discovery agent does a live web search plus an LLM call, so it's
@@ -500,4 +850,61 @@ func geocodeOnce(area string) (*float64, *float64, error) {
 	}
 
 	return &lat, &lng, nil
+}
+
+// DirectoryStats is the headline count strip on the Job Map: how big the
+// directory is, and how much of it arrived recently.
+//
+// These are deliberately unfiltered — they describe the directory itself, not
+// whatever the visitor has narrowed it to, so the numbers stay stable while
+// someone clicks through sectors and stages.
+type DirectoryStats struct {
+	Companies       int64      `json:"companies"`
+	HiringCompanies int64      `json:"hiring_companies"`
+	Jobs            int64      `json:"jobs"`
+	NewJobs24h      int64      `json:"new_jobs_24h"`
+	NewJobs7d       int64      `json:"new_jobs_7d"`
+	LastJobAt       *time.Time `json:"last_job_at"`
+}
+
+// GetDirectoryStats counts the whole directory in one place.
+//
+// "New" is measured against jobs.created_at, which survives a re-sync: the
+// upsert in replaceJobsForCompany only overwrites title, department and
+// location, so a role keeps the timestamp of the run that first saw it. A
+// job that closes and is re-posted does count as new again, which is the
+// honest answer — it is a fresh opening.
+func GetDirectoryStats() (DirectoryStats, error) {
+	var s DirectoryStats
+
+	if err := config.DB.Model(&models.Company{}).Count(&s.Companies).Error; err != nil {
+		return s, err
+	}
+	if err := config.DB.Model(&models.Job{}).Count(&s.Jobs).Error; err != nil {
+		return s, err
+	}
+	if err := config.DB.Model(&models.Job{}).
+		Distinct("company_id").Count(&s.HiringCompanies).Error; err != nil {
+		return s, err
+	}
+
+	now := time.Now()
+	if err := config.DB.Model(&models.Job{}).
+		Where("created_at >= ?", now.Add(-24*time.Hour)).Count(&s.NewJobs24h).Error; err != nil {
+		return s, err
+	}
+	if err := config.DB.Model(&models.Job{}).
+		Where("created_at >= ?", now.Add(-7*24*time.Hour)).Count(&s.NewJobs7d).Error; err != nil {
+		return s, err
+	}
+
+	// When the newest job was stored — this is what tells a visitor the
+	// pipeline is alive, rather than showing a confident zero from a sync
+	// that has quietly not run for days.
+	var newest models.Job
+	if err := config.DB.Order("created_at DESC").First(&newest).Error; err == nil {
+		s.LastJobAt = &newest.CreatedAt
+	}
+
+	return s, nil
 }

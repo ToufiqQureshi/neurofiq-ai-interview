@@ -216,6 +216,8 @@ func main() {
 	})
 
 	// 6. Auth routes.
+	r.POST("/auth/register", controllers.HandleRegister)
+	r.POST("/auth/login", controllers.HandleLogin)
 	r.GET("/auth/github/login", auth.HandleGithubLogin)
 	r.GET("/auth/github/callback", auth.HandleGithubCallback)
 	r.GET("/auth/me", auth.HandleAuthMe)
@@ -223,6 +225,9 @@ func main() {
 
 	// Public company directory ("Job Map") — no auth required.
 	r.GET("/api/companies", controllers.HandleGetCompanies)
+	r.GET("/api/companies/stats", controllers.HandleGetDirectoryStats)
+	r.POST("/api/jobs/prune-dead", controllers.HandlePruneDeadJobs)
+	r.GET("/api/jobs/prune-dead", controllers.HandlePruneDeadJobs)
 	r.GET("/api/companies/:id", controllers.HandleGetCompanyByID)
 	r.GET("/api/companies/:id/jobs", controllers.HandleGetCompanyJobs)
 
@@ -234,6 +239,7 @@ func main() {
 	api := r.Group("/api")
 	api.Use(auth.AuthMiddleware())
 	{
+		api.POST("/user/onboarding", controllers.HandleOnboarding)
 		api.GET("/repos", controllers.HandleGetRepos)
 		api.GET("/interviews/questions", controllers.HandleGetQuestions)
 		api.GET("/reports", controllers.HandleGetReports)
@@ -263,14 +269,28 @@ func main() {
 	// the cron lease inside RunDiscoveryRotation makes sure only one instance
 	// actually does the work.
 	go safely("startup discovery", services.RunDiscoveryRotation)
+	go safely("startup job sync", services.SyncAllCompanyJobs)
 
 	scheduler := cron.New()
-	// Hourly, matching services.discoveryIntervalSeconds — the rotation
-	// cursor is derived from that interval, so the two must agree.
-	if _, err := scheduler.AddFunc("@every 1h", func() {
+	// Every minute, matching services.discoveryIntervalSeconds — the
+	// rotation cursor is derived from that interval, so the two must agree.
+	if _, err := scheduler.AddFunc("@every 1m", func() {
 		safely("discovery rotation", services.RunDiscoveryRotation)
 	}); err != nil {
 		log.Fatalf("Failed to schedule discovery rotation: %v", err)
+	}
+	// Job sync runs on its own, slower schedule.
+	//
+	// It used to be the tail of the discovery tick, which was fine at one
+	// tick an hour. At one tick a minute it would re-fetch every company's
+	// board 60 times an hour — pointless, since boards do not change that
+	// often, and a good way to get rate-limited by the ATS providers we
+	// depend on. Discovery is about finding companies; this is about
+	// keeping the ones we have fresh, and the two want different rhythms.
+	if _, err := scheduler.AddFunc("@every 20m", func() {
+		safely("job sync", services.SyncAllCompanyJobs)
+	}); err != nil {
+		log.Fatalf("Failed to schedule job sync: %v", err)
 	}
 	// Housekeeping: reclaim abandoned analyses and forget idle rate-limit
 	// buckets. Cheap, and it keeps a long-running process from drifting.

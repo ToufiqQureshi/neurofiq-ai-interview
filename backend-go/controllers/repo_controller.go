@@ -23,7 +23,17 @@ const freeTierAnalyses = 3
 func HandleGetRepos(c *gin.Context) {
 	// Extracted from the session by AuthMiddleware
 	userID := c.MustGet("user_id").(string)
-	token := c.MustGet("github_token").(string)
+	rawToken, exists := c.Get("github_token")
+	if !exists || rawToken == nil {
+		c.JSON(http.StatusOK, gin.H{
+			"repos":           []interface{}{},
+			"analysis_status": map[string]string{},
+			"analyses_used":   0,
+			"analyses_limit":  freeTierAnalyses,
+		})
+		return
+	}
+	token := rawToken.(string)
 
 	// Fetch repos from GitHub through the ETag cache service.
 	repos, err := services.GetReposWithETag(userID, token)
@@ -60,7 +70,12 @@ func HandleGetRepos(c *gin.Context) {
 // HandleAnalyzeRepo triggers the repo analysis pipeline.
 func HandleAnalyzeRepo(c *gin.Context) {
 	userID := c.MustGet("user_id").(string)
-	token := c.MustGet("github_token").(string)
+	rawToken, exists := c.Get("github_token")
+	if !exists || rawToken == nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Please connect your GitHub account to analyze repositories"})
+		return
+	}
+	token := rawToken.(string)
 
 	var reqBody struct {
 		RepoFullName string `json:"repo_full_name" binding:"required"`
