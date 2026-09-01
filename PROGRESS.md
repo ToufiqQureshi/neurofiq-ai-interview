@@ -14,6 +14,7 @@
 - Added live "Clean Dead Jobs" instant action button on directory header with feedback toasts.
 - Implemented Pan-India Tech Hub filter switcher (All Hubs, Bengaluru, Delhi NCR, Mumbai, Hyderabad, Pune) with instant viewport flying and dynamic cluster zoom.
 - Upgraded Leaflet map to 3D-styled CartoDB/OpenStreetMap tiles and added 1-Click "🎯 Practice AI Mock Interview" action within map popups and job listings.
+- Review pass on the board-discovery branch, six fixes: `resolveCompanyWebsite` fallback to `WebSearch`, link scan department filters, empty read retry guards, and rate-limit controls for `POST /api/companies/discover`.
 
 ## 2026-08-31
 - **Email + Password Authentication & Bcrypt Password Hashing**: Implemented `/auth/register` and `/auth/login` endpoints in Go with `bcrypt.GenerateFromPassword` and `bcrypt.CompareHashAndPassword`, setting session cookies on registration and login.

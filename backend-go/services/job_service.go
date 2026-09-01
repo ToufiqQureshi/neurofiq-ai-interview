@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"html"
 	"io"
 	"log"
 	"net/http"
@@ -42,19 +43,20 @@ var (
 	darwinboxLinkRe = regexp.MustCompile(`([a-zA-Z0-9-]+)\.darwinbox\.(?:in|com)`)
 )
 
-// atsRecheckInterval is how long to wait before retrying detection on a
-// company that came back with no ATS. Keeps the scraper's monthly credit
-// usage proportional to new companies, not to total directory size.
+// atsRecheckInterval is how long a company with a known board is left alone
+// before its detection is revisited. Its roles are still re-synced every
+// tick — this only governs re-detection.
 const atsRecheckInterval = 7 * 24 * time.Hour
+
+// atsRetryInterval is the shorter wait for a company we could not find a
+// board for. Detection improves (a new provider, a better careers-page
+// reader), and a week-long freeze meant those improvements reached the
+// directory a week late.
+const atsRetryInterval = 12 * time.Hour
 
 // workdaySiteCandidates are the job-site ids Workday tenants commonly use.
 // Detection probes these in order and keeps the first that returns jobs.
 var workdaySiteCandidates = []string{"External", "External_Careers", "careers", "Careers_External", "External_Career_Site"}
-
-// atsProviders is the detection order used when falling back to guessing a
-// board slug from the company name. Greenhouse and Lever go first because
-// they're the most common in this dataset.
-var atsProviders = []string{"greenhouse", "lever", "smartrecruiters", "ashby", "workable"}
 
 type greenhouseJob struct {
 	Title       string `json:"title"`
@@ -205,16 +207,23 @@ func scanForATS(content string) (atsType, atsSlug string) {
 // uses, so real open roles can be pulled from its public API rather than
 // just linking out to the careers page.
 //
-// Three tiers, cheapest first — the expensive one only runs when the free
-// ones come up empty:
+// Both tiers read the company's OWN careers page and look for the board link
+// the company embedded there itself. That link is evidence, not inference —
+// it is how the page renders its own listings — so a match is always the
+// right company:
 //
-//  1. Plain HTTP fetch of the careers page, scanned for an embedded board
-//     link. Free and instant. Works whenever the page is server-rendered.
-//  2. Hosted render (Firecrawl, falling back to Jina) for pages that build
-//     their content in the browser, where a plain fetch returns an empty
-//     shell. This is the only step that consumes a paid-tier credit.
-//  3. Guess the board slug from the company name and verify it against each
-//     provider's real API. Free.
+//  1. Plain HTTP fetch. Free and instant, works on server-rendered pages.
+//  2. Hosted render (Jina first, Firecrawl only if Jina fails) for pages
+//     that build their listings in the browser, where a plain fetch returns
+//     an empty shell.
+//
+// What this deliberately does NOT do is guess a slug from the company name.
+// That guess was wrong in a way that is worse than finding nothing: board
+// slugs are not unique across companies, and the check only asked "did any
+// jobs come back", never "are they this company's". jobs.lever.co/cred
+// returns a full, healthy job list — for CreditVidya, not for CRED. The
+// directory then showed one company's roles under another's name. A company
+// with no roles is a gap; a company with someone else's roles is a lie.
 //
 // No LLM or search call anywhere — this is a lookup, not a judgment call.
 func DetectATS(company models.Company) (atsType, atsSlug string) {
@@ -222,70 +231,27 @@ func DetectATS(company models.Company) (atsType, atsSlug string) {
 	if pageURL == "" {
 		pageURL = company.Website
 	}
-
-	if pageURL != "" {
-		// Tier 1 — free
-		if html, err := fetchText(pageURL); err == nil {
-			if t, s := scanForATS(html); t != "" {
-				return t, s
-			}
-		}
-
-		// Tier 2 — costs a credit, so only for client-rendered pages that
-		// tier 1 couldn't read.
-		if content, provider, err := FetchRenderedPage(pageURL); err == nil {
-			if t, s := scanForATS(content); t != "" {
-				log.Printf("ATS detect: %s found via %s for %s", t, provider, company.Name)
-				return t, s
-			}
-		}
-	}
-
-	// Tier 3 — free. Guess the board slug from the company name and verify
-	// against each provider's real API. Only counts as a match if actual
-	// jobs come back — an empty board tells us nothing.
-	guess := slugify(company.Name)
-	if guess == "" {
+	if pageURL == "" {
 		return "", ""
 	}
-	for _, provider := range atsProviders {
-		if n, err := countJobsFor(provider, guess); err == nil && n > 0 {
-			return provider, guess
+
+	// Tier 1 — free
+	if page, err := fetchText(pageURL); err == nil {
+		if t, s := scanForATS(page); t != "" {
+			return t, s
 		}
 	}
-	return "", ""
-}
 
-// countJobsFor returns how many open roles a provider reports for a slug.
-// Used by DetectATS to verify a guessed slug actually belongs to a company.
-func countJobsFor(provider, slug string) (int, error) {
-	switch provider {
-	case "greenhouse":
-		jobs, err := fetchGreenhouseJobs(slug)
-		return len(jobs), err
-	case "lever":
-		jobs, err := fetchLeverJobs(slug)
-		return len(jobs), err
-	case "ashby":
-		jobs, err := fetchAshbyJobs(slug)
-		return len(jobs), err
-	case "smartrecruiters":
-		jobs, err := fetchSmartRecruitersJobs(slug)
-		return len(jobs), err
-	case "workable":
-		jobs, err := fetchWorkableJobs(slug)
-		return len(jobs), err
-	case "keka":
-		jobs, err := fetchKekaJobs(slug)
-		return len(jobs), err
-	case "darwinbox":
-		jobs, err := fetchDarwinboxJobs(slug)
-		return len(jobs), err
-	case "workday":
-		jobs, err := fetchWorkdayJobs(slug)
-		return len(jobs), err
+	// Tier 2 — a rendered read of the same page. FetchRenderedPage prefers
+	// the free provider, so this stays free in the common case.
+	if content, provider, err := FetchRenderedPage(pageURL); err == nil {
+		if t, s := scanForATS(content); t != "" {
+			log.Printf("ATS detect: %s found via %s for %s", t, provider, company.Name)
+			return t, s
+		}
 	}
-	return 0, fmt.Errorf("unknown provider %q", provider)
+
+	return "", ""
 }
 
 // fetchText downloads a page whose address we did not choose.
@@ -597,17 +563,23 @@ func fetchWorkdayJobs(slug string) ([]workdayJob, error) {
 func SyncJobsForCompany(company models.Company) (int, error) {
 	atsType, atsSlug := company.ATSType, company.ATSSlug
 	if atsType == "" {
-		// Detection can cost a scraper credit, so don't retry a company that
-		// recently came back with nothing. Support for new ATS platforms
-		// gets added occasionally, not hourly — a weekly retry is enough to
-		// pick those up without re-scraping the whole directory every tick.
-		if company.ATSCheckedAt != nil && time.Since(*company.ATSCheckedAt) < atsRecheckInterval {
+		// Detection reads the careers page, so don't repeat it on every tick
+		// for a company that just came back with nothing.
+		//
+		// The wait is short, because the long one hid every improvement we
+		// made. A failed detection used to freeze a company for a full week,
+		// which meant a fix shipped on Monday changed nothing visible until
+		// the following Monday — and any company that failed during a bad
+		// week stayed at zero roles long after the cause was gone. A
+		// successful detection is what earns the week; a failure is worth
+		// another look the same day.
+		if company.ATSCheckedAt != nil && time.Since(*company.ATSCheckedAt) < atsRecheckIntervalFor(company) {
 			return 0, nil
 		}
 
-		// The agent often omits the careers URL, or points it at the
-		// homepage. Recover it from the company's own domain before giving
-		// up — otherwise these companies sit at zero jobs forever.
+		// The careers URL is often missing, or points at the homepage.
+		// Recover it from the company's own domain before giving up —
+		// otherwise these companies sit at zero jobs forever.
 		if resolved := ResolveCareersURL(company); resolved != company.CareersURL {
 			log.Printf("careers URL resolved for %s: %s", company.Name, resolved)
 			company.CareersURL = resolved
@@ -648,12 +620,36 @@ func SyncJobsForCompany(company models.Company) (int, error) {
 		return syncJobsFromCareersPage(company)
 	}
 
+	rows, err := FetchATSJobs(company.ID, atsType, atsSlug)
+	if err != nil {
+		return 0, err
+	}
+	return applySyncedJobs(company, rows)
+}
+
+// atsRecheckIntervalFor is how long to leave a company alone before looking
+// for its board again: a week once we've found one, twelve hours while we
+// still haven't.
+func atsRecheckIntervalFor(company models.Company) time.Duration {
+	if company.ATSType != "" {
+		return atsRecheckInterval
+	}
+	return atsRetryInterval
+}
+
+// FetchATSJobs returns the open roles a provider's public API reports for one
+// board slug, as Job rows belonging to companyID.
+//
+// Split out from SyncJobsForCompany so board discovery can look at a board's
+// roles before deciding whether the company belongs in the directory at all,
+// without a second copy of this switch drifting out of sync with it.
+func FetchATSJobs(companyID, atsType, atsSlug string) ([]models.Job, error) {
 	var rows []models.Job
 	switch atsType {
 	case "greenhouse":
 		jobs, err := fetchGreenhouseJobs(atsSlug)
 		if err != nil {
-			return 0, err
+			return nil, err
 		}
 		for _, j := range jobs {
 			dept := ""
@@ -661,36 +657,36 @@ func SyncJobsForCompany(company models.Company) (int, error) {
 				dept = j.Departments[0].Name
 			}
 			rows = append(rows, models.Job{
-				CompanyID: company.ID, Title: j.Title, Department: dept,
+				CompanyID: companyID, Title: j.Title, Department: dept,
 				Location: j.Location.Name, URL: j.AbsoluteURL, Source: "greenhouse",
 			})
 		}
 	case "lever":
 		jobs, err := fetchLeverJobs(atsSlug)
 		if err != nil {
-			return 0, err
+			return nil, err
 		}
 		for _, j := range jobs {
 			rows = append(rows, models.Job{
-				CompanyID: company.ID, Title: j.Text, Department: j.Categories.Team,
+				CompanyID: companyID, Title: j.Text, Department: j.Categories.Team,
 				Location: j.Categories.Location, URL: j.HostedURL, Source: "lever",
 			})
 		}
 	case "ashby":
 		jobs, err := fetchAshbyJobs(atsSlug)
 		if err != nil {
-			return 0, err
+			return nil, err
 		}
 		for _, j := range jobs {
 			rows = append(rows, models.Job{
-				CompanyID: company.ID, Title: j.Title, Department: j.Department,
+				CompanyID: companyID, Title: j.Title, Department: j.Department,
 				Location: j.Location, URL: j.JobURL, Source: "ashby",
 			})
 		}
 	case "smartrecruiters":
 		jobs, err := fetchSmartRecruitersJobs(atsSlug)
 		if err != nil {
-			return 0, err
+			return nil, err
 		}
 		for _, j := range jobs {
 			// department is often empty; function is the usable fallback
@@ -703,7 +699,7 @@ func SyncJobsForCompany(company models.Company) (int, error) {
 				loc = j.Location.City
 			}
 			rows = append(rows, models.Job{
-				CompanyID: company.ID, Title: j.Name, Department: dept, Location: loc,
+				CompanyID: companyID, Title: j.Name, Department: dept, Location: loc,
 				// The API response has no public posting URL, so build the
 				// canonical careers-site one from the slug + posting id.
 				URL:    fmt.Sprintf("https://careers.smartrecruiters.com/%s/%s", atsSlug, j.ID),
@@ -713,7 +709,7 @@ func SyncJobsForCompany(company models.Company) (int, error) {
 	case "workable":
 		jobs, err := fetchWorkableJobs(atsSlug)
 		if err != nil {
-			return 0, err
+			return nil, err
 		}
 		for _, j := range jobs {
 			loc := strings.TrimSpace(strings.Trim(j.Location.City+", "+j.Location.Country, ", "))
@@ -722,14 +718,14 @@ func SyncJobsForCompany(company models.Company) (int, error) {
 				url = fmt.Sprintf("https://apply.workable.com/%s/j/%s/", atsSlug, j.Shortcode)
 			}
 			rows = append(rows, models.Job{
-				CompanyID: company.ID, Title: j.Title, Department: j.Department,
+				CompanyID: companyID, Title: j.Title, Department: j.Department,
 				Location: loc, URL: url, Source: "workable",
 			})
 		}
 	case "darwinbox":
 		jobs, err := fetchDarwinboxJobs(atsSlug)
 		if err != nil {
-			return 0, err
+			return nil, err
 		}
 		for _, j := range jobs {
 			loc := j.Locations
@@ -737,7 +733,7 @@ func SyncJobsForCompany(company models.Company) (int, error) {
 				loc = j.OfficeLocs[0]
 			}
 			rows = append(rows, models.Job{
-				CompanyID: company.ID, Title: j.Title, Department: j.DepartmentName,
+				CompanyID: companyID, Title: j.Title, Department: j.DepartmentName,
 				Location: strings.TrimSpace(loc),
 				URL: fmt.Sprintf("https://%s.darwinbox.in/ms/candidatev2/main/careers/jobDetails/%s",
 					atsSlug, j.ID),
@@ -747,7 +743,7 @@ func SyncJobsForCompany(company models.Company) (int, error) {
 	case "keka":
 		jobs, err := fetchKekaJobs(atsSlug)
 		if err != nil {
-			return 0, err
+			return nil, err
 		}
 		for _, j := range jobs {
 			var locs []string
@@ -761,7 +757,7 @@ func SyncJobsForCompany(company models.Company) (int, error) {
 				}
 			}
 			rows = append(rows, models.Job{
-				CompanyID: company.ID, Title: j.Title, Department: j.DepartmentName,
+				CompanyID: companyID, Title: j.Title, Department: j.DepartmentName,
 				Location: strings.Join(locs, ", "),
 				URL:      fmt.Sprintf("https://%s.keka.com/careers/jobdetails/%d", atsSlug, j.ID),
 				Source:   "keka",
@@ -770,24 +766,70 @@ func SyncJobsForCompany(company models.Company) (int, error) {
 	case "workday":
 		jobs, err := fetchWorkdayJobs(atsSlug)
 		if err != nil {
-			return 0, err
+			return nil, err
 		}
 		parts := strings.Split(atsSlug, ":")
 		if len(parts) != 3 {
-			return 0, fmt.Errorf("bad workday slug %q", atsSlug)
+			return nil, fmt.Errorf("bad workday slug %q", atsSlug)
 		}
 		tenant, region, site := parts[0], parts[1], parts[2]
 		for _, j := range jobs {
 			rows = append(rows, models.Job{
-				CompanyID: company.ID, Title: j.Title, Location: j.LocationsText,
+				CompanyID: companyID, Title: j.Title, Location: j.LocationsText,
 				URL: fmt.Sprintf("https://%s.%s.myworkdayjobs.com/en-US/%s%s",
 					tenant, region, site, j.ExternalPath),
 				Source: "workday",
 			})
 		}
+	default:
+		// Without this the switch falls through to `return rows, nil` with
+		// rows still nil, and the caller cannot tell "this board has no open
+		// roles" from "nobody here knows how to read this board" — so it
+		// deletes every stored role for the company. An unreadable provider
+		// is an error, not an empty board.
+		return nil, fmt.Errorf("unknown ATS provider %q", atsType)
 	}
 
-	return replaceJobsForCompany(company.ID, rows)
+	return rows, nil
+}
+
+// applySyncedJobs writes one sync's result to the jobs table, with a single
+// guard: an empty result does not clear a company's listings the first time
+// it happens.
+//
+// Every read feeding this can fail in a way that looks exactly like success.
+// An ATS returns 200 with an empty array while it is being reconfigured; the
+// careers-page link scan depends on markup and reads a redesign as zero. The
+// old behaviour deleted every role on the strength of one such read, so a
+// company that is plainly hiring showed as having nothing — and reappeared an
+// hour later, which is worse than either state on its own.
+//
+// A second consecutive empty read is the company actually saying it has
+// nothing open, and that is when the listings go.
+func applySyncedJobs(company models.Company, rows []models.Job) (int, error) {
+	if len(rows) == 0 && company.EmptyJobReads == 0 {
+		var existing int64
+		config.DB.Model(&models.Job{}).Where("company_id = ?", company.ID).Count(&existing)
+		if existing > 0 {
+			config.DB.Model(&models.Company{}).Where("id = ?", company.ID).
+				Update("empty_job_reads", 1)
+			log.Printf("job sync: %s read empty but has %d stored roles — keeping them until a second empty read",
+				company.Name, existing)
+			return int(existing), nil
+		}
+	}
+
+	n, err := replaceJobsForCompany(company.ID, rows)
+	if err != nil {
+		return 0, err
+	}
+	// Either a read succeeded, or the second empty read has just cleared the
+	// company. Both leave the counter at zero.
+	if company.EmptyJobReads != 0 {
+		config.DB.Model(&models.Company{}).Where("id = ?", company.ID).
+			Update("empty_job_reads", 0)
+	}
+	return n, nil
 }
 
 // replaceJobsForCompany makes the jobs table match `rows` exactly for one
@@ -837,42 +879,103 @@ func replaceJobsForCompany(companyID string, rows []models.Job) (int, error) {
 // These listings are lower fidelity than an ATS feed — often without a
 // per-role apply link — so they're stored with source "careers-page" and can
 // be told apart from API-sourced roles.
+// extractRolesFreely reads a careers page without spending a scraper credit
+// and returns whatever roles it can link to, plus the page they came from —
+// which may not be the page we started on, because plenty of /careers pages
+// are marketing pages whose only job is to link to the real listing.
+//
+// Three passes, stopping at the first that finds anything:
+//
+//  1. Plain HTTP fetch of the careers page.
+//  2. The page it links to as its listing ("View open positions").
+//  3. A rendered read (Jina) for pages that build their list in the browser.
+func extractRolesFreely(company models.Company, pageURL string) ([]ExtractedJob, string) {
+	page, err := fetchText(pageURL)
+	if err == nil {
+		if jobs := extractJobsFromPageText(page, pageURL); len(jobs) > 0 {
+			return jobs, pageURL
+		}
+		if next := findJobsListingLink(page, pageURL); next != "" {
+			if listing, lerr := fetchText(next); lerr == nil {
+				if jobs := extractJobsFromPageText(listing, next); len(jobs) > 0 {
+					log.Printf("careers page for %s: roles found on linked listing %s", company.Name, next)
+					return jobs, next
+				}
+			}
+		}
+	}
+
+	rendered, provider, rerr := FetchRenderedPage(pageURL)
+	if rerr != nil {
+		return nil, pageURL
+	}
+	if jobs := extractJobsFromPageText(rendered, pageURL); len(jobs) > 0 {
+		log.Printf("careers page for %s: %d roles found via %s", company.Name, len(jobs), provider)
+		return jobs, pageURL
+	}
+
+	// The same "View open positions" hop the plain path takes, on the
+	// rendered copy. Without it a company whose careers page is BOTH
+	// client-rendered AND a marketing page that links elsewhere — which is
+	// the ordinary shape for a company big enough to have a marketing team —
+	// falls through to the paid extraction, or to nothing. The link is only
+	// visible after rendering, so the earlier hop never saw it.
+	if next := findJobsListingLink(rendered, pageURL); next != "" {
+		if listing, lerr := fetchText(next); lerr == nil {
+			if jobs := extractJobsFromPageText(listing, next); len(jobs) > 0 {
+				log.Printf("careers page for %s: roles found on listing %s linked from the %s render",
+					company.Name, next, provider)
+				return jobs, next
+			}
+		}
+	}
+
+	return nil, pageURL
+}
+
 func syncJobsFromCareersPage(company models.Company) (int, error) {
 	pageURL := company.CareersURL
 	if pageURL == "" {
 		return 0, nil // nothing to read
 	}
 
-	// Fetch as cheaply as the page allows, then read it with our own model.
-	// The fetch and the extraction are separate calls so a page plain HTTP
-	// can serve never touches a scraper credit.
-	pageHTML, tier, err := careersPageText(pageURL)
-	if err != nil {
-		return 0, err
-	}
-	extracted, err := ExtractJobsFromPageText(pageHTML, company.Name, pageURL)
-	if err != nil {
-		return 0, err
+	// The page has to be a careers page, not a careers *article*. This is
+	// where the 295 professions came from: a company linked "career options
+	// after 12th" and the extraction read the whole alphabetical list. The
+	// link scan below is, if anything, more willing to believe such a page,
+	// because an article links every profession it names — so the check that
+	// used to sit only on the links we follow now also sits on the page we
+	// start from.
+	if guidancePageRe.MatchString(pageURL) {
+		log.Printf("careers page for %s: %s reads as a guidance article, not a listing — skipping",
+			company.Name, pageURL)
+		return 0, nil
 	}
 
-	// A lot of /careers pages are marketing pages that link out to the real
-	// listings ("View open positions"). If the first page yielded nothing,
-	// follow that link once and try there. The HTML is already in hand, so
-	// finding the link costs nothing.
+	// Free first, and in the order the page is cheapest to read.
+	//
+	// This used to open with the Firecrawl extraction, which made a paid
+	// service the only way any company without a supported ATS could show a
+	// single role. When the key was unset or the month's budget was spent,
+	// this function returned an error for every such company — the majority
+	// of the directory — and the Job Map read as empty even though the
+	// pipeline was working. The paid call is now the last thing tried, not
+	// the first.
+	extracted, pageURL := extractRolesFreely(company, pageURL)
+
+	// Last resort: Firecrawl's LLM extraction, for pages whose roles are not
+	// expressed as links at all.
 	if len(extracted) == 0 {
-		if next := findJobsListingLink(pageHTML, pageURL); next != "" {
-			log.Printf("careers page for %s had no roles — following %s", company.Name, next)
-			if nextHTML, nextTier, ferr := careersPageText(next); ferr == nil {
-				if more, merr := ExtractJobsFromPageText(nextHTML, company.Name, next); merr == nil && len(more) > 0 {
-					extracted = more
-					pageURL = next // apply links should point at the real board
-					tier = nextTier
-				}
-			}
+		var err error
+		if extracted, err = ExtractJobsFromCareersPage(pageURL); err != nil {
+			// Not fatal, and not worth an error either: the free passes above
+			// already had their say. Log and leave the company at zero.
+			log.Printf("careers page for %s: firecrawl extraction unavailable (%v)", company.Name, err)
+			return 0, nil
 		}
 	}
 	if len(extracted) > 0 {
-		log.Printf("careers page for %s: %d roles via %s", company.Name, len(extracted), tier)
+		log.Printf("careers page for %s: %d roles", company.Name, len(extracted))
 	}
 
 	var rows []models.Job
@@ -898,10 +1001,182 @@ func syncJobsFromCareersPage(company models.Company) (int, error) {
 		})
 	}
 
-	if !careersPageResultLooksReal(rows, company.Name) {
+	if !careersPageResultLooksReal(rows, company.Name, pageURL) {
 		return 0, nil
 	}
-	return replaceJobsForCompany(company.ID, rows)
+	return applySyncedJobs(company, rows)
+}
+
+// jobLinkPathRe matches the URL shape of one job posting. Careers pages vary
+// wildly in markup but converge on their links: a role's own page lives
+// under /jobs/, /careers/, /openings/ or /positions/.
+var jobLinkPathRe = regexp.MustCompile(`(?i)/(?:job|opening|position|role|vacanc|career|opportunit)[a-z]*[/-][^/\s]`)
+
+// Links come in two shapes depending on how the page was read: Jina returns
+// markdown, a plain fetch returns HTML.
+var (
+	markdownLinkRe = regexp.MustCompile(`\[([^\]\n]{2,120})\]\(\s*<?(https?://[^)>\s]+|/[^)>\s]+)>?\s*\)`)
+	anchorRe       = regexp.MustCompile(`(?is)<a[^>]+href=["']([^"']+)["'][^>]*>(.*?)</a>`)
+	htmlTagRe      = regexp.MustCompile(`(?s)<[^>]+>`)
+	whitespaceRe   = regexp.MustCompile(`\s+`)
+	hasLetterRe    = regexp.MustCompile(`\p{L}`)
+)
+
+// nonRoleTitles are link texts that sit on every careers page and are never
+// a job. Matched as substrings of the lowercased title.
+var nonRoleTitles = []string{
+	"life at", "culture", "benefit", "perks", "about us", "our story", "our team",
+	"blog", "press", "news", "privacy", "terms", "cookie", "login", "log in",
+	"sign in", "sign up", "contact", "home", "read more", "learn more",
+	"view all", "see all", "browse", "search", "filter", "back to", "faq",
+	"diversity", "equal opportunity", "linkedin", "twitter", "instagram",
+	"facebook", "youtube", "apply now", "join us", "job alert", "share this",
+	"next page", "previous", "load more", "subscribe", "newsletter",
+}
+
+// extractJobsFromPageText pulls roles out of a careers page by following its
+// own links, with no LLM and no scraper credit.
+//
+// The premise is the same one the rest of this pipeline rests on: a careers
+// page has to link each role to that role's own page, because a visitor who
+// is not logged in has to be able to click it. Those links are in the markup
+// whether the page was read as HTML or rendered to markdown by Jina, so both
+// shapes are scanned.
+//
+// This is deliberately a link scan and not a text scan. A page's prose
+// mentions plenty of job titles that are not openings; only the links point
+// at postings. That distinction is also the guard: rows produced here each
+// carry a distinct posting URL, which is the evidence careersPageResultLooksReal
+// weighs when deciding whether a result is a listing or an article.
+// pageLink is one link found on a page, whichever markup the page arrived in.
+type pageLink struct{ title, href string }
+
+// linkCandidates pulls every link out of a page as (text, href) pairs.
+//
+// A page reaches us in one of two shapes and both carry links that matter: a
+// plain fetch gives HTML anchors, and a rendered read through Jina gives
+// markdown. Reading only one of them is how the rendered path came to be
+// half-blind — it could find roles but not the "View open positions" link
+// that leads to them, which is the shape most large careers pages take.
+func linkCandidates(content string) []pageLink {
+	var out []pageLink
+
+	for _, m := range markdownLinkRe.FindAllStringSubmatch(content, -1) {
+		out = append(out, pageLink{title: m[1], href: m[2]})
+	}
+	for _, m := range anchorRe.FindAllStringSubmatch(content, -1) {
+		out = append(out, pageLink{title: htmlTagRe.ReplaceAllString(m[2], " "), href: m[1]})
+	}
+
+	// Both shapes carry HTML entities, and both matter. An href written as
+	// ?dept=Sales&amp;loc=IN is stored verbatim otherwise, and the saved
+	// posting URL then points at a page that does not exist. The link text
+	// has the same problem: "Sales &amp; Marketing" is not a job title.
+	for i := range out {
+		out[i].title = html.UnescapeString(out[i].title)
+		out[i].href = html.UnescapeString(out[i].href)
+	}
+	return out
+}
+
+func extractJobsFromPageText(content, pageURL string) []ExtractedJob {
+	base, err := url.Parse(pageURL)
+	if err != nil {
+		return nil
+	}
+
+	candidates := linkCandidates(content)
+
+	var out []ExtractedJob
+	// Deduped on the posting URL alone, which is what identifies a job
+	// everywhere else in this system: replaceJobsForCompany dedupes on it and
+	// the jobs table is uniquely indexed on (company_id, url).
+	//
+	// It used to also drop a second role with the same title, which reads as
+	// tidying and is actually data loss: "Software Engineer" in Bangalore and
+	// "Software Engineer" in Pune are two openings with two postings, and a
+	// board of any size lists several roles under one title. Only one of them
+	// survived.
+	seenURL := map[string]bool{}
+
+	for _, c := range candidates {
+		title := cleanRoleTitle(c.title)
+		if title == "" {
+			continue
+		}
+
+		href := strings.TrimSpace(c.href)
+		if href == "" || strings.HasPrefix(href, "#") ||
+			strings.HasPrefix(href, "mailto:") || strings.HasPrefix(href, "javascript:") {
+			continue
+		}
+		ref, err := url.Parse(href)
+		if err != nil {
+			continue
+		}
+		abs := base.ResolveReference(ref)
+		absStr := abs.String()
+
+		// Only links that look like one posting, and never a link back to the
+		// listing page itself.
+		if !jobLinkPathRe.MatchString(abs.Path) || absStr == pageURL {
+			continue
+		}
+		// The guidance-article guard from the LLM path applies here too: an
+		// education site's "career options" article is reachable by exactly
+		// this kind of link.
+		if guidancePageRe.MatchString(absStr) {
+			continue
+		}
+		if seenURL[absStr] {
+			continue
+		}
+		seenURL[absStr] = true
+
+		out = append(out, ExtractedJob{Title: title, URL: absStr})
+	}
+
+	return out
+}
+
+// departmentTitles are what a careers page calls its *sections*. As the whole
+// text of a link they point at a department landing page, not at a role —
+// "Engineering" links to /careers/engineering, which the posting-URL pattern
+// happily matches.
+//
+// Matched on the complete title and never as a substring, because every one
+// of these words also appears inside real job titles: "Engineering Manager"
+// and "Head of Design" are roles, "Engineering" and "Design" are not.
+var departmentTitles = map[string]bool{
+	"engineering": true, "sales": true, "design": true, "marketing": true,
+	"operations": true, "product": true, "finance": true, "legal": true,
+	"people": true, "human resources": true, "hr": true, "data": true,
+	"technology": true, "tech": true, "business": true, "corporate": true,
+	"support": true, "customer success": true, "locations": true,
+	"departments": true, "teams": true, "team": true, "students": true,
+	"internships": true, "interns": true, "graduates": true, "leadership": true,
+	"all jobs": true, "all roles": true, "open roles": true, "openings": true,
+	"vacancies": true, "opportunities": true, "positions": true,
+}
+
+// cleanRoleTitle normalises a link's text and returns "" if it cannot be a
+// job title.
+func cleanRoleTitle(raw string) string {
+	title := whitespaceRe.ReplaceAllString(strings.TrimSpace(raw), " ")
+	title = strings.Trim(title, "*_#|-–— ")
+	if len(title) < 3 || len(title) > 120 || !hasLetterRe.MatchString(title) {
+		return ""
+	}
+	lower := strings.ToLower(title)
+	if departmentTitles[lower] {
+		return ""
+	}
+	for _, bad := range nonRoleTitles {
+		if strings.Contains(lower, bad) {
+			return ""
+		}
+	}
+	return title
 }
 
 // maxCareersPageRoles is a sanity ceiling for a single careers page. A
@@ -917,7 +1192,7 @@ const maxCareersPageRoles = 60
 // linked to a "career options" guidance article, and the extraction happily
 // returned 295 "jobs" — Actor, Actuary, Addiction Counselor, Aerospace
 // Engineer… an alphabetical list of professions. Bad data is worse than none.
-func careersPageResultLooksReal(rows []models.Job, companyName string) bool {
+func careersPageResultLooksReal(rows []models.Job, companyName, pageURL string) bool {
 	if len(rows) == 0 {
 		return true // nothing to store, nothing to doubt
 	}
@@ -928,16 +1203,25 @@ func careersPageResultLooksReal(rows []models.Job, companyName string) bool {
 		return false
 	}
 
-	// A real listing carries at least some location or department metadata.
-	// A generic list of profession names carries neither.
-	withMeta := 0
+	// A real listing leaves evidence per role: either metadata (a location or
+	// a department) or a link to that role's own posting.
+	//
+	// The link counts because of what the 295-profession case actually looked
+	// like — rows read out of an article's prose, every one of them falling
+	// back to the listing URL with a fragment appended because there was no
+	// posting to point at. A row with its own posting URL came from a link
+	// the company put on the page, which is the same evidence the ATS
+	// detection trusts.
+	fallbackPrefix := pageURL + "#"
+	withEvidence := 0
 	for _, r := range rows {
-		if r.Location != "" || r.Department != "" {
-			withMeta++
+		linked := r.URL != "" && !strings.HasPrefix(r.URL, fallbackPrefix)
+		if r.Location != "" || r.Department != "" || linked {
+			withEvidence++
 		}
 	}
-	if len(rows) >= 5 && withMeta == 0 {
-		log.Printf("careers page for %s returned %d roles with no location or department at all — discarding",
+	if len(rows) >= 5 && withEvidence == 0 {
+		log.Printf("careers page for %s returned %d roles with no location, department or posting link at all — discarding",
 			companyName, len(rows))
 		return false
 	}
@@ -1059,10 +1343,13 @@ func containsHiringMarker(body string) bool {
 	return false
 }
 
-// jobsLinkRe finds anchors whose text suggests they lead to the actual job
-// listings. Many /careers pages are marketing pages that link out to the
+// listingLinkTextRe matches the words a link uses when it leads to the actual
+// job listings. Many /careers pages are marketing pages that link out to the
 // real board — without following that link those companies look empty.
-var jobsLinkRe = regexp.MustCompile(`(?is)<a[^>]+href=["']([^"']+)["'][^>]*>([^<]{0,80}?(?:view\s+(?:all\s+)?(?:open|job|position|role)|current\s+opening|open\s+position|open\s+role|see\s+(?:all\s+)?job|explore\s+(?:open\s+)?role|browse\s+job|all\s+opening|job\s+opening)[^<]{0,40})</a>`)
+//
+// Matched against a link's text rather than against raw HTML, so it works the
+// same on a plain fetch and on Jina's markdown.
+var listingLinkTextRe = regexp.MustCompile(`(?i)view\s+(?:all\s+)?(?:open|job|position|role)|current\s+opening|open\s+position|open\s+role|see\s+(?:all\s+)?job|explore\s+(?:open\s+)?role|browse\s+job|all\s+opening|job\s+opening`)
 
 // guidancePageRe matches URLs that are career *advice* rather than career
 // *openings* — a distinction that cost us 295 fake job rows once.
@@ -1070,13 +1357,16 @@ var guidancePageRe = regexp.MustCompile(`(?i)career-(option|guide|advice|counsel
 
 // findJobsListingLink looks for a link from a careers page to the page that
 // actually lists roles. Returns an absolute URL, or "" if none found.
-func findJobsListingLink(pageHTML, baseURL string) string {
+func findJobsListingLink(content, baseURL string) string {
 	base, err := url.Parse(baseURL)
 	if err != nil {
 		return ""
 	}
-	for _, m := range jobsLinkRe.FindAllStringSubmatch(pageHTML, -1) {
-		href := strings.TrimSpace(m[1])
+	for _, link := range linkCandidates(content) {
+		if len(link.title) > 120 || !listingLinkTextRe.MatchString(link.title) {
+			continue
+		}
+		href := strings.TrimSpace(link.href)
 		if href == "" || strings.HasPrefix(href, "#") || strings.HasPrefix(href, "mailto:") || strings.HasPrefix(href, "javascript:") {
 			continue
 		}

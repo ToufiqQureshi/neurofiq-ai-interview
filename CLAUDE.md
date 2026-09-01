@@ -49,19 +49,65 @@ itself. Hand-seeding a company to make a screenshot look better is a lie about
 what the system does. If the pipeline missed something, fix the pipeline.
 
 **Bad data is worse than no data.** An extraction once returned 295 "jobs" that
-were an alphabetical list of professions off a career-advice article. Guards in
-`careersPageResultLooksReal` reject that shape now. When adding a source, ask
-what its garbage looks like and reject it explicitly.
+were an alphabetical list of professions off a career-advice article. Three
+guards stand in that shape's way now, and they are not interchangeable:
+`guidancePageRe` rejects the page before it is read, `departmentTitles` rejects
+a link whose whole text is a section name ("Engineering" is a landing page, not
+a role), and `maxCareersPageRoles` is the ceiling if both are wrong. Note what
+`careersPageResultLooksReal` can no longer do on its own: every row the link
+scan produces carries its own posting URL, and the guard counts that as
+evidence — so it will not reject a linked list of professions. When adding a
+source, ask what its garbage looks like and reject it explicitly.
+
+**An empty read is not the same as "not hiring".** An ATS answers 200 with an
+empty array while it is being reconfigured, and the link scan reads a
+redesigned page as zero. Deleting a company's roles on the first empty read
+made a hiring company look shut and flipped it back an hour later. Listings now
+survive one empty read and clear on the second (`applySyncedJobs`,
+`Company.EmptyJobReads`). For the same reason `FetchATSJobs` errors on a
+provider it does not know instead of returning no rows — silence and zero must
+not look alike.
 
 **Verify before claiming done.** Query the running system and quote the number.
 "Should work" is not a result. Two separate false readings in this project came
 from a *test script* bug, not the code under test — when a number looks wrong,
 suspect the measurement first.
 
-**Free tiers only.** Firecrawl is 1000 pages/month with a budget guard at 800;
-past it, calls fall back to keyless Jina. Free paths run before paid ones,
-detection is cached per company, and companies with no job board are not
-re-checked for 7 days. Do not remove a guard to make a run finish faster.
+**Free tiers only.** Keyless Jina reads every page first; Firecrawl (1000
+pages/month, budget guard at 800) is the fallback, and a credit is counted
+only once a call actually returns something. Search is metered the same way in
+`scrape_usages` — Exa first, Tavily when Exa's month is spent, both guarded at
+800 of their 1000 free calls. Free paths run before paid ones, and detection is
+cached per company: a week once a board is found, twelve hours while none is.
+The short retry is deliberate — a week-long freeze meant every improvement
+reached the directory a week late. Do not remove a guard to make a run finish
+faster.
+
+**No single provider may be load-bearing.** `resolveCompanyWebsite` was
+Exa-only, which made the Tavily fallback useless: once Exa's month was spent,
+discovery still paid Tavily to find boards and then dropped every company for
+having no website — a run that costs a search and stores nothing. Exa's
+`category=company` is a quality win, not a requirement; `isAggregatorHost` is
+what actually rejects a LinkedIn page, and it works on any provider's results.
+The same lesson as Firecrawl: check what happens when the good provider is
+gone.
+
+**Search is the only metered step in discovery, so it is rationed.** One
+search per rotation tick (three-hourly), plus one per company whose homepage
+is *looked up* — count attempts, not saves. That distinction is the whole
+guard: a candidate rejected after its lookup (no site found, domain already
+held) has spent a search too, so a run bounded by companies stored could spend
+one search per board hit — 26, not 6. `mayStartLookup` stops the loop at
+`maxNewCompaniesPerRun` lookups, which is what actually bounds a tick at 6.
+Job syncing is free and stays hourly on its own lease, so listings remain
+fresh while discovery slows. A board skipped by the cap is not lost: the
+rotation comes back.
+
+A quarter of the monthly budget is reserved for the rotation, checked before
+the board search *and* before every lookup — a manual run that passed the
+check on entry must not spend through the reserve while its loop is running.
+`POST /api/companies/discover` is still any-authenticated-user; the reserve
+bounds what they can take, it does not decide who may ask.
 
 **Never commit secrets.** `.env` holds live Supabase, GitHub OAuth, DeepSeek,
 Firecrawl and Exa credentials. It is gitignored. Before any commit:
@@ -75,43 +121,68 @@ Firecrawl and Exa credentials. It is gitignored. Before any commit:
   `Recovery()` does not cover goroutines you spawn; one panic kills the process.
 - **LLM output is always a Pydantic schema** via Agno's `output_schema`. Never
   parse markdown fences out of a model response.
-- `discoveryIntervalSeconds` in `company_service.go` must stay equal to the
+- `discoveryIntervalSeconds` in `board_discovery.go` must stay equal to the
   cron schedule in `main.go` — the seed-query rotation index is derived from it.
+- **A board is only ever accepted with evidence.** Either the company linked to
+  it from its own careers page, or the board URL came back from a search. Never
+  from guessing a slug off the company name: slugs are not unique, and
+  `jobs.lever.co/cred` returns a healthy job list belonging to CreditVidya, not
+  to CRED. One company's roles under another's name is worse than no roles.
 
 ## Job Map pipeline
 
-Four tiers, cheapest first. The premise: a careers page must load its jobs from
+**Companies come from job boards, not from a model.** Every hiring company puts
+its roles on a board, and those boards are public pages a search engine has
+already indexed. `board_discovery.go` searches Exa restricted to the board
+domains; a hit like `jobs.lever.co/Sprinto` carries the same slug the board's
+public API takes, so one search yields a company that is provably hiring with
+its roles one free call away. No LLM anywhere in this path.
+
+The reverse — asking a model which companies exist, then hunting for a careers
+page on each answer — stacked two guesses and mostly returned 2-person shops
+that do not hire. That agent is gone.
+
+Roles, cheapest first. The premise: a careers page must load its jobs from
 somewhere public, because visitors are not logged in.
 
-| Tier | What | Cost |
+| Step | What | Cost |
 |---|---|---|
-| 0 | Resolve careers URL (`/careers`, `/jobs`…) | free |
-| 1 | Plain HTTP + regex for an embedded ATS board link | free |
-| 2 | Hosted render (Firecrawl → Jina) for JS pages | 1 credit |
-| 3 | Guess board slug from name, verify against real API | free |
-| 4 | LLM extraction off the careers page | 1 credit |
+| 0 | Board already known from discovery → its public JSON API | free |
+| 1 | Resolve careers URL (`/careers`, `/jobs`…) | free |
+| 2 | Plain HTTP + regex for an embedded ATS board link | free |
+| 3 | Link-scan that page for per-role postings | free |
+| 4 | Rendered read (Jina, then Firecrawl) → repeat 2 and 3 | free / 1 credit |
+| 5 | LLM extraction off the careers page | 1 credit |
 
-Boards: Greenhouse, Lever, SmartRecruiters, Ashby, Workable, Keka, Workday —
-all official public JSON APIs.
+Boards: Greenhouse, Lever, SmartRecruiters, Ashby, Workable, Keka, Darwinbox,
+Workday — all official public JSON APIs, and all ten hosts are in the
+discovery search list. Keep those two lists in step: a board we can read but
+never search for is only ever found by accident, and Keka and Darwinbox are
+the platforms Indian employers use most.
+
+Jina runs before Firecrawl everywhere. When Firecrawl went first, an unset key
+or a spent budget took the whole path down and every company without a
+supported ATS dropped to zero roles — the paid service was load-bearing for
+the free product.
 
 ## Work queue
 
-1. Retry failed extractions — Classplus, Physics Wallah, Extramarks have
-   careers URLs but return 0 jobs, and we know they are hiring.
-2. Direct Exa lookup for careers URLs from Go. Finding a careers page is a
-   lookup, not a judgment call, so it should skip LLM tokens entirely. Slots
-   in as a new tier in `ResolveCareersURL`.
-3. More boards: Gem (seen on Hasura), Recruitee, Personio, Freshteam.
-4. Tier 2 and Tier 4 fetch the same page twice — 2 credits where 1 would do.
-   Worth fixing as usage approaches the budget.
-5. Re-enrich companies after first discovery; stage and description are frozen
+1. More boards: TalentRecruit (seen on Zepto), Gem (Hasura), Recruitee,
+   Personio, Freshteam. Add each to `boardSearchDomains` as well as to the
+   reader, or it will only ever be found from a careers page.
+2. Board discovery stores no sector or stage, so those filters miss every
+   company it finds. Enrich from the company's own site rather than guessing.
+3. Re-enrich companies after first discovery; stage and description are frozen
    at first-seen values today. Jobs *are* re-synced.
+4. `resolveCompanyWebsite` costs one search per newly-seen company. Fine at
+   this volume, worth batching if discovery widens.
 
-Known gaps, not blocking: filters are exact-match against a fixed dropdown and
-the agent sometimes emits values outside it; `POST /api/companies/discover` is
-any-authenticated-user rather than admin-only; `/health` returns a hardcoded
-`{"db":"connected"}` without pinging anything; `jobs` and `scrape_usages` have
-no migration file and exist only via AutoMigrate.
+Known gaps, not blocking: filters are exact-match against a fixed dropdown;
+`POST /api/companies/discover` is any-authenticated-user rather than
+admin-only — it now has a bucket of its own (two, then one an hour) so one
+account cannot spend the month in five minutes, but a limit is not an
+authorisation check; `jobs` and `scrape_usages` have no migration file and
+exist only via AutoMigrate.
 
 ## More detail
 

@@ -108,43 +108,73 @@ judged, not the raw transcript.
 ## The Job Map
 
 A self-maintaining directory of startups and their real open roles. No manual
-data entry — an hourly cron rotates through 360 generated search queries
-(12 cities × 10 sectors × 3 phrasings).
+data entry.
 
-### Finding real jobs — four tiers, cheapest first
+### Finding companies — through their job boards, not through a model
 
 The insight the whole feature rests on:
 
-> A careers page has to load its jobs from **somewhere public** — because
-> visitors aren't logged in. So the structured data already exists.
+> Every hiring company publishes its roles on a job board, and those boards
+> are public pages a search engine has already indexed.
 
-| Tier | What | Cost |
+So discovery searches the board domains directly. A hit like
+`jobs.lever.co/Sprinto` carries the same slug the board's public API takes, so
+one search yields a company that is **provably hiring**, with its open roles
+one free call away. There is nothing to verify afterwards, because the board
+is the verification. No LLM anywhere in this path.
+
+The reverse — asking a model which companies exist, then hunting for a careers
+page on each answer — stacked two guesses and mostly returned shops that do
+not hire. That agent is gone.
+
+A three-hourly cron rotates through 120 generated queries (12 cities × 10
+roles); job syncing runs hourly on a schedule of its own, because it is free.
+
+### Finding the roles — cheapest first
+
+| Step | What | Cost |
 |---|---|---|
-| 0 | Resolve the careers URL if the agent didn't give one (`/careers`, `/jobs`…) | free |
-| 1 | Plain HTTP fetch → regex for an embedded ATS board link | free |
-| 2 | Hosted render (Firecrawl → Jina fallback) for JS-built pages | 1 credit |
-| 3 | Guess the board slug from the company name, verify against the real API | free |
-| 4 | No ATS at all → LLM extraction straight off the careers page | 1 credit |
+| 0 | Board already known from discovery → its public JSON API | free |
+| 1 | Resolve the careers URL (`/careers`, `/jobs`…) | free |
+| 2 | Plain HTTP fetch → regex for an embedded ATS board link | free |
+| 3 | Link-scan that page for per-role postings | free |
+| 4 | Rendered read (Jina, then Firecrawl) → repeat 2 and 3 | free / 1 credit |
+| 5 | LLM extraction straight off the careers page | 1 credit |
 
-Detection result is cached per company, so it runs **once**, not per sync.
+A board is only ever accepted **with evidence**: either the company linked to
+it from its own careers page, or a search returned it. Never by guessing a
+slug from the company name — slugs are not unique, and `jobs.lever.co/cred`
+returns a healthy job list belonging to CreditVidya, not to CRED. One
+company's roles under another's name is worse than no roles at all.
 
-**Supported job boards (7):** Greenhouse · Lever · SmartRecruiters · Ashby ·
-Workable · Keka · Workday — all via their official public JSON APIs. No
-scraping, no keys, no hallucination.
+Detection is cached per company: a week once a board is found, twelve hours
+while none is.
 
-**Search:** Exa (`category="company"`) with DuckDuckGo as a keyless fallback,
-so discovery degrades rather than stopping if credits run out.
+**Supported job boards (8):** Greenhouse · Lever · SmartRecruiters · Ashby ·
+Workable · Keka · Darwinbox · Workday — all via their official public JSON
+APIs. No scraping, no keys, no hallucination.
+
+**Search:** Exa first, Tavily when Exa's month is spent. A provider is only
+usable here if it can restrict results to a domain list — without that, a
+search for "backend engineer jobs in Pune" answers with blog posts instead of
+boards.
 
 ### Cost control
 
-Free tiers only. Four guards keep it that way:
+Free tiers only. The guards that keep it that way:
 
-1. Free paths run first — anything resolvable without a credit never spends one
+1. Free paths run first — Jina reads every page before Firecrawl is asked
 2. Detection is cached per company
-3. Companies with no board aren't re-checked for 7 days
-4. A monthly budget switches to the free provider before the paid tier runs out
+3. Search is rationed: one query per three-hourly tick, at most 5 new
+   companies per run, so a tick costs at most 6 metered calls
+4. A monthly budget (800 of each 1,000 free tier) stops a provider before the
+   wall, and the next one takes over
+5. A credit is counted only once a call actually returns something
+6. An empty read does not clear a company's roles the first time — an ATS
+   under maintenance and a redesigned careers page both read as zero
 
-Usage is tracked per month per provider and logged on every sync.
+Usage is tracked per month per provider, in one table, and logged on every
+sync.
 
 ---
 

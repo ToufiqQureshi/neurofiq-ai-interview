@@ -70,24 +70,29 @@ type triggerDiscoveryRequest struct {
 	Limit int    `json:"limit"`
 }
 
+// HandleTriggerDiscovery runs one discovery search on demand.
+//
+// The query is a plain job search — "backend engineer jobs in Pune, India" —
+// because it is run against job-board domains, not against the open web. The
+// hits are boards, and every board is a company that is currently hiring.
 func HandleTriggerDiscovery(c *gin.Context) {
 	var req triggerDiscoveryRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "query is required"})
 		return
 	}
-	if req.Limit <= 0 {
-		req.Limit = 10
-	}
-	if req.Limit > 10 {
-		req.Limit = 10
+	// The same ceiling the service enforces, not a larger one: each stored
+	// company costs a metered search of its own, and a handler that accepts
+	// 25 while the service caps at 5 promises something it will not deliver.
+	if req.Limit <= 0 || req.Limit > services.MaxNewCompaniesPerRun {
+		req.Limit = services.MaxNewCompaniesPerRun
 	}
 	if len(req.Query) > 200 {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "query is too long"})
 		return
 	}
 
-	saved, err := services.DiscoverCompanies(req.Query, req.Limit)
+	saved, err := services.DiscoverFromBoardsManual(req.Query, req.Limit)
 	if err != nil {
 		c.JSON(http.StatusBadGateway, gin.H{"error": err.Error()})
 		return

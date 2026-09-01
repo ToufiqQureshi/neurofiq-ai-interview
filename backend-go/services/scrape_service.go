@@ -65,35 +65,43 @@ func recordScrapeUsage(provider string) {
 // render, using a hosted service so we never run a headless browser (and
 // pay for the RAM) ourselves.
 //
-// Provider order is deliberate:
-//  1. Firecrawl — better extraction quality, but a metered free tier. Used
-//     only while this month's usage is under budget.
-//  2. Jina Reader — free and needs no API key, so it can always absorb the
-//     overflow. Slightly rawer output.
+// Jina goes first because it is free, keyless and unmetered. Firecrawl reads
+// the page better, but it is metered, and paying a credit to learn something
+// the free provider would also have told us is how a month's budget
+// disappears without a single extra job in the directory.
+//
+// That ordering has a second, larger effect: when Firecrawl ran first, an
+// unset key or an exhausted budget took this whole path down with it, and
+// every company without a supported ATS dropped to zero roles. With Jina in
+// front, the free path is the one that carries the directory and Firecrawl
+// is an upgrade, not a dependency.
 //
 // Callers should try a plain HTTP fetch first; this is the escalation path
 // for pages that come back empty because they're client-rendered.
 func FetchRenderedPage(url string) (string, string, error) {
-	if key := os.Getenv("FIRECRAWL_API_KEY"); key != "" {
-		used, budget := scrapeUsageThisMonth("firecrawl"), firecrawlBudget()
-		if used < budget {
-			text, err := fetchViaFirecrawl(url, key)
-			if err == nil {
-				recordScrapeUsage("firecrawl")
-				return text, "firecrawl", nil
-			}
-			log.Printf("firecrawl failed for %s (%v) — falling back to jina", url, err)
-		} else {
-			log.Printf("firecrawl monthly budget reached (%d/%d) — using jina", used, budget)
-		}
+	text, err := fetchViaJina(url)
+	if err == nil {
+		recordScrapeUsage("jina")
+		return text, "jina", nil
+	}
+	jinaErr := err
+	log.Printf("jina failed for %s (%v) — trying firecrawl", url, err)
+
+	key := os.Getenv("FIRECRAWL_API_KEY")
+	if key == "" {
+		return "", "", jinaErr
+	}
+	if used, budget := scrapeUsageThisMonth("firecrawl"), firecrawlBudget(); used >= budget {
+		log.Printf("firecrawl monthly budget reached (%d/%d) — giving up on %s", used, budget, url)
+		return "", "", jinaErr
 	}
 
-	text, err := fetchViaJina(url)
+	text, err = fetchViaFirecrawl(url, key)
 	if err != nil {
-		return "", "", err
+		return "", "", jinaErr
 	}
-	recordScrapeUsage("jina")
-	return text, "jina", nil
+	recordScrapeUsage("firecrawl")
+	return text, "firecrawl", nil
 }
 
 type firecrawlResponse struct {
@@ -257,10 +265,14 @@ func ExtractJobsFromCareersPage(pageURL string) ([]ExtractedJob, error) {
 	if err := json.Unmarshal(body, &parsed); err != nil {
 		return nil, err
 	}
-	recordScrapeUsage("firecrawl")
 	if !parsed.Success {
 		return nil, fmt.Errorf("firecrawl error: %s", parsed.Error)
 	}
+	// Counted only once the call actually produced an extraction. Counting
+	// before this check billed us for every failure too, so the month's
+	// budget could run out having returned no jobs at all — and the budget
+	// guard then blocked the calls that would have worked.
+	recordScrapeUsage("firecrawl")
 
 	for _, list := range [][]ExtractedJob{
 		parsed.Data.JSON.Jobs,
@@ -333,30 +345,3 @@ func careersPageText(pageURL string) (string, string, error) {
 // hundred bytes of loader markup; the real ones measured in this directory
 // ran from 27KB to 1MB.
 const minUsablePageBytes = 15000
-
-// ExtractJobsFromPageText asks our own worker to read the openings out of a
-// careers page we already fetched.
-//
-// This is deliberately separate from fetching. Firecrawl's own LLM
-// extraction did both at once, which meant every extraction — even of a page
-// plain HTTP could read for free — spent a credit, and a rate-limit error
-// from Firecrawl took the whole tier down with no fallback. Splitting them
-// lets the cheap fetch and the model call fail independently.
-func ExtractJobsFromPageText(pageText, companyName, sourceURL string) ([]ExtractedJob, error) {
-	payload := map[string]interface{}{
-		"page_text":    pageText,
-		"company_name": companyName,
-		"source_url":   sourceURL,
-	}
-	body, err := postToWorker(discoveryClient, "/internal/extract-jobs", payload)
-	if err != nil {
-		return nil, err
-	}
-	var parsed struct {
-		Jobs []ExtractedJob `json:"jobs"`
-	}
-	if err := json.Unmarshal(body, &parsed); err != nil {
-		return nil, fmt.Errorf("extract-jobs: %w", err)
-	}
-	return parsed.Jobs, nil
-}
