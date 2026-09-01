@@ -331,6 +331,7 @@ func main() {
 	// remaining TTL.
 	<-scheduler.Stop().Done()
 	services.ReleaseCronLease(services.DiscoveryLeaseName)
+	services.ReleaseCronLease(services.JobSyncLeaseName)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()

@@ -1,6 +1,9 @@
 package services
 
-import "testing"
+import (
+	"testing"
+	"time"
+)
 
 // Board discovery reads a slug straight out of a search result's URL, so the
 // URL shapes a search actually returns are what these cover — including the
@@ -102,6 +105,51 @@ func TestLooksIndian(t *testing.T) {
 		if looksIndian(loc) {
 			t.Errorf("expected %q not to count as an Indian location", loc)
 		}
+	}
+}
+
+// A lease shorter than its schedule lets a second instance re-run the tick
+// this one just ran — the same metered searches, the same boards fetched
+// twice. That is the whole reason the lease exists, so the two must be tied.
+func TestCronLeasesCoverTheirFullInterval(t *testing.T) {
+	if discoveryLeaseTTL < time.Duration(discoveryIntervalSeconds)*time.Second {
+		t.Errorf("discovery lease %v is shorter than its %ds interval — another instance could repeat the tick",
+			discoveryLeaseTTL, discoveryIntervalSeconds)
+	}
+	if jobSyncLeaseTTL < time.Duration(jobSyncIntervalSeconds)*time.Second {
+		t.Errorf("job sync lease %v is shorter than its %ds interval",
+			jobSyncLeaseTTL, jobSyncIntervalSeconds)
+	}
+}
+
+// Every provider a search can return must resolve to a usable careers URL,
+// either canonically or by falling back to the URL the search gave us.
+func TestBoardURLCoversEverySearchableProvider(t *testing.T) {
+	cases := map[string]string{
+		"greenhouse":      "acme",
+		"lever":           "acme",
+		"ashby":           "acme",
+		"workable":        "acme",
+		"smartrecruiters": "acme",
+		"keka":            "acme",
+		"darwinbox":       "acme",
+		"workday":         "acme:wd5:External",
+	}
+	for provider, slug := range cases {
+		if got := boardURL(provider, slug); got == "" {
+			t.Errorf("boardURL(%q, %q) returned nothing", provider, slug)
+		}
+	}
+
+	// An unknown provider returns "" on purpose — boardHitsFor falls back to
+	// the search result's own URL rather than storing an empty careers page.
+	if got := boardURL("someday-ats", "acme"); got != "" {
+		t.Errorf("expected an unknown provider to return \"\", got %q", got)
+	}
+	// A malformed Workday slug cannot be rebuilt, and must not produce a
+	// half-formed URL.
+	if got := boardURL("workday", "acme"); got != "" {
+		t.Errorf("expected a malformed workday slug to return \"\", got %q", got)
 	}
 }
 

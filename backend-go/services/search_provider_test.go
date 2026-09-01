@@ -1,7 +1,11 @@
 package services
 
 import (
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"os"
+	"strings"
 	"testing"
 )
 
@@ -51,6 +55,41 @@ func TestProviderBudgetReadsEnvOverride(t *testing.T) {
 	t.Setenv("TEST_SEARCH_BUDGET", "not-a-number")
 	if got := providerBudget(p); got != 800 {
 		t.Errorf("want the default on an unparseable value, got %d", got)
+	}
+}
+
+// Tavily authenticates with an Authorization header. The key must not also
+// be copied into the request body, where it would reach one more log and one
+// more error message than it needs to.
+func TestTavilyBodyCarriesNoCredential(t *testing.T) {
+	var captured map[string]interface{}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewDecoder(r.Body).Decode(&captured)
+		if got := r.Header.Get("Authorization"); got != "Bearer secret-key" {
+			t.Errorf("expected the key in the Authorization header, got %q", got)
+		}
+		_, _ = w.Write([]byte(`{"results":[]}`))
+	}))
+	defer srv.Close()
+
+	raw, err := postSearchJSON(srv.URL, map[string]interface{}{
+		"query":       "backend engineer jobs in Pune, India",
+		"max_results": 10,
+	}, map[string]string{"Authorization": "Bearer secret-key"})
+	if err != nil {
+		t.Fatalf("request failed: %v", err)
+	}
+	if string(raw) == "" {
+		t.Fatal("no response body")
+	}
+
+	for key, value := range captured {
+		if s, ok := value.(string); ok && strings.Contains(s, "secret-key") {
+			t.Errorf("request body field %q carries the API key", key)
+		}
+	}
+	if _, present := captured["api_key"]; present {
+		t.Error("request body still carries an api_key field")
 	}
 }
 

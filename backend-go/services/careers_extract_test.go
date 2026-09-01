@@ -64,6 +64,24 @@ func TestExtractJobsFromMarkdownCareersPage(t *testing.T) {
 	}
 }
 
+// HTML encodes & as &amp; inside an href. Stored verbatim, the posting URL
+// points at a page that does not exist — and the title reads "Sales &amp;
+// Marketing".
+func TestExtractJobsDecodesHTMLEntities(t *testing.T) {
+	html := `<a href="/jobs/apply?dept=Sales&amp;loc=IN">Manager, Sales &amp; Marketing</a>`
+
+	jobs := extractJobsFromPageText(html, "https://acme.com/careers")
+	if len(jobs) != 1 {
+		t.Fatalf("expected 1 role, got %d: %v", len(jobs), titlesOf(jobs))
+	}
+	if jobs[0].Title != "Manager, Sales & Marketing" {
+		t.Errorf("title was not decoded: %q", jobs[0].Title)
+	}
+	if jobs[0].URL != "https://acme.com/jobs/apply?dept=Sales&loc=IN" {
+		t.Errorf("href was not decoded: %q", jobs[0].URL)
+	}
+}
+
 func TestExtractJobsSkipsNavigationAndGuidanceLinks(t *testing.T) {
 	html := `
 	<a href="/careers/jobs/1">Software Engineer</a>

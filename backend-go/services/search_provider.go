@@ -225,10 +225,13 @@ type tavilySearchResponse struct {
 }
 
 func tavilySearchCall(apiKey, query string, includeDomains []string, numResults int) ([]searchResult, error) {
+	// The key goes in the Authorization header only. Tavily's body is for
+	// search parameters, and a credential duplicated into a JSON body is a
+	// credential in one more log and one more error message than it needs
+	// to be.
 	body := map[string]interface{}{
 		"query":       query,
 		"max_results": numResults,
-		"api_key":     apiKey,
 	}
 	if len(includeDomains) > 0 {
 		body["include_domains"] = includeDomains

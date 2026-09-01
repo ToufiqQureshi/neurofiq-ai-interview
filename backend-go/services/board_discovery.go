@@ -94,6 +94,16 @@ const discoveryIntervalSeconds = 3 * 3600
 // the same discovery tick.
 const DiscoveryLeaseName = "discovery-rotation"
 
+// discoveryLeaseTTL spans a full rotation interval, so no second instance can
+// repeat the tick this one just ran.
+const discoveryLeaseTTL = discoveryIntervalSeconds * time.Second
+
+// jobSyncIntervalSeconds must match the job-sync cron schedule in main.go.
+const jobSyncIntervalSeconds = 3600
+
+// jobSyncLeaseTTL spans a full sync interval, for the same reason.
+const jobSyncLeaseTTL = jobSyncIntervalSeconds * time.Second
+
 // boardResultsPerQuery is how many search hits one query asks for. Most
 // resolve to a handful of distinct boards once duplicates collapse.
 const boardResultsPerQuery = 25
@@ -231,11 +241,21 @@ func boardHitsFor(query string, numResults int) []boardHit {
 			continue
 		}
 		seen[key] = true
+
+		// The canonical board address is the better careers URL — it is the
+		// board's front page rather than whichever posting the search
+		// happened to return. But a provider we have no canonical form for
+		// must not lose the URL entirely: the search result is already a
+		// verified page on that board.
+		url := boardURL(provider, slug)
+		if url == "" {
+			url = r.URL
+		}
 		hits = append(hits, boardHit{
 			Provider: provider,
 			Slug:     slug,
 			Title:    r.Title,
-			URL:      boardURL(provider, slug),
+			URL:      url,
 		})
 	}
 	return hits
@@ -243,6 +263,9 @@ func boardHitsFor(query string, numResults int) []boardHit {
 
 // boardURL is the public, human-facing address of a board — used as the
 // company's careers URL, since for these companies it is exactly that.
+//
+// Returns "" for a provider with no single canonical address; callers fall
+// back to the URL the search returned.
 func boardURL(provider, slug string) string {
 	switch provider {
 	case "greenhouse":
@@ -259,6 +282,14 @@ func boardURL(provider, slug string) string {
 		return "https://" + slug + ".keka.com/careers"
 	case "darwinbox":
 		return "https://" + slug + ".darwinbox.in/ms/candidate/careers"
+	case "workday":
+		// Stored as "tenant:region:site" — the same three parts the job
+		// URLs are built from.
+		parts := strings.Split(slug, ":")
+		if len(parts) != 3 {
+			return ""
+		}
+		return fmt.Sprintf("https://%s.%s.myworkdayjobs.com/en-US/%s", parts[0], parts[1], parts[2])
 	}
 	return ""
 }
@@ -426,7 +457,16 @@ func RunDiscoveryRotation() {
 	// discovery runs an hour and every job board fetched twice. The lease is
 	// slightly shorter than the interval so a crashed instance frees it
 	// before the next tick is due.
-	if !AcquireCronLease(DiscoveryLeaseName, 55*time.Minute) {
+	// The lease has to cover the whole interval, not part of it. Instance
+	// ticks are not aligned: if A runs at :00 and B's schedule fires at
+	// :55, a lease that expired at :55 lets B run the same query again —
+	// the same metered searches and the same homepage lookups, which is
+	// exactly what the lease exists to prevent. Derived from the interval so
+	// the two cannot drift apart again.
+	//
+	// A TTL this long does not lock this instance out of its own next tick:
+	// AcquireCronLease re-takes a lease the same holder already has.
+	if !AcquireCronLease(DiscoveryLeaseName, discoveryLeaseTTL) {
 		log.Printf("board discovery rotation: another instance holds the lease, skipping")
 		return
 	}
@@ -459,7 +499,7 @@ const JobSyncLeaseName = "job-sync"
 // from syncing the same directory at the same time and fetching every board
 // twice.
 func RunJobSync() {
-	if !AcquireCronLease(JobSyncLeaseName, 50*time.Minute) {
+	if !AcquireCronLease(JobSyncLeaseName, jobSyncLeaseTTL) {
 		log.Printf("job sync: another instance holds the lease, skipping")
 		return
 	}

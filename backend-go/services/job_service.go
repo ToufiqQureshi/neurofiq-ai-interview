@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"html"
 	"io"
 	"log"
 	"net/http"
@@ -235,8 +236,8 @@ func DetectATS(company models.Company) (atsType, atsSlug string) {
 	}
 
 	// Tier 1 — free
-	if html, err := fetchText(pageURL); err == nil {
-		if t, s := scanForATS(html); t != "" {
+	if page, err := fetchText(pageURL); err == nil {
+		if t, s := scanForATS(page); t != "" {
 			return t, s
 		}
 	}
@@ -817,12 +818,12 @@ func replaceJobsForCompany(companyID string, rows []models.Job) (int, error) {
 //  2. The page it links to as its listing ("View open positions").
 //  3. A rendered read (Jina) for pages that build their list in the browser.
 func extractRolesFreely(company models.Company, pageURL string) ([]ExtractedJob, string) {
-	html, err := fetchText(pageURL)
+	page, err := fetchText(pageURL)
 	if err == nil {
-		if jobs := extractJobsFromPageText(html, pageURL); len(jobs) > 0 {
+		if jobs := extractJobsFromPageText(page, pageURL); len(jobs) > 0 {
 			return jobs, pageURL
 		}
-		if next := findJobsListingLink(html, pageURL); next != "" {
+		if next := findJobsListingLink(page, pageURL); next != "" {
 			if listing, lerr := fetchText(next); lerr == nil {
 				if jobs := extractJobsFromPageText(listing, next); len(jobs) > 0 {
 					log.Printf("careers page for %s: roles found on linked listing %s", company.Name, next)
@@ -957,6 +958,15 @@ func extractJobsFromPageText(content, pageURL string) []ExtractedJob {
 	}
 	for _, m := range anchorRe.FindAllStringSubmatch(content, -1) {
 		candidates = append(candidates, candidate{title: htmlTagRe.ReplaceAllString(m[2], " "), href: m[1]})
+	}
+
+	// Both shapes carry HTML entities, and both matter. An href written as
+	// ?dept=Sales&amp;loc=IN is stored verbatim otherwise, and the saved
+	// posting URL then points at a page that does not exist. The link text
+	// has the same problem: "Sales &amp; Marketing" is not a job title.
+	for i := range candidates {
+		candidates[i].title = html.UnescapeString(candidates[i].title)
+		candidates[i].href = html.UnescapeString(candidates[i].href)
 	}
 
 	var out []ExtractedJob
