@@ -153,6 +153,38 @@ func TestBoardURLCoversEverySearchableProvider(t *testing.T) {
 	}
 }
 
+// The manual endpoint is open to any signed-in user and the budget is one
+// shared pot, so a per-user rate limit does not bound what several accounts
+// spend together. The reserve is what keeps the scheduled rotation running
+// when they have spent everything else.
+func TestManualDiscoveryLeavesTheSchedulerAReserve(t *testing.T) {
+	t.Setenv("EXA_API_KEY", "test-key")
+	t.Setenv("EXA_MONTHLY_BUDGET", "800")
+	t.Setenv("TAVILY_API_KEY", "")
+
+	reserved := schedulerReserve()
+	if reserved <= 0 {
+		t.Fatal("no budget is reserved for the scheduler — several accounts could stop discovery for the month")
+	}
+	if reserved >= 800 {
+		t.Errorf("reserve of %d leaves nothing for manual runs", reserved)
+	}
+	if want := 800 / schedulerReserveFraction; reserved != want {
+		t.Errorf("reserved %d, want %d", reserved, want)
+	}
+}
+
+// A provider with no key contributes no budget, so its absence must not
+// inflate the reserve into blocking every manual run.
+func TestManualDiscoveryBudgetCountsOnlyConfiguredProviders(t *testing.T) {
+	t.Setenv("EXA_API_KEY", "")
+	t.Setenv("TAVILY_API_KEY", "")
+
+	if reserved := schedulerReserve(); reserved != 0 {
+		t.Errorf("with no provider configured the reserve should be 0, got %d", reserved)
+	}
+}
+
 func TestBoardSeedQueriesAreDistinct(t *testing.T) {
 	if len(boardSeedQueries) == 0 {
 		t.Fatal("no seed queries built")

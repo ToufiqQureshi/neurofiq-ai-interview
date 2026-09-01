@@ -80,7 +80,7 @@ func HandleTriggerDiscovery(c *gin.Context) {
 		return
 	}
 
-	saved, err := services.DiscoverFromBoards(req.Query, req.Limit)
+	saved, err := services.DiscoverFromBoardsManual(req.Query, req.Limit)
 	if err != nil {
 		c.JSON(http.StatusBadGateway, gin.H{"error": err.Error()})
 		return

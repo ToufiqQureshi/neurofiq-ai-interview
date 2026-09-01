@@ -888,6 +888,22 @@ func extractRolesFreely(company models.Company, pageURL string) ([]ExtractedJob,
 		return jobs, pageURL
 	}
 
+	// The same "View open positions" hop the plain path takes, on the
+	// rendered copy. Without it a company whose careers page is BOTH
+	// client-rendered AND a marketing page that links elsewhere — which is
+	// the ordinary shape for a company big enough to have a marketing team —
+	// falls through to the paid extraction, or to nothing. The link is only
+	// visible after rendering, so the earlier hop never saw it.
+	if next := findJobsListingLink(rendered, pageURL); next != "" {
+		if listing, lerr := fetchText(next); lerr == nil {
+			if jobs := extractJobsFromPageText(listing, next); len(jobs) > 0 {
+				log.Printf("careers page for %s: roles found on listing %s linked from the %s render",
+					company.Name, next, provider)
+				return jobs, next
+			}
+		}
+	}
+
 	return nil, pageURL
 }
 
@@ -1003,30 +1019,44 @@ var nonRoleTitles = []string{
 // at postings. That distinction is also the guard: rows produced here each
 // carry a distinct posting URL, which is the evidence careersPageResultLooksReal
 // weighs when deciding whether a result is a listing or an article.
-func extractJobsFromPageText(content, pageURL string) []ExtractedJob {
-	base, err := url.Parse(pageURL)
-	if err != nil {
-		return nil
-	}
+// pageLink is one link found on a page, whichever markup the page arrived in.
+type pageLink struct{ title, href string }
 
-	type candidate struct{ title, href string }
-	var candidates []candidate
+// linkCandidates pulls every link out of a page as (text, href) pairs.
+//
+// A page reaches us in one of two shapes and both carry links that matter: a
+// plain fetch gives HTML anchors, and a rendered read through Jina gives
+// markdown. Reading only one of them is how the rendered path came to be
+// half-blind — it could find roles but not the "View open positions" link
+// that leads to them, which is the shape most large careers pages take.
+func linkCandidates(content string) []pageLink {
+	var out []pageLink
 
 	for _, m := range markdownLinkRe.FindAllStringSubmatch(content, -1) {
-		candidates = append(candidates, candidate{title: m[1], href: m[2]})
+		out = append(out, pageLink{title: m[1], href: m[2]})
 	}
 	for _, m := range anchorRe.FindAllStringSubmatch(content, -1) {
-		candidates = append(candidates, candidate{title: htmlTagRe.ReplaceAllString(m[2], " "), href: m[1]})
+		out = append(out, pageLink{title: htmlTagRe.ReplaceAllString(m[2], " "), href: m[1]})
 	}
 
 	// Both shapes carry HTML entities, and both matter. An href written as
 	// ?dept=Sales&amp;loc=IN is stored verbatim otherwise, and the saved
 	// posting URL then points at a page that does not exist. The link text
 	// has the same problem: "Sales &amp; Marketing" is not a job title.
-	for i := range candidates {
-		candidates[i].title = html.UnescapeString(candidates[i].title)
-		candidates[i].href = html.UnescapeString(candidates[i].href)
+	for i := range out {
+		out[i].title = html.UnescapeString(out[i].title)
+		out[i].href = html.UnescapeString(out[i].href)
 	}
+	return out
+}
+
+func extractJobsFromPageText(content, pageURL string) []ExtractedJob {
+	base, err := url.Parse(pageURL)
+	if err != nil {
+		return nil
+	}
+
+	candidates := linkCandidates(content)
 
 	var out []ExtractedJob
 	seenURL := map[string]bool{}
@@ -1227,10 +1257,13 @@ func containsHiringMarker(body string) bool {
 	return false
 }
 
-// jobsLinkRe finds anchors whose text suggests they lead to the actual job
-// listings. Many /careers pages are marketing pages that link out to the
+// listingLinkTextRe matches the words a link uses when it leads to the actual
+// job listings. Many /careers pages are marketing pages that link out to the
 // real board — without following that link those companies look empty.
-var jobsLinkRe = regexp.MustCompile(`(?is)<a[^>]+href=["']([^"']+)["'][^>]*>([^<]{0,80}?(?:view\s+(?:all\s+)?(?:open|job|position|role)|current\s+opening|open\s+position|open\s+role|see\s+(?:all\s+)?job|explore\s+(?:open\s+)?role|browse\s+job|all\s+opening|job\s+opening)[^<]{0,40})</a>`)
+//
+// Matched against a link's text rather than against raw HTML, so it works the
+// same on a plain fetch and on Jina's markdown.
+var listingLinkTextRe = regexp.MustCompile(`(?i)view\s+(?:all\s+)?(?:open|job|position|role)|current\s+opening|open\s+position|open\s+role|see\s+(?:all\s+)?job|explore\s+(?:open\s+)?role|browse\s+job|all\s+opening|job\s+opening`)
 
 // guidancePageRe matches URLs that are career *advice* rather than career
 // *openings* — a distinction that cost us 295 fake job rows once.
@@ -1238,13 +1271,16 @@ var guidancePageRe = regexp.MustCompile(`(?i)career-(option|guide|advice|counsel
 
 // findJobsListingLink looks for a link from a careers page to the page that
 // actually lists roles. Returns an absolute URL, or "" if none found.
-func findJobsListingLink(pageHTML, baseURL string) string {
+func findJobsListingLink(content, baseURL string) string {
 	base, err := url.Parse(baseURL)
 	if err != nil {
 		return ""
 	}
-	for _, m := range jobsLinkRe.FindAllStringSubmatch(pageHTML, -1) {
-		href := strings.TrimSpace(m[1])
+	for _, link := range linkCandidates(content) {
+		if len(link.title) > 120 || !listingLinkTextRe.MatchString(link.title) {
+			continue
+		}
+		href := strings.TrimSpace(link.href)
 		if href == "" || strings.HasPrefix(href, "#") || strings.HasPrefix(href, "mailto:") || strings.HasPrefix(href, "javascript:") {
 			continue
 		}

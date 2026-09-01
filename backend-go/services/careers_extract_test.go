@@ -82,6 +82,41 @@ func TestExtractJobsDecodesHTMLEntities(t *testing.T) {
 	}
 }
 
+// A careers page that is both client-rendered and a marketing page linking
+// elsewhere is the ordinary shape for a company big enough to have a
+// marketing team. The listing link only exists after rendering, so the
+// plain-fetch hop never sees it — the rendered read has to take the same hop
+// or the company falls through to the paid extraction for nothing.
+func TestListingLinkIsFoundInBothPageShapes(t *testing.T) {
+	const base = "https://acme.com/careers"
+	const want = "https://acme.com/careers/openings"
+
+	// Jina's markdown — the shape the rendered path actually receives.
+	rendered := `
+	# Careers at Acme
+	Fetching open roles...
+	[View all open positions](/careers/openings)`
+	if got := findJobsListingLink(rendered, base); got != want {
+		t.Errorf("markdown: got %q, want %q", got, want)
+	}
+
+	// A plain fetch's HTML, which used to be the only shape understood.
+	htmlPage := `<div><a class="btn" href="/careers/openings">View all open positions</a></div>`
+	if got := findJobsListingLink(htmlPage, base); got != want {
+		t.Errorf("html: got %q, want %q", got, want)
+	}
+
+	// An ordinary link is not a listing link.
+	if got := findJobsListingLink(`<a href="/about">About us</a>`, base); got != "" {
+		t.Errorf("expected no listing link, got %q", got)
+	}
+
+	// A career-advice article is still refused, in both shapes.
+	if got := findJobsListingLink(`[View all open positions](/blog/career-options)`, base); got != "" {
+		t.Errorf("expected a guidance article to be refused, got %q", got)
+	}
+}
+
 func TestExtractJobsSkipsNavigationAndGuidanceLinks(t *testing.T) {
 	html := `
 	<a href="/careers/jobs/1">Software Engineer</a>

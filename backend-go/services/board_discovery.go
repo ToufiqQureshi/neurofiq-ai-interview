@@ -3,6 +3,7 @@ package services
 import (
 	"fmt"
 	"log"
+	"os"
 	"regexp"
 	"strings"
 	"time"
@@ -373,6 +374,53 @@ func resolveCompanyWebsite(name string) string {
 
 // DiscoverFromBoards runs one board search and stores the companies behind
 // the boards it finds, along with their open roles.
+// schedulerReserveFraction is the share of the monthly search budget that only
+// the scheduled rotation may spend.
+//
+// The manual endpoint is open to any signed-in user, and a per-user rate limit
+// does not bound what several accounts spend together: the budget is one
+// shared pot, so enough of them draining it would stop the rotation for the
+// rest of the month — the directory quietly stops growing, and nothing in the
+// product says why. A reserve makes that impossible without needing an
+// authorisation system: manual runs get the first three quarters, the
+// scheduler always has the last.
+//
+// This is not a substitute for admin-only, which remains the real fix and is
+// still listed as a gap. It is the part that can be done without one.
+const schedulerReserveFraction = 4
+
+// schedulerReserve is the number of searches held back for the rotation. A
+// policy number derived from configuration alone — no usage lookup — so it
+// stays testable and cannot fail closed on a database hiccup.
+func schedulerReserve() int {
+	total := 0
+	for _, p := range searchProviders {
+		if os.Getenv(p.envKey) != "" {
+			total += providerBudget(p)
+		}
+	}
+	return total / schedulerReserveFraction
+}
+
+// ManualDiscoveryBudget reports how many searches a user-triggered run may
+// still spend, and how many are held back for the scheduler.
+func ManualDiscoveryBudget() (spendable int, reserved int) {
+	reserved = schedulerReserve()
+	return SearchBudgetRemaining() - reserved, reserved
+}
+
+// DiscoverFromBoardsManual is the user-triggered entry point. It refuses to
+// spend into the scheduler's reserve; the rotation calls DiscoverFromBoards
+// directly and is not subject to it.
+func DiscoverFromBoardsManual(query string, limit int) ([]models.Company, error) {
+	if spendable, reserved := ManualDiscoveryBudget(); spendable <= limit {
+		return nil, fmt.Errorf(
+			"manual discovery is paused: %d searches left this month and %d of them are reserved for the scheduled rotation",
+			SearchBudgetRemaining(), reserved)
+	}
+	return DiscoverFromBoards(query, limit)
+}
+
 func DiscoverFromBoards(query string, limit int) ([]models.Company, error) {
 	if limit <= 0 || limit > maxNewCompaniesPerRun {
 		limit = maxNewCompaniesPerRun
