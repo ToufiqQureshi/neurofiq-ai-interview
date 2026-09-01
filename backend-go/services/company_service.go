@@ -85,20 +85,29 @@ func applyAreaFilter(db *gorm.DB, area string, prefix string) *gorm.DB {
 		col = prefix + ".area"
 	}
 	norm := strings.ToLower(strings.TrimSpace(area))
+	var keywords []string
 	switch {
 	case strings.Contains(norm, "delhi") || strings.Contains(norm, "ncr") || strings.Contains(norm, "noida") || strings.Contains(norm, "gurgaon") || strings.Contains(norm, "gurugram"):
-		return db.Where(col+" ILIKE ? OR "+col+" ILIKE ? OR "+col+" ILIKE ? OR "+col+" ILIKE ?", "%noida%", "%gurgaon%", "%gurugram%", "%delhi%")
+		keywords = []string{"noida", "gurgaon", "gurugram", "delhi"}
 	case strings.Contains(norm, "bengaluru") || strings.Contains(norm, "bangalore"):
-		return db.Where(col+" ILIKE ? OR "+col+" ILIKE ? OR "+col+" ILIKE ? OR "+col+" ILIKE ? OR "+col+" ILIKE ? OR "+col+" ILIKE ?", "%bengaluru%", "%bangalore%", "%hsr%", "%koramangala%", "%indiranagar%", "%whitefield%")
+		keywords = []string{"bengaluru", "bangalore", "hsr", "koramangala", "indiranagar", "whitefield"}
 	case strings.Contains(norm, "mumbai"):
-		return db.Where(col+" ILIKE ? OR "+col+" ILIKE ? OR "+col+" ILIKE ?", "%mumbai%", "%navi mumbai%", "%thane%")
+		keywords = []string{"mumbai", "navi mumbai", "thane"}
 	case strings.Contains(norm, "hyderabad"):
-		return db.Where(col+" ILIKE ? OR "+col+" ILIKE ?", "%hyderabad%", "%hitec%")
+		keywords = []string{"hyderabad", "hitec"}
 	case strings.Contains(norm, "pune"):
-		return db.Where(col+" ILIKE ?", "%pune%")
+		keywords = []string{"pune"}
 	default:
 		return db.Where(col+" ILIKE ?", "%"+area+"%")
 	}
+
+	var clauses []string
+	var vals []interface{}
+	for _, kw := range keywords {
+		clauses = append(clauses, col+" ILIKE ?")
+		vals = append(vals, "%"+kw+"%")
+	}
+	return db.Where(strings.Join(clauses, " OR "), vals...)
 }
 
 // techSubHub represents a real, defined startup corridor in an Indian tech city

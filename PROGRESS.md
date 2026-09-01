@@ -1,6 +1,7 @@
 # Progress Log
 
 ## 2026-09-01
+- Created **Production Checklist & High-Scale Architecture Guide (`PRODUCTION_CHECKLIST.md`)**: comprehensive roadmap covering Redis caching, PgBouncer connection pooling, Asynq background task queues, distributed token-bucket rate limiting, PostgreSQL read replicas, and Prometheus/Sentry observability for scaling to millions of users.
 - Built **Floating Company Inspector Drawer (`CompanyDrawer.tsx`)** inspired by BangaloreStartupMap / Airbnb: clicking any startup pin slides in a rich details card on the right containing company bio, funding stage, direct career/website links, active job roles, and 1-Click AI Mock Interview CTA.
 - Optimized Map Layout & Above-the-Fold Viewport: shifted stat cards to Grid-only mode so 2D and 3D map views load immediately visible with zero vertical scroll required.
 - Added **Interactive Open Roles Popup Accordion / Toggle (`CompanyJobList.tsx`)** to both 2D Leaflet and 3D MapLibre popups: candidates can click on `[ 💼 N open roles ▼ ]` directly on any map marker to expand the list of active job postings with 1-Click AI Mock Interview triggers and direct career application links.
