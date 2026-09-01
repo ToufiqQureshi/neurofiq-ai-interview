@@ -131,15 +131,31 @@ func TestExtractJobsSkipsNavigationAndGuidanceLinks(t *testing.T) {
 	}
 }
 
-func TestExtractJobsDeduplicates(t *testing.T) {
+// The posting URL is what identifies a job here, so the same link twice is one
+// row — but two links are two openings even when they share a title. A board
+// of any size lists several roles under one title ("Software Engineer" in two
+// cities), and collapsing those loses real jobs.
+func TestExtractJobsDeduplicatesOnURLNotTitle(t *testing.T) {
 	html := `
 	<a href="/jobs/abc">Backend Engineer</a>
 	<a href="/jobs/abc">Backend Engineer</a>
 	<a href="/jobs/def">Backend Engineer</a>`
 
 	jobs := extractJobsFromPageText(html, "https://acme.com/careers")
-	if len(jobs) != 1 {
-		t.Fatalf("expected duplicates to collapse, got %d: %v", len(jobs), titlesOf(jobs))
+	if len(jobs) != 2 {
+		t.Fatalf("expected the repeated link to collapse and the distinct posting to survive, got %d: %v",
+			len(jobs), titlesOf(jobs))
+	}
+
+	seen := map[string]bool{}
+	for _, j := range jobs {
+		if seen[j.URL] {
+			t.Errorf("duplicate posting URL %q survived", j.URL)
+		}
+		seen[j.URL] = true
+	}
+	if !seen["https://acme.com/jobs/abc"] || !seen["https://acme.com/jobs/def"] {
+		t.Errorf("expected both distinct postings, got %v", seen)
 	}
 }
 

@@ -1059,8 +1059,16 @@ func extractJobsFromPageText(content, pageURL string) []ExtractedJob {
 	candidates := linkCandidates(content)
 
 	var out []ExtractedJob
+	// Deduped on the posting URL alone, which is what identifies a job
+	// everywhere else in this system: replaceJobsForCompany dedupes on it and
+	// the jobs table is uniquely indexed on (company_id, url).
+	//
+	// It used to also drop a second role with the same title, which reads as
+	// tidying and is actually data loss: "Software Engineer" in Bangalore and
+	// "Software Engineer" in Pune are two openings with two postings, and a
+	// board of any size lists several roles under one title. Only one of them
+	// survived.
 	seenURL := map[string]bool{}
-	seenTitle := map[string]bool{}
 
 	for _, c := range candidates {
 		title := cleanRoleTitle(c.title)
@@ -1091,11 +1099,10 @@ func extractJobsFromPageText(content, pageURL string) []ExtractedJob {
 		if guidancePageRe.MatchString(absStr) {
 			continue
 		}
-		if seenURL[absStr] || seenTitle[strings.ToLower(title)] {
+		if seenURL[absStr] {
 			continue
 		}
 		seenURL[absStr] = true
-		seenTitle[strings.ToLower(title)] = true
 
 		out = append(out, ExtractedJob{Title: title, URL: absStr})
 	}
