@@ -459,28 +459,22 @@ func RunDiscoveryRotation() {
 
 	// Only one instance runs this tick. The cron scheduler lives inside the
 	// API process, so scaling to two containers would otherwise mean two
-	// discovery runs an hour and every job board fetched twice. The lease is
-	// slightly shorter than the interval so a crashed instance frees it
-	// before the next tick is due.
-	// The lease has to cover the whole interval, not part of it. Instance
-	// ticks are not aligned: if A runs at :00 and B's schedule fires at
-	// :55, a lease that expired at :55 lets B run the same query again —
-	// the same metered searches and the same homepage lookups, which is
-	// exactly what the lease exists to prevent. Derived from the interval so
-	// the two cannot drift apart again.
+	// discovery runs per interval: double the metered searches, and every
+	// job board fetched twice.
 	//
-	// A TTL this long does not lock this instance out of its own next tick:
-	// AcquireCronLease re-takes a lease the same holder already has.
+	// The lease covers the whole interval rather than part of it, and is not
+	// released when the run finishes. Instance ticks are not aligned: if A
+	// runs at :00 and B's schedule fires at :55, a lease that expired at :55
+	// would let B run the identical query — the rotation index is derived
+	// from the clock, so B lands on the same seed. A TTL this long does not
+	// lock A out of its own next tick, because AcquireCronLease re-takes a
+	// lease the same holder already has. Shutdown releases it explicitly so
+	// a redeploy does not idle the next tick.
 	if !AcquireCronLease(DiscoveryLeaseName, discoveryLeaseTTL) {
 		log.Printf("board discovery rotation: another instance holds the lease, skipping")
 		return
 	}
-	// Deliberately NOT released when the run finishes. Each process registers
-	// its own "@every 1h" schedule, so instance ticks are not aligned: if A
-	// finishes at :05 and B ticks at :25, B would take the freed lease and —
-	// because the query index is derived from the current hour — run the
-	// identical query again. The 55-minute TTL covers the rest of the
-	// interval; shutdown releases it explicitly.
+
 	idx := int((time.Now().Unix() / int64(discoveryIntervalSeconds)) % int64(len(boardSeedQueries)))
 	query := boardSeedQueries[idx]
 
