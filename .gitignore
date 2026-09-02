@@ -46,3 +46,10 @@ graphify-out/
 
 # Claude Code local scheduler lock
 .claude/scheduled_tasks.lock
+
+# Debug screenshots from Playwright verification runs
+/*.png
+
+# Local scratch
+/restore.py
+/temp-resume-matcher/

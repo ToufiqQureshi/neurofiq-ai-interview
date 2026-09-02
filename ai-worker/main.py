@@ -1,10 +1,12 @@
 from fastapi import FastAPI, Header, HTTPException, Depends
 from pydantic import BaseModel, Field
-from typing import List
+from typing import List, Optional
 import os
 
 from agno.agent import Agent
 from agno.models.deepseek import DeepSeek
+
+from scraper import scrape_url
 
 app = FastAPI()
 
@@ -104,6 +106,22 @@ class EvaluationResult(BaseModel):
     overall_feedback: str
     detailed_feedback: List[FeedbackItem]
 
+# ---- Pydantic models for Profile Radar ----
+class ProfileRadarPayload(BaseModel):
+    profile_url: str
+
+class ProfileSectionFeedback(BaseModel):
+    section: str = Field(description="e.g., 'Headline', 'Summary', 'Experience', 'Skills'")
+    feedback: str = Field(description="Critique of the current section")
+    suggestion: str = Field(description="Actionable suggestion or rewritten example")
+
+class ProfileRadarResult(BaseModel):
+    profile_name: str
+    overall_score: int = Field(description="Profile strength score from 0 to 100")
+    missing_keywords: List[str]
+    section_feedbacks: List[ProfileSectionFeedback]
+    general_advice: str
+
 if DEEPSEEK_API_KEY:
     analysis_agent = Agent(
         model=DeepSeek(id="deepseek-chat", api_key=DEEPSEEK_API_KEY),
@@ -137,6 +155,18 @@ if DEEPSEEK_API_KEY:
             "Avoid generic rubric language ('lacks depth', 'insufficient detail') — explain concretely what was missing and what a stronger answer would have covered.",
             "An answer of 'Skipped' or an empty answer scores 0 and the feedback should simply note it was not attempted.",
             "Never mention that you are an AI or that this is an automated evaluation.",
+        ],
+    )
+    radar_agent = Agent(
+        model=DeepSeek(id="deepseek-chat", api_key=DEEPSEEK_API_KEY),
+        output_schema=ProfileRadarResult,
+        description="You are an expert tech recruiter and profile optimizer analyzing a candidate's LinkedIn, Wellfound, or GitHub profile.",
+        instructions=[
+            "Extract the candidate's name or username.",
+            "Analyze the profile text for missing keywords, weak headline/summary, and poor bullet points.",
+            "Generate actionable suggestions to improve visibility for recruiters and ATS.",
+            "Provide a realistic overall profile strength score out of 100.",
+            "Never mention that you are an AI.",
         ],
     )
 # ---- Dependencies ----
@@ -251,3 +281,57 @@ async def evaluate_answer(payload: EvaluatePayload):
     except Exception as e:
         print(f"Agno Agent Error (Evaluation): {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/internal/optimize-profile", dependencies=[Depends(verify_internal_secret)])
+async def optimize_profile(payload: ProfileRadarPayload):
+    if not radar_agent:
+        raise HTTPException(status_code=500, detail="DEEPSEEK_API_KEY not configured")
+
+    # 1. Scrape the URL
+    profile_text = scrape_url(payload.profile_url)
+    if not profile_text:
+        # Return a gracefully mocked result so the frontend can display the issue
+        # instead of a 500/400 error which Go will mask into a generic failure.
+        return {
+            "profile_name": "Scraping Failed",
+            "overall_score": 0,
+            "missing_keywords": ["Accessible URL"],
+            "section_feedbacks": [
+                {
+                    "section": "System",
+                    "feedback": "We were unable to access this URL. The server timed out or blocked us.",
+                    "suggestion": "Try providing a public Wellfound or GitHub profile instead, as some platforms heavily restrict automated scans."
+                }
+            ],
+            "general_advice": "Failed to scrape this profile. We couldn't fetch the page content."
+        }
+        
+    if profile_text == "ERROR_LOGIN_WALL_LINKEDIN":
+        # Return a gracefully mocked result so the frontend can display the issue
+        # instead of a 500/400 error which Go will mask into a generic failure.
+        return {
+            "profile_name": "Login Wall Detected",
+            "overall_score": 0,
+            "missing_keywords": ["Public Visibility"],
+            "section_feedbacks": [
+                {
+                    "section": "Profile Privacy",
+                    "feedback": "LinkedIn blocked our heuristic engine because your profile requires logging in to view.",
+                    "suggestion": "Try providing a public Wellfound or GitHub profile instead, as LinkedIn aggressively blocks automated scans."
+                }
+            ],
+            "general_advice": "We hit a login wall. LinkedIn aggressively blocks automated scrapers from viewing non-public profiles."
+        }
+
+    # 2. Build the LLM Prompt
+    prompt = f"Analyze this candidate's profile:\n{profile_text}\n\n"
+    prompt += "Provide optimization feedback to improve their ATS score and recruiter visibility."
+
+    # 3. Call Agno Agent
+    try:
+        run_response = radar_agent.run(prompt)
+        return run_response.content.model_dump()
+    except Exception as e:
+        print(f"Agno Agent Error (Profile Radar): {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+

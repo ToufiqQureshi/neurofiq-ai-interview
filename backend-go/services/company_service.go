@@ -381,6 +381,26 @@ func PruneDeadJobs() (int, error) {
 	return len(deadIDs), nil
 }
 
+// listableHaving drops the companies the pipeline has no way to read.
+//
+// A company with no board AND no roles has no listings source at all: ATS
+// detection ran against its careers page and found nothing, and the free
+// careers-page tiers returned nothing either. Listing it states a fact the
+// directory does not have — a visitor reads a card with no roles as "not
+// hiring", when the truth is "we cannot see".
+//
+// This is deliberately NOT the same as hiding every company without open
+// roles. A company whose board we can read and which has nothing open today
+// is a real answer, and the directory is a map of the ecosystem rather than a
+// jobs board — defaulting the whole list to hiring-only once hid the map
+// itself. So the line is drawn at readable-or-not, not at hiring-or-not:
+// an empty read is not the same as not hiring.
+//
+// Applied only to the default listing. hiringOnly is a stricter filter that
+// already excludes these, and the stats strip counts them separately so the
+// two never disagree.
+const listableHaving = "COUNT(jobs.id) > 0 OR COALESCE(companies.ats_slug, '') <> ''"
+
 // ListCompanies returns a filtered, paginated slice of the company directory.
 // hiringOnly restricts it to companies with at least one open role — most
 // companies aren't hiring at any given moment, so browsing the full list is
@@ -415,6 +435,8 @@ func ListCompanies(sector, stage, area, q string, hiringOnly bool, page, pageSiz
 			Group("companies.id")
 		if hiringOnly {
 			q = q.Having("COUNT(jobs.id) > 0")
+		} else {
+			q = q.Having(listableHaving)
 		}
 		return q
 	}
@@ -626,7 +648,13 @@ type DirectoryStats struct {
 func GetDirectoryStats() (DirectoryStats, error) {
 	var s DirectoryStats
 
-	if err := config.DB.Model(&models.Company{}).Count(&s.Companies).Error; err != nil {
+	// Counted the same way the default listing filters, or the strip would
+	// advertise more companies than the grid below it can show.
+	if err := config.DB.Model(&models.Company{}).
+		Joins("LEFT JOIN jobs ON jobs.company_id = companies.id").
+		Group("companies.id").
+		Having(listableHaving).
+		Distinct("companies.id").Count(&s.Companies).Error; err != nil {
 		return s, err
 	}
 	if err := config.DB.Model(&models.Job{}).Count(&s.Jobs).Error; err != nil {

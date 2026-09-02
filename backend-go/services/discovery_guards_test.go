@@ -166,3 +166,122 @@ func jobRowsFrom(extracted []ExtractedJob) []models.Job {
 	}
 	return rows
 }
+
+// A board belongs to a company, not to a country. Accepting a company because
+// it hires in India used to bring in every posting it had anywhere: the
+// directory advertised 6,621 "open roles in India" and 1,626 of them were.
+func TestKeepIndianRolesFiltersBoards(t *testing.T) {
+	rows := []models.Job{
+		{Title: "Backend Engineer", Location: "Bengaluru, India", Source: "greenhouse"},
+		{Title: "SDET", Location: "Gurgaon", Source: "lever"},
+		{Title: "Support Engineer", Location: "Remote - India", Source: "ashby"},
+		{Title: "Designer", Location: "Berlin, Germany", Source: "greenhouse"},
+		{Title: "Recruiter", Location: "Austin, TX", Source: "lever"},
+		// A bare "Remote" on a board means remote wherever that company is.
+		{Title: "Copywriter", Location: "Remote", Source: "greenhouse"},
+		// Boards state locations; one that does not cannot be shown to be here.
+		{Title: "Analyst", Location: "", Source: "workday"},
+	}
+
+	got := keepIndianRoles(append([]models.Job(nil), rows...))
+	if len(got) != 3 {
+		t.Fatalf("kept %d board roles, want 3: %+v", len(got), got)
+	}
+	for _, r := range got {
+		if !looksIndian(r.Location) {
+			t.Errorf("kept board role %q at %q", r.Title, r.Location)
+		}
+	}
+}
+
+// The company's own careers page is not a global feed, and those pages
+// describe location loosely or not at all. Judging them by the board rule
+// deleted real openings at Testbook and Schoolnet India — the exact roles the
+// directory exists to show.
+func TestKeepIndianRolesTrustsCareersPages(t *testing.T) {
+	rows := []models.Job{
+		{Title: "Content Lead", Location: "Not specified", Source: careersPageSource},
+		{Title: "Field Trainer", Location: "As per requirement", Source: careersPageSource},
+		{Title: "SDE", Location: "Hybrid", Source: careersPageSource},
+		{Title: "Ops", Location: "", Source: careersPageSource},
+		{Title: "Growth", Location: "Remote", Source: careersPageSource},
+		{Title: "Analyst", Location: "Mumbai", Source: careersPageSource},
+	}
+	if got := keepIndianRoles(append([]models.Job(nil), rows...)); len(got) != len(rows) {
+		t.Errorf("kept %d careers-page roles, want all %d", len(got), len(rows))
+	}
+}
+
+// The worst version of this bug is the quiet one: a board with plenty of roles
+// and none of them here has to read as empty, so the empty-read protection
+// sees it, rather than sailing past and clearing the company downstream.
+func TestKeepIndianRolesLeavesNothingWhenNoneAreIndian(t *testing.T) {
+	rows := []models.Job{
+		{Title: "Engineer", Location: "San Francisco, CA", Source: "greenhouse"},
+		{Title: "Engineer", Location: "London, UK", Source: "greenhouse"},
+	}
+	if got := keepIndianRoles(rows); len(got) != 0 {
+		t.Errorf("kept %d roles from an all-foreign board, want 0", len(got))
+	}
+}
+
+// "india" is a substring of "Indianapolis" and "Indiana", and matching it that
+// way put a US company on a map of Indian startups: Speechify's Indianapolis
+// board read as Indian, so the company was accepted and its area stamped
+// "Indianapolis, IN, USA".
+func TestLooksIndianMatchesWholeWords(t *testing.T) {
+	indian := []string{
+		"Bengaluru, India", "Gurgaon", "Remote - India", "Pune, Maharashtra, India",
+		"Kochi", "NOIDA", "Hyderabad, Telangana",
+	}
+	for _, loc := range indian {
+		if !looksIndian(loc) {
+			t.Errorf("looksIndian(%q) = false, want true", loc)
+		}
+	}
+
+	foreign := []string{
+		"Indianapolis, IN", "Indianapolis, IN, USA", "Fort Wayne, Indiana Area",
+		"Remote - Indiana, USA; Remote - Ohio, USA",
+		"San Francisco", "London, UK", "Remote", "", "Not specified",
+	}
+	for _, loc := range foreign {
+		if looksIndian(loc) {
+			t.Errorf("looksIndian(%q) = true, want false", loc)
+		}
+	}
+}
+
+// The careers-page link scan takes an anchor's text as the role name, so a page
+// that labels every listing "View details" stored that as a job — thirty-five
+// of them across thirteen companies, one being the literal "Apply--> <!-- Now",
+// a piece of the page's own markup.
+func TestLooksLikeRoleTitle(t *testing.T) {
+	junk := []string{
+		"Apply--> <!-- Now", "View details", "View JD", "Explore more",
+		"Read more", "Apply Now", "here", "TL", "SSO", "   ", "<div>",
+	}
+	for _, title := range junk {
+		if looksLikeRoleTitle(title) {
+			t.Errorf("looksLikeRoleTitle(%q) = true, want false", title)
+		}
+	}
+
+	// Matching is exact for a reason: these begin with, or contain, words from
+	// the reject list and are real jobs. Anything looser deletes real openings
+	// to remove cosmetic ones.
+	real := []string{
+		"Back Office Executive",
+		"Backend Engineer",
+		"Application Security Engineer",
+		"View Engineering Manager",
+		"Detail Design Engineer",
+		"Submissions Coordinator",
+		"Next.js Developer",
+	}
+	for _, title := range real {
+		if !looksLikeRoleTitle(title) {
+			t.Errorf("looksLikeRoleTitle(%q) = false, want true", title)
+		}
+	}
+}

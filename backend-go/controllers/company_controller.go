@@ -100,22 +100,3 @@ func HandleTriggerDiscovery(c *gin.Context) {
 
 	c.JSON(http.StatusOK, gin.H{"saved": len(saved), "companies": saved})
 }
-
-// HandlePruneDeadJobs runs live health checks across all jobs in the database
-// and deletes any 404, 410 or expired postings.
-func HandlePruneDeadJobs(c *gin.Context) {
-	pruned, err := services.PruneDeadJobs()
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to prune dead jobs", "details": err.Error()})
-		return
-	}
-
-	stats, _ := services.GetDirectoryStats()
-	c.JSON(http.StatusOK, gin.H{
-		"message": "Dead jobs pruned successfully",
-		"pruned_count": pruned,
-		"active_jobs": stats.Jobs,
-		"hiring_companies": stats.HiringCompanies,
-	})
-}
-

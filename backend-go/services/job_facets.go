@@ -36,10 +36,18 @@ var levelKeywords = []struct {
 	keywords []string
 }{
 	{"Lead", []string{"lead", "head of", "principal", "director", "vp ", "vice president", "chief", "cto", "cfo", "ceo", "founding"}},
-	{"Senior", []string{"senior", "sr.", "sr ", "staff", "manager", "sde 3", "sde iii", "iii"}},
+	// "manager" used to sit in Senior, and it put every Account Manager and
+	// Product Manager there: 983 roles carried the word with no seniority
+	// marker at all, which is most of the gap between 2,608 Senior and 19
+	// Mid. Managing people is a kind of job, not a rung — there are junior
+	// managers and senior ones — so it decides the field, not the level.
+	{"Senior", []string{"senior", "sr.", "sr ", "staff", "sde 3", "sde iii", " iii"}},
 	{"Fresher", []string{"intern", "trainee", "fresher", "graduate", "entry level", "entry-level", "apprentice"}},
 	{"Junior", []string{"junior", "jr.", "jr ", "associate", "sde 1", "sde i ", "analyst i"}},
-	{"Mid", []string{"sde 2", "sde ii", "mid-level", "ii"}},
+	// Roman numerals are matched with their leading space, so "ii" finds
+	// "Engineer II" without also firing on any title that merely contains the
+	// letters. Senior is tested first, so "Engineer III" never lands here.
+	{"Mid", []string{"sde 2", "sde ii", "mid-level", " ii"}},
 }
 
 // ClassifyField buckets a job by what kind of work it is.

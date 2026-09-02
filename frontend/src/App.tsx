@@ -10,6 +10,7 @@ import { InterviewSession } from './pages/InterviewSession';
 import { Report } from './pages/Report';
 import { PublicReport } from './pages/PublicReport';
 import { CompanyMap } from './pages/CompanyMap';
+import { Radar } from './pages/Radar';
 import { DashboardLayout } from './components/DashboardLayout';
 import { AuthProvider } from './context/AuthContext';
 import { ProtectedRoute } from './components/ProtectedRoute';
@@ -39,6 +40,7 @@ function App() {
             {/* Authenticated Routes with Sidebar */}
             <Route element={<DashboardLayout />}>
               <Route path="/dashboard" element={<Dashboard />} />
+              <Route path="/radar" element={<Radar />} />
               <Route path="/repositories" element={<Repositories />} />
               <Route path="/reports" element={<ReportsList />} />
               <Route path="/analyze/:repoId" element={<AnalysisProgress />} />

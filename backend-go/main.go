@@ -230,8 +230,6 @@ func main() {
 	// Public company directory ("Job Map") — no auth required.
 	r.GET("/api/companies", controllers.HandleGetCompanies)
 	r.GET("/api/companies/stats", controllers.HandleGetDirectoryStats)
-	r.POST("/api/jobs/prune-dead", controllers.HandlePruneDeadJobs)
-	r.GET("/api/jobs/prune-dead", controllers.HandlePruneDeadJobs)
 	r.GET("/api/companies/:id", controllers.HandleGetCompanyByID)
 	r.GET("/api/companies/:id/jobs", controllers.HandleGetCompanyJobs)
 
@@ -259,6 +257,7 @@ func main() {
 		{
 			paid.POST("/repos/analyze", controllers.HandleAnalyzeRepo)
 			paid.POST("/interviews/submit", controllers.HandleSubmitInterview)
+			paid.POST("/radar/analyze", controllers.HandleRadarAnalyze)
 		}
 
 		// Discovery is throttled far harder than the rest of the paid group,
@@ -288,16 +287,34 @@ func main() {
 	// doesn't sit empty waiting on the first scheduled tick — the cron lease
 	// inside RunDiscoveryRotation makes sure only one instance does the work.
 	go safely("startup discovery", services.RunDiscoveryRotation)
-	go safely("startup job sync", services.SyncAllCompanyJobs)
+	// The backfill follows the sync in the same goroutine rather than racing
+	// it. Run in parallel, the sync held a company list read before the
+	// backfill deleted one of them from under it, and wrote that company's
+	// roles back with a company_id no longer in the table — 48 orphans, made
+	// by the very pass that exists to remove them.
+	go safely("startup sync and backfill", func() {
+		services.SyncAllCompanyJobs()
+		// A deploy is exactly when the rules have just changed, so this runs
+		// now rather than up to twelve hours from now.
+		services.ReapplyGuards()
+		services.RunEnrichment()
+	})
 
 	scheduler := cron.New()
-	// Every 3 hours, matching services.discoveryIntervalSeconds — the
+	// Every 15 minutes, matching services.discoveryIntervalSeconds — the
 	// rotation cursor is derived from that interval, so the two must agree.
+	//
+	// This is a deliberate front-load, not a default. At four ticks an hour a
+	// run can spend six metered searches each, which is the whole free month
+	// in about two and a half days; the budget guards then stop discovery for
+	// the rest of it. What a month yields is set by the budget, not by the
+	// cadence — this buys the same companies sooner, and nothing after. Put it
+	// back to 3h / 3*3600 once the directory is full enough.
 	//
 	// Discovery is the only metered step; the job sync it triggers is free
 	// and covers every company already stored, so listings stay fresh at this
 	// cadence. Only the rate of finding new boards slows down.
-	if _, err := scheduler.AddFunc("@every 3h", func() {
+	if _, err := scheduler.AddFunc("@every 15m", func() {
 		safely("discovery rotation", services.RunDiscoveryRotation)
 	}); err != nil {
 		log.Fatalf("Failed to schedule discovery rotation: %v", err)
@@ -310,6 +327,17 @@ func main() {
 	}); err != nil {
 		log.Fatalf("Failed to schedule job sync: %v", err)
 	}
+
+	// Enrichment reads each company's own homepage for the description and
+	// sector its card needs. One free GET per company, no metered search and
+	// no model, so it keeps its own schedule instead of competing with
+	// discovery for a budget. A bounded batch each hour works through the
+	// backlog without sweeping the table at once.
+	if _, err := scheduler.AddFunc("@every 1h", func() {
+		safely("enrichment", services.RunEnrichment)
+	}); err != nil {
+		log.Fatalf("Failed to schedule enrichment: %v", err)
+	}
 	// Housekeeping: reclaim abandoned analyses and forget idle rate-limit
 	// buckets. Cheap, and it keeps a long-running process from drifting.
 	if _, err := scheduler.AddFunc("@every 15m", func() {
@@ -321,6 +349,21 @@ func main() {
 		})
 	}); err != nil {
 		log.Fatalf("Failed to schedule housekeeping: %v", err)
+	}
+	if _, err := scheduler.AddFunc("@every 12h", func() {
+		safely("prune dead jobs", func() {
+			services.PruneDeadJobs()
+		})
+		// Re-run the admission rules over rows already stored. Every guard in
+		// services runs at insert and never again, so a rule added today
+		// leaves yesterday's violations in place — and clearing those has
+		// meant hand-written DELETEs against production, which is the one
+		// thing a self-maintaining directory must never need.
+		safely("guard backfill", func() {
+			services.ReapplyGuards()
+		})
+	}); err != nil {
+		log.Fatalf("Failed to schedule dead job pruning: %v", err)
 	}
 	scheduler.Start()
 

@@ -53,27 +53,110 @@ var boardSearchDomains = []string{
 
 // boardSeedQueries rotate the search so the directory keeps widening instead
 // of re-reading the same boards. Cities and roles, because that is what a
-// board page's text actually contains — a Bangalore posting says
-// "Bangalore", it does not say "Series A fintech".
+// board page's text actually contains — a Bangalore posting says "Bangalore",
+// it does not say "Series A fintech".
 var (
-	boardSeedCities = []string{
-		"Bangalore", "Bengaluru", "Mumbai", "Delhi", "Gurgaon", "Noida",
-		"Pune", "Hyderabad", "Chennai", "Ahmedabad", "Kolkata", "India remote",
+	// boardSeedCities carries a role budget per city, because the cities are
+	// not the same size and an equal share sent the rotation to the wrong
+	// places.
+	//
+	// Every city used to get all ten roles, so Kolkata drew as much of the
+	// budget as Hyderabad. The directory ended up holding 21 Kolkata companies
+	// and 4 Hyderabad ones — while Hyderabad is India's fourth-largest startup
+	// hub with ~5,000 startups and the fastest-growing funding of any Indian
+	// city, and Kolkata is outside the top ten. Delhi NCR meanwhile drew three
+	// shares by accident, because it is spelled as three cities, and came to
+	// hold 70 companies against Bengaluru's 28 — with Bengaluru the larger
+	// ecosystem, 12,000 startups to NCR's 10,000.
+	//
+	// roles is how many of boardSeedRoles that city gets, taken from the front
+	// of the list. Weighting by repeating a query instead would have spent a
+	// metered search to fetch results already seen; a bigger city earns a
+	// broader sweep of roles, which is both distinct and more useful — a large
+	// ecosystem really does hire designers and data scientists, a small one
+	// mostly hires engineers.
+	//
+	// Sizes follow published counts (Inc42, Tracxn, StartupBlink, 2025-26):
+	// Bengaluru 12k, Delhi NCR 10k, Mumbai 8k, Hyderabad 5k, Pune 4k, Chennai
+	// 3.5k, Ahmedabad 2.5k, Kochi 1.8k, Jaipur 1.5k, Chandigarh 1.2k. Bengaluru
+	// carries both spellings because boards use both and they return different
+	// pages.
+	boardSeedCities = []seedCity{
+		// spellings, not separate cities: boards write both "Bengaluru" and
+		// "Bangalore" and the two return different pages, so the rotation uses
+		// them in turn. Listing them as two entries put the same city on two
+		// consecutive ticks while pretending they were different places.
+		{spellings: []string{"Bengaluru", "Bangalore"}, roles: 10},
+		{spellings: []string{"Mumbai"}, roles: 10},
+		{spellings: []string{"Gurgaon", "Gurugram"}, roles: 8},
+		{spellings: []string{"Hyderabad"}, roles: 8},
+		{spellings: []string{"Noida"}, roles: 7},
+		{spellings: []string{"Pune"}, roles: 5},
+		{spellings: []string{"Chennai"}, roles: 5},
+		{spellings: []string{"Delhi", "New Delhi"}, roles: 5},
+		{spellings: []string{"India remote"}, roles: 4},
+		{spellings: []string{"Ahmedabad"}, roles: 3},
+		{spellings: []string{"Kochi"}, roles: 2},
+		{spellings: []string{"Jaipur"}, roles: 2},
+		{spellings: []string{"Chandigarh"}, roles: 2},
+		{spellings: []string{"Indore"}, roles: 2},
+		{spellings: []string{"Coimbatore"}, roles: 2},
+		// Kolkata is outside the published top ten and its budget says so, but
+		// it is not nothing either: the directory already holds 21 companies
+		// hiring there. Cutting a city to zero stops the rotation ever looking
+		// again, which is a stronger claim than the data supports.
+		{spellings: []string{"Kolkata"}, roles: 2},
 	}
+
+	// boardSeedRoles are ordered most general first, because a city with a
+	// small budget takes them from the front and should spend it on the roles
+	// most likely to exist anywhere.
 	boardSeedRoles = []string{
-		"software engineer", "backend engineer", "frontend engineer",
-		"data scientist", "product manager", "designer",
-		"machine learning engineer", "devops engineer", "sales", "marketing",
+		"software engineer", "backend engineer", "sales", "marketing",
+		"data scientist", "frontend engineer", "product manager",
+		"designer", "devops engineer", "machine learning engineer",
 	}
 
 	boardSeedQueries = buildBoardSeedQueries()
 )
 
+// seedCity is one place the rotation searches, and how much of the role list
+// it is worth spending there.
+type seedCity struct {
+	// spellings are the ways boards write this city. They are alternated
+	// across the city's queries rather than listed as separate cities.
+	spellings []string
+	// roles is how many of boardSeedRoles this city gets, from the front.
+	roles int
+}
+
+// Name is the city as the directory refers to it.
+func (c seedCity) Name() string { return c.spellings[0] }
+
+// buildBoardSeedQueries lays the rotation out so consecutive ticks land in
+// different cities.
+//
+// The order is the whole point. This used to loop city-outer, role-inner,
+// which put all ten of a city's queries next to each other: a day of discovery
+// was one or two cities and nothing else, and a report on "which city has the
+// most companies" measured the cursor rather than the country — 20 of the 34
+// companies found in one window came from the two cities the rotation happened
+// to be sitting on.
+//
+// Roles run on the outside now and cities on the inside, so every city is
+// visited once before any city is visited twice. A city with a bigger budget
+// survives into more of the later role passes, and the two heaviest keep a
+// full budget so the tail of the rotation still alternates rather than ending
+// on one city repeated.
 func buildBoardSeedQueries() []string {
 	out := make([]string, 0, len(boardSeedCities)*len(boardSeedRoles))
-	for _, city := range boardSeedCities {
-		for _, role := range boardSeedRoles {
-			out = append(out, fmt.Sprintf("%s jobs in %s, India", role, city))
+	for r, role := range boardSeedRoles {
+		for _, city := range boardSeedCities {
+			if r >= city.roles {
+				continue // this city's budget is spent
+			}
+			spelling := city.spellings[r%len(city.spellings)]
+			out = append(out, fmt.Sprintf("%s jobs in %s, India", role, spelling))
 		}
 	}
 	return out
@@ -89,7 +172,7 @@ func buildBoardSeedQueries() []string {
 // single company was looked up. Job syncing still runs hourly, so listings
 // stay just as fresh; it is finding *new* boards that slows down, and a seed
 // query that waits three hours costs nothing.
-const discoveryIntervalSeconds = 3 * 3600
+const discoveryIntervalSeconds = 15 * 60 // front-loaded; see main.go
 
 // DiscoveryLeaseName is the cron lease that keeps two instances from running
 // the same discovery tick.
@@ -155,6 +238,12 @@ var aggregatorHosts = []string{
 	"medium.com", "substack.com", "github.io", "notion.site",
 	"greenhouse.io", "lever.co", "ashbyhq.com", "workable.com",
 	"smartrecruiters.com", "keka.com", "darwinbox.in", "myworkdayjobs.com",
+	// The asset CDNs those boards serve from, and the vendors' own marketing
+	// sites. A board page links to its stylesheets, its icons and a "powered
+	// by" badge far more often than to the employer: without these, a scan of
+	// GitLab's Greenhouse board returned greenhouse.com as GitLab's website.
+	"ashbyprd.com", "greenhouse-cdn.com", "leverstatic.com", "smartrecruiters.io",
+	"greenhouse.com", "lever.com", "ashby.hq", "workable.co", "keka.io",
 }
 
 func isAggregatorHost(host string) bool {
@@ -173,6 +262,32 @@ func isAggregatorHost(host string) bool {
 // every one of those roles under the fund's name.
 var sharedBoardRe = regexp.MustCompile(`(?i)\b(vc|ventures?|capital|partners|fund|portfolio|talent|network|community|collective|accelerator|incubator)\b`)
 
+// aggregatorBoardRe matches boards belonging to a job marketplace or a
+// staffing firm rather than to an employer. sharedBoardRe covers funds and
+// talent networks, which name themselves as such; these do not — and one of
+// them, Jobgether, put 4440 roles into this directory under a single company,
+// two thirds of every job it held. Those roles are real. They just belong to
+// several hundred other employers.
+var aggregatorBoardRe = regexp.MustCompile(`(?i)(jobgether|jobsora|jooble|remotive|weworkremotely|remoteok|weekday|hirist|instahyre|cutshort|foundit|monsterindia|timesjobs|naukri|indeed|glassdoor|ziprecruiter|simplyhired|adzuna|careerbuilder|staffing|manpower|randstad|adecco|teamlease|quesscorp|recruit(er|ers|ment|ing)|placements?|jobboard|jobsite)`)
+
+// maxBoardRoles rejects a board so large it cannot belong to one employer.
+//
+// It was 400, and live discovery showed that to be wrong: it threw out
+// Paytm Payments at 840 roles and WPP Media at 1074, both of which are exactly
+// the employers this directory exists to list. Between roughly 500 and 1500 a
+// role count does not separate an aggregator from a large employer at all, so
+// a ceiling in that band costs real companies and buys nothing.
+//
+// What actually catches the case this guard was written for is
+// aggregatorBoardRe: Jobgether is rejected by name, before a metered search is
+// spent. The ceiling is only the backstop for a board no name list anticipated,
+// so it sits above any real employer and below the 4440 roles Jobgether had.
+//
+// The signal that would separate the middle band is dispersion, not count — an
+// aggregator’s roles are scattered across the world while an employer’s cluster
+// in a few offices — but that is more machinery than this has earned.
+const maxBoardRoles = 2000
+
 // indiaLocationHints decide whether a board has roles worth listing. The
 // directory is for people looking for work in India; a company headquartered
 // anywhere is welcome, as long as it is hiring here.
@@ -183,21 +298,25 @@ var indiaLocationHints = []string{
 	"trivandrum", "thiruvananthapuram", "bhubaneswar", "nagpur", "surat",
 }
 
+// indiaLocationRe matches the hints as whole words.
+//
+// Substring matching was wrong in a way that took a US company into an India
+// directory: "india" is inside "Indianapolis" and "Indiana", so Speechify's
+// board in Indianapolis read as Indian, the company was accepted, and its
+// area was stamped "Indianapolis, IN, USA" on a map of Indian startups. A
+// word boundary costs nothing and ends the whole class — "Remote - Indiana,
+// USA" no longer reads as Bengaluru.
+var indiaLocationRe = regexp.MustCompile(`(?i)\b(` + strings.Join(indiaLocationHints, "|") + `)\b`)
+
 func looksIndian(location string) bool {
-	lower := strings.ToLower(location)
-	for _, hint := range indiaLocationHints {
-		if strings.Contains(lower, hint) {
-			return true
-		}
-	}
-	return false
+	return indiaLocationRe.MatchString(location)
 }
 
 // boardTitleCleanupRe strips the suffixes boards append to their page titles,
 // so "Sprinto - Lever" and "Cartesia - Jobs" both come back as the company.
 var boardTitleCleanupRe = regexp.MustCompile(`(?i)\s*[-–—|]\s*(lever|greenhouse|ashby|workable|smartrecruiters|jobs|careers|job board|open positions|hiring)\s*$`)
 
-var titlePrefixRe = regexp.MustCompile(`(?i)^\s*(careers at|jobs at|work at|current openings at|open positions at)\s+`)
+var titlePrefixRe = regexp.MustCompile(`(?i)^\s*(careers at|jobs at|work at|current openings at|open positions at|job application for)\s+`)
 
 // genericBoardTitles are what is left when a board page's title says nothing
 // about the company. Left alone, a page titled "Jobs" would enter the
@@ -209,8 +328,91 @@ var genericBoardTitles = map[string]bool{
 	"smartrecruiters": true, "job search": true, "search jobs": true,
 }
 
-// companyNameFromBoard turns a board page's title into a company name,
-// falling back to the slug when the title is unusable.
+// A discovery search finds POSTINGS, not board front pages. The seed queries
+// say "software engineer jobs in Bangalore, India", and that is a posting's
+// own text — a board index does not read like that. boardHitsFor already
+// canonicalises the URL back to the board root for exactly this reason, but
+// it passes the title through untouched, and taking that title as the company
+// name is how the directory ended up with companies called "Senior Software
+// Engineer at Gitlab" and "Job Application for Backend Developer at Piston
+// Technologies". The bad name then poisoned the next step too, because
+// resolveCompanyWebsite searches it: one of those rows resolved to an
+// unrelated firm's domain and filed a different company's whole board there.
+//
+// So a title is no longer trusted on its own. These pull out the part of a
+// posting title that could be the company — the tail of "<role> at <Company>",
+// the head of "<Company> - <role>" — and the slug decides which, if either,
+// is real.
+var (
+	titleCompanyTailRe = regexp.MustCompile(`(?i)^.*\S\s+at\s+(\S.*)$`)
+	titleCompanyHeadRe = regexp.MustCompile(`^(.*\S)\s*[-–—|]\s*\S.*$`)
+	alnumOnlyRe        = regexp.MustCompile(`[^a-z0-9]+`)
+)
+
+// nameAgreesWithSlug reports whether a candidate name pulled out of a page
+// title is corroborated by the slug in the board URL.
+//
+// The slug is the identity worth trusting: it came out of the URL the board
+// itself serves, and the board's public API answered to it. A title is taken
+// only when it agrees, in which case it supplies the casing and spacing the
+// slug lost ("pistontechnologies" -> "Piston Technologies"). That is the rule
+// the rest of this file already follows for boards — accept with evidence,
+// never from a guess — applied to the name as well as to the board.
+func nameAgreesWithSlug(name, slug string) bool {
+	a := alnumOnlyRe.ReplaceAllString(strings.ToLower(name), "")
+	b := alnumOnlyRe.ReplaceAllString(strings.ToLower(slug), "")
+	if len(a) < 3 || len(b) < 3 {
+		return false
+	}
+	if a == b {
+		return true
+	}
+	// A slug and a company's written name disagree at the edges more often
+	// than in the middle: "altimate" for "Altimate.ai", "sprintohq" for
+	// "Sprinto". So a prefix counts — but only a near-length one. Unbounded,
+	// the prefix rule accepts the whole of "Jobgether - Software Engineer"
+	// against the slug "jobgether", which is the exact bad name it is here
+	// to reject: every posting title starts with something.
+	if !strings.HasPrefix(a, b) && !strings.HasPrefix(b, a) {
+		return false
+	}
+	diff := len(a) - len(b)
+	if diff < 0 {
+		diff = -diff
+	}
+	return diff <= 4
+}
+
+// titleCandidates are the parts of a title that could name the company.
+func titleCandidates(name string) []string {
+	out := []string{name}
+	if m := titleCompanyTailRe.FindStringSubmatch(name); m != nil {
+		out = append(out, strings.TrimSpace(m[1]))
+	}
+	if m := titleCompanyHeadRe.FindStringSubmatch(name); m != nil {
+		out = append(out, strings.TrimSpace(m[1]))
+	}
+	return out
+}
+
+// slugDisplayName reads a board slug as a name. Workday slugs are stored as
+// "tenant:region:site", and only the tenant names the company — the whole
+// triple would have entered the directory as "acme:wd3:careers".
+func slugDisplayName(slug string) string {
+	if tenant, _, found := strings.Cut(slug, ":"); found {
+		slug = tenant
+	}
+	slug = strings.ReplaceAll(strings.ReplaceAll(slug, "-", " "), "_", " ")
+	return strings.TrimSpace(whitespaceRe.ReplaceAllString(slug, " "))
+}
+
+// companyNameFromBoard turns a board page's title into a company name.
+//
+// The slug is both the referee and the fallback: a title is used only when it
+// names something the slug agrees with, and anything else — a role, a posting
+// headline, a title that says nothing — resolves to the slug. A slug-derived
+// name reads worse than a good title, but it is always the right company, and
+// that trade is the whole point.
 func companyNameFromBoard(title, slug string) string {
 	name := strings.TrimSpace(title)
 	// Titles carry several suffixes at once ("Sprinto - Jobs - Lever").
@@ -224,11 +426,15 @@ func companyNameFromBoard(title, slug string) string {
 	name = strings.TrimSpace(titlePrefixRe.ReplaceAllString(name, ""))
 	name = whitespaceRe.ReplaceAllString(name, " ")
 
-	if len(name) < 2 || len(name) > 80 || genericBoardTitles[strings.ToLower(name)] {
-		// The slug is url-safe, so it reads as a name once separators go.
-		name = strings.TrimSpace(strings.ReplaceAll(strings.ReplaceAll(slug, "-", " "), "_", " "))
+	for _, candidate := range titleCandidates(name) {
+		if len(candidate) > 80 || genericBoardTitles[strings.ToLower(candidate)] {
+			continue
+		}
+		if nameAgreesWithSlug(candidate, slug) {
+			return candidate
+		}
 	}
-	return name
+	return slugDisplayName(slug)
 }
 
 // boardHitsFor runs one search and returns the distinct boards it found.
@@ -327,6 +533,121 @@ func boardURL(provider, slug string) string {
 		return fmt.Sprintf("https://%s.%s.myworkdayjobs.com/en-US/%s", parts[0], parts[1], parts[2])
 	}
 	return ""
+}
+
+// boardOutboundLinkRe finds the absolute links an HTML board page carries.
+//
+// Anchors only. Matching every href took <link rel="icon"> with it, and an
+// Ashby board's favicon lives on cdn.ashbyprd.com — which is how a live check
+// of this function returned a CDN asset as two companies' websites.
+var boardOutboundLinkRe = regexp.MustCompile(`(?is)<a\b[^>]*?href\s*=\s*["'](https?://[^"'#?\s]+)`)
+
+// jinaLinkRe finds the links in what Jina Reader returns, which is markdown
+// with a links summary rather than HTML.
+var jinaLinkRe = regexp.MustCompile(`(?i)[\(<\s](https?://[^\s\)>"']+)`)
+
+// assetLinkRe matches a link to a file rather than to a site.
+var assetLinkRe = regexp.MustCompile(`(?i)\.(svg|png|jpe?g|gif|webp|ico|css|js|woff2?|ttf|pdf|xml|json)$`)
+
+// websiteFromBoardPage reads the company's own site off its board page.
+//
+// This runs before resolveCompanyWebsite because it is free and it is
+// evidence. A board page is published by the company, and the link back to its
+// site is one the company put there — the same standard this file applies to
+// boards themselves. The search is a guess by comparison, and the expensive
+// one: it was the only way a company's domain was found, so a run bounded at
+// five companies spent five metered searches here alone, and a candidate
+// rejected after its lookup spent one for nothing.
+//
+// It is also the more accurate of the two. Searching the name "Ema" for an
+// Indian AI startup returned ema.europa.eu, and the directory stored the
+// European Medicines Agency's homepage, then read its description off that
+// page — a metered call spent to get the company wrong.
+//
+// Two attempts, cheapest first. A plain fetch reads a server-rendered board
+// such as Greenhouse. Lever, Ashby and Workable render their boards in the
+// browser, so their HTML carries no links at all and the plain read returns
+// nothing; Jina renders those, and is free and keyless. Firecrawl is
+// deliberately not in this path — it is paid, and a company website is a
+// nicety next to the roles, which are already in hand by this point.
+//
+// Returns "" when neither attempt names anything usable, and the caller falls
+// back to the search.
+func websiteFromBoardPage(boardPageURL, slug string) string {
+	if boardPageURL == "" {
+		return ""
+	}
+
+	if page := plainFetchBoardPage(boardPageURL); page != "" {
+		if link := pickCompanyLink(matchLinks(boardOutboundLinkRe, page), slug); link != "" {
+			return link
+		}
+	}
+
+	rendered, err := fetchViaJina(boardPageURL)
+	if err != nil {
+		return ""
+	}
+	recordScrapeUsage("jina")
+	return pickCompanyLink(matchLinks(jinaLinkRe, rendered), slug)
+}
+
+// plainFetchBoardPage reads the board page over plain HTTP, or returns "".
+func plainFetchBoardPage(boardPageURL string) string {
+	resp, err := SafeExternalGet(boardPageURL)
+	if err != nil {
+		return ""
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != 200 {
+		return ""
+	}
+	body, err := ReadCapped(resp.Body, maxHomepageBytes)
+	if err != nil {
+		return ""
+	}
+	return string(body)
+}
+
+// matchLinks pulls the capture group out of every match, capped so a huge page
+// cannot turn into a huge slice.
+func matchLinks(re *regexp.Regexp, page string) []string {
+	matches := re.FindAllStringSubmatch(page, 300)
+	links := make([]string, 0, len(matches))
+	for _, m := range matches {
+		links = append(links, m[1])
+	}
+	return links
+}
+
+// pickCompanyLink chooses the company's own site from the links on its board
+// page. Split out from the fetching so the judgement is testable without a
+// network, and shared by the plain and rendered reads.
+func pickCompanyLink(links []string, slug string) string {
+	var firstUsable string
+	for _, link := range links {
+		if assetLinkRe.MatchString(link) {
+			continue // an image or stylesheet, not a company
+		}
+		domain := extractDomain(link)
+		// isAggregatorHost already rejects the ATS domains and their CDNs
+		// along with LinkedIn, the social networks and the job aggregators,
+		// which is most of what a board page links to besides the company.
+		if domain == "" || isAggregatorHost(domain) {
+			continue
+		}
+		// A domain the slug agrees with is the company beyond doubt:
+		// jobs.lever.co/gokwik linking to gokwik.com. Take it immediately.
+		if nameAgreesWithSlug(strings.SplitN(domain, ".", 2)[0], slug) {
+			return link
+		}
+		if firstUsable == "" {
+			firstUsable = link
+		}
+	}
+	// No corroborated link, but the company put this one on its own board
+	// page, which is still better evidence than a search result.
+	return firstUsable
 }
 
 // resolveCompanyWebsite finds a company's own homepage.
@@ -474,6 +795,10 @@ func discoverFromBoards(query string, limit, floor int) ([]models.Company, error
 			log.Printf("board discovery: skipping %q — looks like a fund or talent-network board", name)
 			continue
 		}
+		if aggregatorBoardRe.MatchString(name) || aggregatorBoardRe.MatchString(hit.Slug) {
+			log.Printf("board discovery: skipping %q — looks like a job marketplace or staffing board", name)
+			continue
+		}
 
 		// Cheapest disqualifier first: a board we already have.
 		var existing int64
@@ -490,20 +815,19 @@ func discoverFromBoards(query string, limit, floor int) ([]models.Company, error
 		if err != nil || len(jobs) == 0 {
 			continue
 		}
+		if len(jobs) > maxBoardRoles {
+			log.Printf("board discovery: skipping %q — %d roles on one board is a marketplace, not an employer",
+				name, len(jobs))
+			continue
+		}
 		area := firstIndianLocation(jobs)
 		if area == "" {
 			continue // hiring, but not here
 		}
 
 		if dup := findDuplicateCompany(name, ""); dup != nil {
-			// Same business, found earlier without its board. Attach the
-			// board rather than storing a second row for it.
-			config.DB.Model(&models.Company{}).Where("id = ?", dup.ID).Updates(map[string]interface{}{
-				"ats_type": hit.Provider, "ats_slug": hit.Slug,
-				"careers_url": hit.URL, "ats_checked_at": time.Now(),
-			})
-			log.Printf("board discovery: attached %s board %q to existing company %q",
-				hit.Provider, hit.Slug, dup.Name)
+			// Same business, found earlier without its board.
+			attachBoardTo(dup, hit)
 			continue
 		}
 
@@ -516,13 +840,26 @@ func discoverFromBoards(query string, limit, floor int) ([]models.Company, error
 		}
 		lookups++
 
-		website := resolveCompanyWebsite(name)
+		// The board page first — free, and published by the company itself.
+		// Only when it names nothing does this fall through to the search,
+		// which is the one metered call in this loop.
+		website := websiteFromBoardPage(hit.URL, hit.Slug)
+		if website == "" {
+			website = resolveCompanyWebsite(name)
+		}
 		domain := extractDomain(website)
 		if domain == "" {
 			log.Printf("board discovery: skipping %q — no company website found", name)
 			continue
 		}
 		if dup := findDuplicateCompany(name, domain); dup != nil {
+			// Reached only when the name did not match but the domain does —
+			// the company was stored earlier under a different name. This
+			// used to just skip, which threw away the board it had just paid
+			// a search to find, so the row stayed boardless and every later
+			// rotation repeated the same wasted lookup. 73 of the directory's
+			// companies sat at zero roles in exactly this state.
+			attachBoardTo(dup, hit)
 			continue
 		}
 
@@ -571,6 +908,29 @@ func discoverFromBoards(query string, limit, floor int) ([]models.Company, error
 	}
 
 	return saved, nil
+}
+
+// attachBoardTo gives an existing company the board just discovered for it.
+// Both duplicate checks end here: whichever one matched, the stored row is the
+// same business, and its board is new information about it.
+//
+// A company already carrying a board is left alone. Some companies run two —
+// Level AI is on both Lever and Ashby — and overwriting on every rotation made
+// its board flap between them, replacing all of its roles each time. The first
+// board found wins; a second one adds nothing the directory can show.
+func attachBoardTo(dup *models.Company, hit boardHit) {
+	if strings.TrimSpace(dup.ATSSlug) != "" {
+		return
+	}
+	if err := config.DB.Model(&models.Company{}).Where("id = ?", dup.ID).Updates(map[string]interface{}{
+		"ats_type": hit.Provider, "ats_slug": hit.Slug,
+		"careers_url": hit.URL, "ats_checked_at": time.Now(),
+	}).Error; err != nil {
+		log.Printf("board discovery: failed to attach board %q to %q: %v", hit.Slug, dup.Name, err)
+		return
+	}
+	log.Printf("board discovery: attached %s board %q to existing company %q",
+		hit.Provider, hit.Slug, dup.Name)
 }
 
 // firstIndianLocation returns the first Indian location among a board's

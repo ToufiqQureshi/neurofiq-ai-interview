@@ -807,6 +807,12 @@ func FetchATSJobs(companyID, atsType, atsSlug string) ([]models.Job, error) {
 // A second consecutive empty read is the company actually saying it has
 // nothing open, and that is when the listings go.
 func applySyncedJobs(company models.Company, rows []models.Job) (int, error) {
+	// Before the empty-read check, not after: a board carrying 300 roles and
+	// no Indian one is empty as far as this directory is concerned, and has
+	// to reach the protection below rather than sail past it and then be
+	// cleared downstream on the first read.
+	rows = keepIndianRoles(rows)
+
 	if len(rows) == 0 && company.EmptyJobReads == 0 {
 		var existing int64
 		config.DB.Model(&models.Job{}).Where("company_id = ?", company.ID).Count(&existing)
@@ -829,7 +835,92 @@ func applySyncedJobs(company models.Company, rows []models.Job) (int, error) {
 		config.DB.Model(&models.Company{}).Where("id = ?", company.ID).
 			Update("empty_job_reads", 0)
 	}
+
+	// area is stamped once at discovery and never revisited, so a row that
+	// got it wrong stayed wrong: Speechify sat on the India map labelled
+	// "Indianapolis, IN, USA". The roles just stored are all Indian by the
+	// filter above, so the first of them is a better answer than whatever is
+	// on the row — but only when what is on the row is not Indian already,
+	// so a correct area is never churned by whichever posting sorted first.
+	if len(rows) > 0 && !looksIndian(company.Area) {
+		if area := firstIndianLocation(rows); area != "" {
+			config.DB.Model(&models.Company{}).Where("id = ?", company.ID).
+				Update("area", area)
+			log.Printf("job sync: corrected %s area %q -> %q", company.Name, company.Area, area)
+		}
+	}
 	return n, nil
+}
+
+// careersPageSource marks a role read off a company's own careers page rather
+// than from a job board. job_service writes it on every row those tiers
+// produce.
+const careersPageSource = "careers-page"
+
+// htmlFragmentRe catches a title that is really a piece of the page's markup.
+// The link scan reads anchor text, and a page whose markup it misparsed once
+// stored "Apply--> <!-- Now" as a job.
+var htmlFragmentRe = regexp.MustCompile(`<!--|-->|</?[a-z][a-z0-9]*\s*/?>`)
+
+// ctaTitles are the words on a button, not the name of a job.
+//
+// The careers-page link scan takes an anchor's text as the role, and a page
+// that puts "View details" on every listing gives every listing that name.
+// Matching is exact, deliberately: "Back Office Executive" begins with "back"
+// and is a real job, so anything looser deletes real openings to remove
+// cosmetic ones — the wrong trade for a directory whose product is the roles.
+var ctaTitles = map[string]bool{
+	"apply": true, "apply now": true, "view": true, "view details": true,
+	"view jd": true, "view job": true, "view more": true, "details": true,
+	"explore more": true, "explore": true, "read more": true, "learn more": true,
+	"know more": true, "see more": true, "click here": true, "here": true,
+	"more": true, "submit": true, "next": true, "back": true, "previous": true,
+	"job description": true, "description": true, "open positions": true,
+}
+
+// looksLikeRoleTitle rejects the strings a page scan mistakes for a job title.
+func looksLikeRoleTitle(title string) bool {
+	t := strings.TrimSpace(title)
+	if len(t) < 4 {
+		// "TL" and "SSO" arrived this way. A real posting names the work.
+		return false
+	}
+	if htmlFragmentRe.MatchString(t) {
+		return false
+	}
+	return !ctaTitles[strings.ToLower(t)]
+}
+
+// keepIndianRoles drops the roles a board carries that are not in India.
+//
+// A board belongs to a company, not to a country: accepting a company because
+// it hires here brought in every other posting it had anywhere. The directory
+// counted 6,621 "open roles in India" of which 1,626 actually were — WPP Media
+// contributed 1,074 rows with 90 Indian, OpenAI 769 with 10. A visitor
+// clicking "View 769 roles" got 759 they cannot apply to: the Jogether failure
+// in a new shape, a number counted correctly that means something false.
+//
+// The rule applies to board rows only, and the source is what decides. A
+// company's own careers page is not a global feed — the company is already in
+// this directory because it hires here — and those pages describe location
+// loosely or not at all. Testbook writes "Not specified", Schoolnet India "As
+// per requirement", RocketFrog "Hybrid", and 159 rows carry no location field
+// at all. Judging those by the board rule deletes real openings at real Indian
+// companies, which is a worse error than the one being fixed: the directory
+// exists to show these roles.
+//
+// The cost is small and known. Two rows out of 1,918 name a foreign city on a
+// careers page (UnPay's New York and London) and survive. Recognising those
+// would need a list of every foreign place, which is the kind of list that is
+// never finished — and being wrong about two rows is cheaper than inventing it.
+func keepIndianRoles(rows []models.Job) []models.Job {
+	kept := rows[:0]
+	for _, r := range rows {
+		if r.Source == careersPageSource || looksIndian(r.Location) {
+			kept = append(kept, r)
+		}
+	}
+	return kept
 }
 
 // replaceJobsForCompany makes the jobs table match `rows` exactly for one
@@ -837,12 +928,21 @@ func applySyncedJobs(company models.Company, rows []models.Job) (int, error) {
 // inserted. Shared by the ATS-API and careers-page paths so both stay
 // idempotent — re-running a sync must never duplicate rows.
 func replaceJobsForCompany(companyID string, rows []models.Job) (int, error) {
-	// Drop anything missing the two fields we require.
+	// The choke point every producer passes through — board discovery, the
+	// ATS sync and the careers-page tiers all end here — so the India rule is
+	// applied once, where it cannot be forgotten by a new caller.
+	rows = keepIndianRoles(rows)
+
+	// Drop anything missing the two fields we require, or whose title is not
+	// the name of a job at all.
 	valid := rows[:0]
 	seen := map[string]bool{}
 	for _, r := range rows {
 		if r.Title == "" || r.URL == "" || seen[r.URL] {
 			continue // also guards against a provider repeating a URL
+		}
+		if !looksLikeRoleTitle(r.Title) {
+			continue
 		}
 		seen[r.URL] = true
 		valid = append(valid, r)
@@ -997,7 +1097,7 @@ func syncJobsFromCareersPage(company models.Company) (int, error) {
 			Department: strings.TrimSpace(j.Department),
 			Location:   strings.TrimSpace(j.Location),
 			URL:        url,
-			Source:     "careers-page",
+			Source:     careersPageSource,
 		})
 	}
 

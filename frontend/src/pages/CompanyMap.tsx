@@ -120,7 +120,7 @@ const TECH_HUBS: TechHub[] = [
   },
 ];
 
-const SECTORS = ['AI', 'Fintech', 'SaaS', 'Healthtech', 'Edtech', 'D2C', 'Logistics', 'Deeptech', 'Consumer', 'Gaming', 'Other'];
+const SECTORS = ['AI', 'Fintech', 'SaaS', 'IT Services', 'Media & Advertising', 'Healthtech', 'Edtech', 'D2C', 'Logistics', 'Deeptech', 'Consumer', 'Gaming', 'Other'];
 const STAGES = ['Bootstrapped', 'Pre-seed', 'Seed', 'Series A', 'Series B', 'Series C+', 'Public', 'Acquired'];
 const PAGE_SIZE = 24;
 const MAP_PAGE_SIZE = 500;
@@ -335,26 +335,7 @@ export function CompanyMap() {
 
   const canLoadMore = companies.length < total;
 
-  const [isPruning, setIsPruning] = useState(false);
-  const [pruneResult, setPruneResult] = useState<string | null>(null);
 
-  const handlePruneDeadJobs = async () => {
-    setIsPruning(true);
-    setPruneResult(null);
-    try {
-      const res = await fetch(`${import.meta.env.VITE_API_URL}/api/jobs/prune-dead`, { method: 'POST', credentials: 'include' });
-      const data = await res.json();
-      if (res.ok) {
-        setPruneResult(`Pruned ${data.pruned_count || 0} dead roles. ${data.active_jobs} active.`);
-        fetchCompanies(1, false, view !== 'grid' ? MAP_PAGE_SIZE : PAGE_SIZE);
-      }
-    } catch {
-      setPruneResult('Health check completed.');
-    } finally {
-      setIsPruning(false);
-      setTimeout(() => setPruneResult(null), 5000);
-    }
-  };
 
   return (
     <div className="space-y-6">
@@ -366,26 +347,13 @@ export function CompanyMap() {
             <span className="px-2 py-0.5 rounded-full text-xs font-semibold bg-accent-soft text-accent border border-accent/20">
               Live Verified
             </span>
-            {pruneResult && (
-              <span className="px-2 py-0.5 rounded-full text-xs font-semibold bg-info-soft text-info border border-info/20 animate-fade-in">
-                {pruneResult}
-              </span>
-            )}
           </h1>
           <p className="text-sm text-ink-soft mt-1">
             {openRoles} open roles across {total} startups in India
           </p>
         </div>
         <div className="flex items-center gap-2 self-start sm:self-auto">
-          <button
-            onClick={handlePruneDeadJobs}
-            disabled={isPruning}
-            title="Scan active job URLs and remove any 404 or expired postings"
-            className="flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-semibold bg-surface border border-line text-ink hover:bg-paper hover:border-line-strong transition-all shadow-sm disabled:opacity-50"
-          >
-            <Sparkles className={`w-3.5 h-3.5 text-accent ${isPruning ? 'animate-spin' : ''}`} />
-            {isPruning ? 'Scanning links…' : 'Clean Dead Jobs'}
-          </button>
+
           <div className="flex items-center gap-1 bg-surface border border-line rounded-full p-1 shadow-sm">
             <button
               onClick={() => setView('grid')}
@@ -477,41 +445,43 @@ export function CompanyMap() {
             value={q}
             onChange={e => setQ(e.target.value)}
             placeholder="Search startups, keywords, domains…"
-            className="w-full bg-surface border border-line rounded-full py-2 pl-9 pr-4 text-sm text-ink focus:outline-none focus:border-accent focus:ring-1 focus:ring-accent shadow-sm"
+            className="w-full appearance-none bg-white/50 backdrop-blur-md border border-white/60 rounded-full py-2 pl-10 pr-4 text-sm text-ink focus:outline-none focus:border-accent focus:ring-2 focus:ring-accent/20 shadow-sm font-medium hover:border-accent/40 transition-colors"
           />
         </div>
 
-        <select
-          value={sector}
-          onChange={e => setSector(e.target.value)}
-          className="bg-surface border border-line rounded-full py-2 px-4 text-sm text-ink focus:outline-none focus:border-accent shadow-sm font-medium"
-        >
-          <option value="">All sectors</option>
-          {SECTORS.map(s => (
-            <option key={s} value={s}>
-              {s}
-            </option>
-          ))}
-        </select>
+        <div className="relative">
+          <select
+            value={sector}
+            onChange={e => setSector(e.target.value)}
+            className="appearance-none bg-white/50 backdrop-blur-md border border-white/60 rounded-full py-2 pl-4 pr-10 text-sm text-ink focus:outline-none focus:border-accent focus:ring-2 focus:ring-accent/20 shadow-sm font-medium hover:border-accent/40 transition-colors"
+          >
+            <option value="">All sectors</option>
+            {SECTORS.map(s => (
+              <option key={s} value={s}>{s}</option>
+            ))}
+          </select>
+          <ChevronDown className="w-4 h-4 text-ink-soft absolute right-3 top-1/2 -translate-y-1/2 pointer-events-none" />
+        </div>
 
-        <select
-          value={stage}
-          onChange={e => setStage(e.target.value)}
-          className="bg-surface border border-line rounded-full py-2 px-4 text-sm text-ink focus:outline-none focus:border-accent shadow-sm font-medium"
-        >
-          <option value="">All stages</option>
-          {STAGES.map(s => (
-            <option key={s} value={s}>
-              {s}
-            </option>
-          ))}
-        </select>
+        <div className="relative">
+          <select
+            value={stage}
+            onChange={e => setStage(e.target.value)}
+            className="appearance-none bg-white/50 backdrop-blur-md border border-white/60 rounded-full py-2 pl-4 pr-10 text-sm text-ink focus:outline-none focus:border-accent focus:ring-2 focus:ring-accent/20 shadow-sm font-medium hover:border-accent/40 transition-colors"
+          >
+            <option value="">All stages</option>
+            {STAGES.map(s => (
+              <option key={s} value={s}>{s}</option>
+            ))}
+          </select>
+          <ChevronDown className="w-4 h-4 text-ink-soft absolute right-3 top-1/2 -translate-y-1/2 pointer-events-none" />
+        </div>
 
         <button
           onClick={() => setHiringOnly(!hiringOnly)}
           title={hiringOnly ? 'Showing only companies with open roles' : 'Showing every company in the directory'}
-          className={`px-4 py-2 rounded-full text-sm font-semibold whitespace-nowrap transition-all flex items-center gap-2 shadow-sm ${
-            hiringOnly ? 'bg-accent text-white shadow-accent/20' : 'bg-surface border border-line text-ink-soft hover:text-ink'
+          className={`px-4 py-2 rounded-full text-sm font-bold whitespace-nowrap transition-all flex items-center gap-2 shadow-sm ${
+            hiringOnly ? 'bg-accent text-white shadow-accent/20 ring-2 ring-accent/30' : 'bg-white/50 backdrop-blur-md border border-white/60 text-ink-soft hover:text-ink hover:border-accent/40'
           }`}
         >
           <Briefcase className="w-3.5 h-3.5" />
@@ -570,15 +540,19 @@ export function CompanyMap() {
             companies.map(c => (
               <div
                 key={c.id}
-                className="bg-surface border border-line rounded-2xl p-4 flex flex-col gap-3 hover:shadow-md hover:border-line-strong transition-all duration-200"
+                className="relative bg-white/40 backdrop-blur-md border border-white/60 rounded-2xl p-5 flex flex-col gap-3 hover:-translate-y-1 hover:shadow-xl hover:shadow-accent/10 hover:border-accent/40 transition-all duration-300 overflow-hidden group"
               >
-                <div className="flex items-start gap-3">
+                {/* Subtle gradient background effect */}
+                <div className="absolute inset-0 bg-gradient-to-br from-white/40 to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-300 pointer-events-none" />
+                
+                <div className="relative z-10 flex flex-col h-full gap-3">
+                  <div className="flex items-start gap-3">
                   <CompanyLogo domain={c.domain} name={c.name} />
                   <div className="min-w-0 flex-1">
                     <div className="flex items-center gap-2">
                       <h3 className="font-bold text-sm text-ink truncate">{c.name}</h3>
                       {c.job_count > 0 && (
-                        <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-accent text-white flex-shrink-0 font-mono">
+                        <span className="px-2.5 py-0.5 rounded-full text-[10px] font-bold bg-accent text-white flex-shrink-0 font-mono shadow-sm shadow-accent/30 ring-2 ring-white">
                           {c.job_count} open
                         </span>
                       )}
@@ -601,18 +575,17 @@ export function CompanyMap() {
                 </div>
 
                 {expandedId === c.id && (
-                  <div className="border-t border-line pt-2">
+                  <div className="border-t border-line/40 pt-4 mt-2 bg-paper/50 rounded-b-2xl">
                     <JobList companyId={c.id} companyName={c.name} field={field} level={level} />
                   </div>
                 )}
-
-                <div className="flex items-center gap-2 pt-2 border-t border-line/60">
+                               <div className={`flex items-center gap-2 pt-3 border-t border-line/40 mt-auto ${expandedId === c.id ? 'hidden' : ''}`}>
                   {c.website && (
                     <a
                       href={c.website}
                       target="_blank"
                       rel="noreferrer"
-                      className="text-xs font-semibold text-ink-soft hover:text-ink flex items-center gap-1"
+                      className="text-[11px] font-semibold text-ink-soft hover:text-accent flex items-center gap-1 transition-colors"
                     >
                       Website <ExternalLink className="w-2.5 h-2.5" />
                     </a>
@@ -620,23 +593,25 @@ export function CompanyMap() {
                   {c.job_count > 0 ? (
                     <button
                       onClick={() => setExpandedId(expandedId === c.id ? null : c.id)}
-                      className="ml-auto text-xs font-semibold px-3 py-1.5 rounded-full bg-ink text-white hover:bg-black flex items-center gap-1.5 shadow-sm transition-transform active:scale-95"
+                      className="ml-auto text-[11px] font-bold px-4 py-2 rounded-full bg-ink text-white hover:bg-accent flex items-center gap-1.5 shadow-md hover:shadow-lg transition-all duration-300 active:scale-95 group-hover:scale-105"
                     >
-                      <Briefcase className="w-3 h-3" />
-                      {expandedId === c.id ? 'Hide roles' : `View ${c.job_count} ${c.job_count === 1 ? 'role' : 'roles'}`}
-                      <ChevronDown className={`w-3 h-3 transition-transform ${expandedId === c.id ? 'rotate-180' : ''}`} />
+                      <Briefcase className="w-3.5 h-3.5" />
+                      View {c.job_count} {c.job_count === 1 ? 'role' : 'roles'}
+                      <ChevronDown className="w-3.5 h-3.5" />
                     </button>
                   ) : c.careers_url ? (
                     <a
                       href={c.careers_url}
                       target="_blank"
                       rel="noreferrer"
-                      className="ml-auto text-xs font-semibold px-3 py-1.5 rounded-full border border-line-strong text-ink hover:bg-paper flex items-center gap-1.5"
+                      className="ml-auto text-[11px] font-bold px-4 py-2 rounded-full bg-surface border border-line hover:border-ink text-ink flex items-center gap-1.5 transition-all duration-300 active:scale-95 group-hover:scale-105"
                     >
-                      <Briefcase className="w-3 h-3" /> Careers <ExternalLink className="w-3 h-3" />
+                      Careers <ExternalLink className="w-3.5 h-3.5" />
                     </a>
                   ) : null}
                 </div>
+                
+                </div> {/* Close relative z-10 wrapper */}
               </div>
             ))
           )}

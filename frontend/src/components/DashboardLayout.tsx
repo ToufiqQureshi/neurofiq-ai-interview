@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { Outlet, Link, useLocation } from 'react-router-dom';
-import { LayoutDashboard, FolderKanban, FileText, Menu, X, Search, FileUser, FilePenLine, Map, LogOut } from 'lucide-react';
+import { LayoutDashboard, FolderKanban, FileText, Menu, X, FileUser, FilePenLine, Map, LogOut, Target } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 
 function Avatar({ avatarUrl, name, className }: { avatarUrl?: string; name: string; className?: string }) {
@@ -32,6 +32,7 @@ const navGroups: { label: string; items: NavItem[] }[] = [
   {
     label: 'Optimize',
     items: [
+      { name: 'Job Radar', icon: Target, href: '/radar' },
       { name: 'LinkedIn Optimizer', icon: FileUser, soon: true },
       { name: 'CV Optimizer', icon: FilePenLine, soon: true },
     ],
@@ -154,20 +155,13 @@ export function DashboardLayout() {
       <main className="flex-1 lg:pl-64 flex flex-col min-h-screen">
         {/* Top Navbar */}
         <header className="hidden lg:flex items-center justify-between h-16 px-8 bg-surface border-b border-line sticky top-0 z-30">
-          <div className="flex items-center gap-4 flex-1">
-             <div className="relative max-w-md w-full">
-               <Search className="w-4 h-4 text-ink-faint absolute left-4 top-1/2 -translate-y-1/2" />
-               <input
-                 type="text"
-                 disabled
-                 title="Global search is coming soon — try the search box on Repositories or Reports"
-                 placeholder="Search coming soon..."
-                 className="w-full pl-10 pr-4 py-2 bg-paper border border-line rounded-full text-sm outline-none cursor-not-allowed text-ink-faint font-mono"
-               />
-             </div>
-          </div>
+          {/* A disabled search box sat here, directly above the Job Map's own
+              working one. Two search fields where the first is dead reads as
+              a broken page, not as a feature on the way — and the same went
+              for a Help button that looked clickable and did nothing. Both
+              are gone until they do something. */}
+          <div className="flex-1" />
           <div className="flex items-center gap-2 ml-4">
-             <button title="Help — coming soon" className="text-sm font-semibold px-4 py-2 rounded-full border border-line-strong text-ink hover:bg-paper transition-colors cursor-not-allowed">Help</button>
              <Link to="/repositories" className="text-sm font-semibold px-4 py-2 rounded-full bg-ink hover:bg-black text-white transition-colors">Start Interview</Link>
           </div>
         </header>
