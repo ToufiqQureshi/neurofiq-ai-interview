@@ -1,5 +1,10 @@
 # Progress Log
 
+## 2026-09-02
+- Formatted entire Go codebase with `gofmt -w .` to resolve GitHub Actions CI lint failure (`gofmt -l .`).
+- Merged `job-map-data-integrity` into `main` and pushed to GitHub: encompasses pan-India role attribution guards, whole-word location matching, boot/cron `ReapplyGuards` cleanup, homepage-based metadata enrichment, and Profile Radar (`/radar`) feature.
+- Installed and activated `claude-mem` v13.23.1 with Antigravity CLI lifecycle hooks, MCP integration, and background worker daemon.
+
 ## 2026-09-01
 - Created **Production Checklist & High-Scale Architecture Guide (`PRODUCTION_CHECKLIST.md`)**: comprehensive roadmap covering Redis caching, PgBouncer connection pooling, Asynq background task queues, distributed token-bucket rate limiting, PostgreSQL read replicas, and Prometheus/Sentry observability for scaling to millions of users.
 - Built **Floating Company Inspector Drawer (`CompanyDrawer.tsx`)** inspired by BangaloreStartupMap / Airbnb: clicking any startup pin slides in a rich details card on the right containing company bio, funding stage, direct career/website links, active job roles, and 1-Click AI Mock Interview CTA.

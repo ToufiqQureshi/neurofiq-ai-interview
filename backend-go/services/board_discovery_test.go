@@ -349,9 +349,9 @@ func TestPickCompanyLink(t *testing.T) {
 	}
 }
 
-// The rotation'''s order matters as much as its weights.
+// The rotation”'s order matters as much as its weights.
 //
-// It used to loop city-outer, so all ten of a city'''s queries ran back to back:
+// It used to loop city-outer, so all ten of a city”'s queries ran back to back:
 // a day of discovery was one or two cities and nothing else, and a report on
 // "which city has the most companies" measured the cursor instead of the
 // country. Weighting alone would have made that worse.

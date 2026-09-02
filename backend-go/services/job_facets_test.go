@@ -49,12 +49,12 @@ func TestClassifyLevelManagerIsNotSeniority(t *testing.T) {
 
 	// The words that do carry a rung still do, including on a manager title.
 	graded := map[string]string{
-		"Senior Product Manager":   "Senior",
-		"Staff Software Engineer":  "Senior",
-		"Head of Engineering":      "Lead",
-		"Software Engineer III":    "Senior",
-		"Software Engineer II":     "Mid",
-		"Junior Data Analyst":      "Junior",
+		"Senior Product Manager":      "Senior",
+		"Staff Software Engineer":     "Senior",
+		"Head of Engineering":         "Lead",
+		"Software Engineer III":       "Senior",
+		"Software Engineer II":        "Mid",
+		"Junior Data Analyst":         "Junior",
 		"Software Engineering Intern": "Fresher",
 	}
 	for title, want := range graded {

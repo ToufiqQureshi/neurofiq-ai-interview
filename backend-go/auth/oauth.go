@@ -180,7 +180,7 @@ func HandleGithubCallback(c *gin.Context) {
 	if frontendURL == "" {
 		frontendURL = "http://localhost:5173"
 	}
-	
+
 	targetPath := "/dashboard"
 	if !user.IsOnboarded {
 		targetPath = "/onboarding"
