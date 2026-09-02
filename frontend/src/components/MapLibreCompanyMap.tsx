@@ -266,7 +266,7 @@ export default function MapLibreCompanyMap({ companies, selectedHub }: MapLibreC
                     if (btn) {
                       btn.onclick = (e) => {
                         e.stopPropagation();
-                        navigate('/dashboard');
+                        navigate(`/repositories?job=${encodeURIComponent(j.id)}`);
                       };
                     }
                   });

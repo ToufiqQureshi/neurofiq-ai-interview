@@ -2,11 +2,15 @@ import { useState, useEffect, useRef } from 'react';
 import { Mic, SkipForward, VolumeX, Send, Loader2, Volume2, MicOff, FileCode2 } from 'lucide-react';
 import { useSearchParams, useParams, useNavigate } from 'react-router-dom';
 import { CameraPreview } from '../components/CameraPreview';
+import { readTarget, targetApiParams } from '../lib/interviewTarget';
 
 export function InterviewSession() {
   const { repoId } = useParams();
   const [searchParams] = useSearchParams();
   const isVoiceMode = searchParams.get('mode') === 'voice';
+  // The Job Map role or company this interview is practice for, carried here
+  // from the directory. Ids only — the backend resolves them.
+  const targetParams = targetApiParams(readTarget(searchParams.toString()));
   const navigate = useNavigate();
 
   const [questions, setQuestions] = useState<any[]>([]);
@@ -39,7 +43,7 @@ export function InterviewSession() {
     // questions..." forever. The ref survives the remount, so testing against
     // it accepts that response while still dropping one for a repo the user
     // has since navigated away from.
-    fetch(`${import.meta.env.VITE_API_URL}/api/interviews/questions?repo_full_name=${encodeURIComponent(repoId)}`, {
+    fetch(`${import.meta.env.VITE_API_URL}/api/interviews/questions?repo_full_name=${encodeURIComponent(repoId)}${targetParams ? `&${targetParams}` : ''}`, {
       credentials: 'include',
     })
     .then(async res => {

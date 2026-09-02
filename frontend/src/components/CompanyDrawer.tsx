@@ -140,7 +140,7 @@ export default function CompanyDrawer({ company, onClose }: CompanyDrawerProps) 
       {/* Drawer Footer CTA */}
       <div className="p-3 border-t border-slate-100 bg-slate-50/90 flex items-center gap-2">
         <button
-          onClick={() => navigate('/dashboard')}
+          onClick={() => navigate(`/repositories?company=${encodeURIComponent(company.id)}`)}
           className="w-full py-2.5 px-4 rounded-xl text-xs font-bold bg-slate-900 hover:bg-black text-white transition-all flex items-center justify-center gap-2 shadow-md"
         >
           <Sparkles className="w-4 h-4 text-amber-300" /> Practice Mock for {company.name}

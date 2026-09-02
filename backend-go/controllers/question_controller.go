@@ -19,7 +19,11 @@ func HandleGetQuestions(c *gin.Context) {
 		return
 	}
 
-	questions, err := services.GetOrGenerateQuestions(userID, repoFullName)
+	// Optional: the Job Map opening — or company — this interview is practice
+	// for. Both are resolved against the database in the service, so an
+	// unknown id costs the framing and nothing else.
+	questions, err := services.GetOrGenerateQuestions(
+		userID, repoFullName, c.Query("job_id"), c.Query("company_id"))
 	if err != nil {
 		// "Analyze the repo first" is the caller's problem and its text is
 		// written for them. The worker being unreachable is ours: that error

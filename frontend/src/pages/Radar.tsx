@@ -30,20 +30,21 @@ export function Radar() {
     setProgress(0);
     setError(null);
     setRadarData(null);
-    setLogs(['[SYS] Initiating profile extraction...', '[SYS] Connecting to secure endpoint...']);
-    
+    setLogs([`[SYS] Sending ${url.trim()} for analysis...`]);
+
+    // The bar is a waiting indicator, not a measurement: the scan is one
+    // request and the server reports nothing until it answers, so there is no
+    // real progress to show. It creeps and stops at 95 for that reason.
+    //
+    // It used to narrate as well — "Parsing DOM elements", "Running NLP entity
+    // extraction", "[WARN] Missing critical tech tags" — all on a 500ms timer,
+    // none of it anything the backend had said or done. The warning was the
+    // worst of them: it announced a finding before a single byte had come
+    // back, and it appeared whatever the profile turned out to contain. A
+    // progress bar that overstates is a nuisance; invented findings are the
+    // thing this project has a rule against.
     const interval = setInterval(() => {
-      setProgress((prev) => {
-        if (prev >= 95) return 95; 
-        
-        // Add fake logs
-        if (prev === 20) setLogs(l => [...l, '[SYS] Parsing DOM elements...', '[OK] Headline identified.']);
-        if (prev === 40) setLogs(l => [...l, '[SYS] Running NLP entity extraction on Summary...', '[OK] Entities mapped.']);
-        if (prev === 60) setLogs(l => [...l, '[SYS] Cross-referencing ATS keyword database...', '[WARN] Missing critical tech tags.']);
-        if (prev === 80) setLogs(l => [...l, '[SYS] Compiling optimization heuristic report...']);
-        
-        return prev + 5;
-      });
+      setProgress((prev) => (prev >= 95 ? 95 : prev + 5));
     }, 500);
     progressTimer.current = interval;
 
@@ -58,7 +59,7 @@ export function Radar() {
       clearInterval(interval);
       progressTimer.current = null;
       setProgress(100);
-      setLogs(l => [...l, '[OK] Analysis complete. Rendering UI.']);
+      setLogs(l => [...l, '[OK] Analysis complete.']);
       
       if (!res.ok) {
         throw new Error('Failed to analyze profile URL.');
@@ -75,6 +76,7 @@ export function Radar() {
       clearInterval(interval);
       progressTimer.current = null;
       setScanState('idle');
+      setLogs(l => [...l, '[ERR] Analysis failed.']);
       setError(err.message || 'Something went wrong');
     }
   };

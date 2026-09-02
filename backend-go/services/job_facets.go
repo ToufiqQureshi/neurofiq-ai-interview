@@ -90,12 +90,8 @@ func JobFacets(sector, stage, area, q string) (fields, levels []FacetCount, err 
 	dbQuery := config.DB.Model(&models.Job{}).
 		Select("jobs.title, jobs.department").
 		Joins("JOIN companies ON companies.id = jobs.company_id")
-	if sector != "" {
-		dbQuery = dbQuery.Where("companies.sector = ?", sector)
-	}
-	if stage != "" {
-		dbQuery = dbQuery.Where("companies.stage = ?", stage)
-	}
+	dbQuery = applyFacetFilter(dbQuery, "sector", sector, "companies")
+	dbQuery = applyFacetFilter(dbQuery, "stage", stage, "companies")
 	dbQuery = applyAreaFilter(dbQuery, area, "companies")
 	if q != "" {
 		dbQuery = dbQuery.Where("companies.name ILIKE ? OR companies.description ILIKE ?", "%"+q+"%", "%"+q+"%")

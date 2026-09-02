@@ -84,6 +84,10 @@ class GenerateQuestionsPayload(BaseModel):
     repo_full_name: str
     analysis_data: str
     history_summary: str = ""
+    # The Job Map opening this interview is practice for, as "<title> at
+    # <company>". Optional, and resolved from the database by Go rather than
+    # posted by a browser, so it names a role the pipeline actually found.
+    target_role: str = ""
 
 # ---- Pydantic models for evaluation ----
 class QAItem(BaseModel):
@@ -247,6 +251,17 @@ async def generate_questions(payload: GenerateQuestionsPayload):
     )
     if payload.history_summary:
         prompt += f"Commit history of the same repository:\n{payload.history_summary}\n\n"
+    if payload.target_role:
+        # Framing only. The questions must still come out of the candidate's
+        # own code — that is the one thing we can ask about with authority,
+        # and a role description is not evidence of anything they built. It
+        # decides which parts of their work to press on, never the subject.
+        prompt += (
+            f"The candidate is preparing for this specific opening: {payload.target_role}\n"
+            "Choose which parts of THEIR analysed codebase to press on so the questions "
+            "rehearse what that role would be asked. Do not ask about the company, the "
+            "job description, or any code the candidate did not write.\n\n"
+        )
     prompt += (
         "Based on the analysis, generate exactly 5 deep, technical interview questions. "
         "You MUST reference the specific 'code_snippet' and 'file_reference' from the analysis in your "

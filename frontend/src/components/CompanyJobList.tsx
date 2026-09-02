@@ -87,7 +87,11 @@ export default function CompanyJobList({
               <button
                 onClick={e => {
                   e.stopPropagation();
-                  navigate('/dashboard');
+                  // Carry the role through repo selection and analysis so the
+                  // interview can be framed by it. It is a query param rather
+                  // than component state because the two screens in between
+                  // are full navigations.
+                  navigate(`/repositories?job=${encodeURIComponent(j.id)}`);
                 }}
                 title={`Practice AI Interview for ${j.title} at ${companyName}`}
                 className="px-2 py-0.5 rounded-md text-[10px] font-semibold bg-accent-soft text-accent hover:bg-accent hover:text-white transition-all flex items-center gap-1 shadow-sm"

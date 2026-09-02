@@ -171,7 +171,7 @@ function CompanyPopupContent({ c }: { c: Company }) {
           </a>
         ) : <span />}
         <button
-          onClick={() => navigate('/dashboard')}
+          onClick={() => navigate(`/repositories?company=${encodeURIComponent(c.id)}`)}
           className="px-3 py-1.5 rounded-xl text-[11px] font-semibold bg-ink text-white hover:bg-black transition-colors flex items-center gap-1 shadow-sm"
         >
           <Sparkles className="w-3 h-3 text-amber-300" /> Practice Mock
