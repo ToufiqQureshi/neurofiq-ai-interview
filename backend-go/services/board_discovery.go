@@ -227,6 +227,22 @@ var nonSlugSegments = map[string]bool{
 	"www": true, "j": true, "careers": true, "company": true, "companies": true,
 }
 
+// vendorDemoSlugs are the ATS vendors' own demonstration tenants. They are
+// real boards serving real-looking JSON, which is exactly why nothing else
+// here catches them: salesdemo.keka.com answered with 82 postings, several
+// duplicated and one titled "HR Manager (Sumit)", and the directory filed
+// them as a hiring company. A vendor's showroom is not an employer, and the
+// slug is the only place that shows.
+var vendorDemoSlugs = map[string]bool{
+	"demo": true, "salesdemo": true, "democompany": true, "test": true,
+	"testing": true, "sandbox": true, "staging": true, "example": true,
+}
+
+// boardSearchSource labels the companies this file stores. Written out at
+// every use before, which meant a sweep filtering on it could disagree with
+// the writer by a typo and silently judge nothing.
+const boardSearchSource = "board-search"
+
 // aggregatorHosts are never a company's own site. A "website" on one of these
 // is a page *about* the company, and storing it would point the careers-page
 // resolver at a job board's own domain.
@@ -395,15 +411,42 @@ func titleCandidates(name string) []string {
 	return out
 }
 
-// slugDisplayName reads a board slug as a name. Workday slugs are stored as
-// "tenant:region:site", and only the tenant names the company — the whole
+// boardSlugLabel is the part of a slug that names the company. Workday slugs
+// are stored as "tenant:region:site", and only the tenant does — the whole
 // triple would have entered the directory as "acme:wd3:careers".
-func slugDisplayName(slug string) string {
+func boardSlugLabel(slug string) string {
 	if tenant, _, found := strings.Cut(slug, ":"); found {
 		slug = tenant
 	}
+	return strings.TrimSpace(slug)
+}
+
+// slugDisplayName reads a board slug as a name.
+func slugDisplayName(slug string) string {
+	slug = boardSlugLabel(slug)
 	slug = strings.ReplaceAll(strings.ReplaceAll(slug, "-", " "), "_", " ")
 	return strings.TrimSpace(whitespaceRe.ReplaceAllString(slug, " "))
+}
+
+// boardSlugIsAdmissible reports whether a slug names an employer at all.
+func boardSlugIsAdmissible(slug string) bool {
+	label := strings.ToLower(boardSlugLabel(slug))
+	return label != "" && !nonSlugSegments[label] && !vendorDemoSlugs[label]
+}
+
+// boardRowIsAdmissible reports whether discoverFromBoards would store this
+// company today: a slug it would accept, under a name companyNameFromBoard
+// could have returned for that slug.
+//
+// companyNameFromBoard has exactly two outcomes — a title the slug
+// corroborates, or the slug read as a name — so those are the only two shapes
+// a legitimately stored name can have. Anything else predates the rule.
+func boardRowIsAdmissible(name, slug string) bool {
+	if !boardSlugIsAdmissible(slug) {
+		return false
+	}
+	name = strings.TrimSpace(name)
+	return nameAgreesWithSlug(name, slug) || strings.EqualFold(name, slugDisplayName(slug))
 }
 
 // companyNameFromBoard turns a board page's title into a company name.
@@ -474,7 +517,7 @@ func boardHitsFor(query string, numResults int) []boardHit {
 		// The same regexes that read a board link out of a careers page read
 		// it out of a search result, because both are just the URL.
 		provider, slug := scan(r.URL)
-		if provider == "" || slug == "" || nonSlugSegments[strings.ToLower(slug)] {
+		if provider == "" || slug == "" || !boardSlugIsAdmissible(slug) {
 			continue
 		}
 		key := provider + ":" + strings.ToLower(slug)
@@ -655,6 +698,76 @@ func pickCompanyLink(links []string, slug string) string {
 // The board tells us a company is hiring but not where it lives, and the
 // companies table is keyed on domain. One search per newly-seen company, and
 // never for one we already have.
+// websiteGuessTLDs are tried, in order, against a board slug before a search
+// is paid for. Of the 145 companies the board search stored in its first two
+// days, 92 sit on their slug under one of these five, and the sixth candidate
+// would add two requests per company for a case that has not come up yet.
+var websiteGuessTLDs = []string{".com", ".ai", ".io", ".in", ".co"}
+
+// guessCompanyWebsite finds a company's own site without spending a search.
+//
+// resolveCompanyWebsite below is the last metered step in discovery — one
+// search per newly-seen company, and 145 of them in two days. Most are paying
+// to be told what the slug already said: sprinto, meesho, tekion and paytm are
+// all their own domain label.
+//
+// But a guess is the thing this file spent a rewrite removing, so it is not
+// trusted on its own. A candidate site is accepted only when its own pages
+// link back to the SAME board the company was found on — DetectATS's evidence
+// rule, run in the other direction. A parked domain, a squatter, or an
+// unrelated firm sitting on the same word cannot produce that link. Nor could
+// devopscompany.nl, which is what a paid search returned for a Genpact board.
+//
+// Every request here is plain HTTP. When nothing corroborates, we fall through
+// and buy the search exactly as before, so the worst case in money is the
+// current cost plus some free fetches.
+//
+// The worst case in time is ten requests per company — five TLDs, two pages
+// each — which at externalClient's 20s ceiling is 200s, and 1000s for a full
+// five-company run. That is inside the three-hour lease the rotation holds,
+// and nowhere near it in practice: a TLD the company does not own fails at
+// DNS in milliseconds, and the loop stops at the first board it can confirm.
+// Worth re-measuring if the TLD list grows.
+func guessCompanyWebsite(provider, slug string) string {
+	label := strings.ToLower(boardSlugLabel(slug))
+	if len(label) < 3 || !boardSlugIsAdmissible(slug) {
+		return ""
+	}
+
+	for _, tld := range websiteGuessTLDs {
+		site := "https://" + label + tld
+
+		body, err := fetchText(site)
+		if err != nil {
+			// Does not resolve, or does not answer. Nothing on this domain
+			// can corroborate anything, so do not spend a second request on
+			// its careers path.
+			continue
+		}
+		if boardLinkMatches(body, provider, slug) {
+			log.Printf("board discovery: %s links its own %s board — website resolved without a search", site, provider)
+			return site
+		}
+
+		// Homepages link "Careers", not the board itself. The page behind
+		// that word is where the board link almost always lives.
+		if careers, err := fetchText(site + "/careers"); err == nil && boardLinkMatches(careers, provider, slug) {
+			log.Printf("board discovery: %s/careers links its own %s board — website resolved without a search", site, provider)
+			return site
+		}
+	}
+	return ""
+}
+
+// boardLinkMatches reports whether a page links the exact board given.
+//
+// Same provider AND same slug. Provider alone would accept any company that
+// happens to use Greenhouse, which is most of them.
+func boardLinkMatches(page, provider, slug string) bool {
+	t, s := scanForATS(page)
+	return t == provider && strings.EqualFold(s, slug)
+}
+
 func resolveCompanyWebsite(name string) string {
 	query := name + " official company website"
 
@@ -831,20 +944,27 @@ func discoverFromBoards(query string, limit, floor int) ([]models.Company, error
 			continue
 		}
 
-		// The metered step. Everything above this line is free, so the count
-		// that matters is of lookups started — not of companies stored.
-		if !mayStartLookup(lookups, limit, SearchBudgetRemaining(), floor) {
-			log.Printf("board discovery: stopping after %d website lookups (limit %d, budget %d, reserved %d)",
-				lookups, limit, SearchBudgetRemaining(), floor)
-			break
-		}
-		lookups++
-
-		// The board page first — free, and published by the company itself.
-		// Only when it names nothing does this fall through to the search,
-		// which is the one metered call in this loop.
+		// Two free ways to name the company's site, in the order this pipeline
+		// takes everywhere: the board page the company published, then its own
+		// domain when the slug is also its domain label. Only when neither
+		// answers does this reach the search, the one metered call in the loop.
 		website := websiteFromBoardPage(hit.URL, hit.Slug)
 		if website == "" {
+			website = guessCompanyWebsite(hit.Provider, hit.Slug)
+		}
+		if website == "" {
+			// The metered step. Everything above this line is free, so the
+			// count that matters is of lookups started — not of companies
+			// stored, and not of hits examined. The budget check sits here
+			// rather than at the top of the iteration for the same reason: a
+			// run that has spent its lookups can still store every company it
+			// can name for nothing.
+			if !mayStartLookup(lookups, limit, SearchBudgetRemaining(), floor) {
+				log.Printf("board discovery: stopping after %d website lookups (limit %d, budget %d, reserved %d)",
+					lookups, limit, SearchBudgetRemaining(), floor)
+				break
+			}
+			lookups++
 			website = resolveCompanyWebsite(name)
 		}
 		domain := extractDomain(website)
@@ -872,7 +992,7 @@ func discoverFromBoards(query string, limit, floor int) ([]models.Company, error
 			CareersURL: hit.URL,
 			ATSType:    hit.Provider,
 			ATSSlug:    hit.Slug,
-			Source:     "board-search",
+			Source:     boardSearchSource,
 		}
 		now := time.Now()
 		company.ATSCheckedAt = &now
