@@ -242,7 +242,6 @@ func main() {
 	r.GET("/api/companies/stats", controllers.HandleGetDirectoryStats)
 	r.GET("/api/companies/:id", controllers.HandleGetCompanyByID)
 	r.GET("/api/companies/:id/jobs", controllers.HandleGetCompanyJobs)
-	r.GET("/api/jobs", controllers.HandleGetGlobalJobs)
 
 	// Public, link-only route. A shared report is authorised by holding an
 	// unguessable URL, so it sits outside the session middleware on purpose.
