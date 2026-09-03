@@ -254,21 +254,25 @@ func candidateDetail(c slugCandidate) int {
 //
 // limit caps how many companies one run will store; zero means no cap, which
 // is what a one-time backfill wants and a scheduled run should never use.
-func HarvestSlugs(candidates []slugCandidate, limit int) (HarvestStats, error) {
-	stats := HarvestStats{}
+// HarvestSlugs also reports whether it stopped short of the whole candidate
+// list because limit was reached — capped. RunScheduledHarvest needs this: a
+// capped run has not actually finished reading the index, and recording it as
+// read anyway is what would silently drop everything past the cap for good.
+func HarvestSlugs(candidates []slugCandidate, limit int) (stats HarvestStats, capped bool, err error) {
+	stats = HarvestStats{}
 	candidates = dedupeCandidates(candidates)
 	stats.Candidates = len(candidates)
 	if len(candidates) == 0 {
-		return stats, nil
+		return stats, false, nil
 	}
 
 	// A directory we could not read is not an empty directory. Swallowing this
 	// returned zero-of-everything with a nil error, so an automated run
 	// reported a clean harvest that had evaluated nothing — and every
 	// candidate would have looked new to the dedupe that never happened.
-	idx, err := newDirectoryIndex()
-	if err != nil {
-		return stats, fmt.Errorf("could not read the directory: %w", err)
+	idx, idxErr := newDirectoryIndex()
+	if idxErr != nil {
+		return stats, false, fmt.Errorf("could not read the directory: %w", idxErr)
 	}
 
 	var (
@@ -342,12 +346,15 @@ func HarvestSlugs(candidates []slugCandidate, limit int) (HarvestStats, error) {
 		}(cand)
 	}
 	wg.Wait()
+	// Safe unguarded after wg.Wait(): every goroutine that could still write
+	// done has already called wg.Done(), so nothing races this read.
+	capped = done
 
-	log.Printf("slug harvest: %s", stats)
+	log.Printf("slug harvest: %s capped=%v", stats, capped)
 	if saveErr != nil {
-		return stats, fmt.Errorf("at least one company failed to save: %w", saveErr)
+		return stats, capped, fmt.Errorf("at least one company failed to save: %w", saveErr)
 	}
-	return stats, nil
+	return stats, capped, nil
 }
 
 type harvestOutcome int
@@ -569,7 +576,12 @@ func RunHarvest(opts HarvestOptions) (HarvestStats, error) {
 	}
 
 	log.Printf("harvest: %d candidates collected", len(candidates))
-	return HarvestSlugs(candidates, opts.Limit)
+	// capped is discarded here: this is the manual CLI backfill, which does
+	// not track a HarvestState to advance or withhold — the operator sees
+	// the "capped" line in the log directly and re-runs with a larger -limit
+	// if they want the rest.
+	stats, _, err := HarvestSlugs(candidates, opts.Limit)
+	return stats, err
 }
 
 // talentPoolRe matches the evergreen "send us your CV" posting most boards
@@ -674,7 +686,7 @@ func RunScheduledHarvest() {
 	}
 
 	log.Printf("slug harvest: %s is new, collecting", newest)
-	stats, err := HarvestSlugs(HarvestFromCommonCrawl([]string{newest}), scheduledHarvestLimit)
+	stats, capped, err := HarvestSlugs(HarvestFromCommonCrawl([]string{newest}), scheduledHarvestLimit)
 	if err != nil {
 		// Same reasoning as the record below: a pass that could not run must
 		// not mark the index as read, or the next tick skips an index nothing
@@ -682,10 +694,25 @@ func RunScheduledHarvest() {
 		log.Printf("slug harvest: %s not collected: %v", newest, err)
 		return
 	}
+	if capped {
+		// scheduledHarvestLimit stopped this tick before the index was fully
+		// read — most indexes hold far more than 400 new companies. Recording
+		// LastIndex here would tell the next tick this index is done, and
+		// every candidate past the cap would be lost for good: nothing else
+		// ever revisits an index once a newer one is published. Leaving
+		// LastIndex where it was makes the next tick read this same index
+		// again — cheap, since everything already stored is now a free
+		// duplicate check (see admitCandidate's networked guard) and only the
+		// candidates past where this tick stopped cost anything.
+		log.Printf("slug harvest: %s capped at %d — leaving LastIndex unset so the next tick continues it",
+			newest, scheduledHarvestLimit)
+		return
+	}
 
-	// Recorded only after the pass completes. A run that dies half way leaves
-	// the index unrecorded, so the next tick picks it up again rather than
-	// skipping the half it never read.
+	// Recorded only after the pass completes without being capped. A run
+	// that dies half way, or stops at the store limit, leaves the index
+	// unrecorded, so the next tick picks it up again rather than skipping
+	// the part it never read.
 	if err := config.DB.Save(&models.HarvestState{
 		Source:    SourceCommonCrawl,
 		LastIndex: newest,
