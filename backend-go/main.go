@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"errors"
+	"flag"
 	"log"
 	"net/http"
 	"os"
@@ -109,6 +110,15 @@ func main() {
 		&models.CronLease{},
 	); err != nil {
 		log.Fatalf("Migration failed: %v", err)
+	}
+
+	// A harvest is a one-time backfill, not a scheduled job, and it exits
+	// instead of serving. It reads thousands of boards in a run, which is the
+	// wrong shape for a cron tick and the right shape for an operator who has
+	// decided to spend an afternoon on it. Nothing here starts a server, so it
+	// cannot collide with the instance already running.
+	if runHarvest() {
+		return
 	}
 
 	// Any analysis still marked "pending" is one this process (or a previous
@@ -227,11 +237,12 @@ func main() {
 	r.GET("/auth/me", auth.HandleAuthMe)
 	r.POST("/auth/logout", auth.HandleLogout)
 
-	// Public company directory ("Job Map") — no auth required.
+	// Public company directory & job discovery ("Job Map" & "Find Jobs") — no auth required.
 	r.GET("/api/companies", controllers.HandleGetCompanies)
 	r.GET("/api/companies/stats", controllers.HandleGetDirectoryStats)
 	r.GET("/api/companies/:id", controllers.HandleGetCompanyByID)
 	r.GET("/api/companies/:id/jobs", controllers.HandleGetCompanyJobs)
+	r.GET("/api/jobs", controllers.HandleGetGlobalJobs)
 
 	// Public, link-only route. A shared report is authorised by holding an
 	// unguessable URL, so it sits outside the session middleware on purpose.
@@ -514,4 +525,47 @@ func trustedProxies() []string {
 		}
 	}
 	return proxies
+}
+
+// runHarvest performs a one-time slug backfill when asked, and reports whether
+// it did — in which case main returns instead of serving.
+//
+// Two sources, deliberately separate flags, because they cost very different
+// things. -harvest-crawl reads Common Crawl's URL index: about twenty requests
+// for roughly 13,500 board slugs, then one free board API call per slug.
+// -harvest-register walks the startup register's accelerator portfolios at a
+// second a page, which is slower and yields far fewer boards, but the ones it
+// finds arrive with a sector, a funding stage and measured coordinates.
+//
+// Neither spends a metered search. That is the whole point: discovery's 800
+// monthly calls bought 145 companies in September, and a harvest of this size
+// through that path would drain the year.
+//
+//	go run . -harvest-crawl               # newest index, no store cap
+//	go run . -harvest-crawl -indexes 4    # last four indexes
+//	go run . -harvest-register -limit 200 # 200 register pages, then stop
+func runHarvest() bool {
+	var (
+		crawl    = flag.Bool("harvest-crawl", false, "backfill board slugs from the Common Crawl URL index")
+		register = flag.Bool("harvest-register", false, "backfill companies from the startup register's accelerator portfolios")
+		indexes  = flag.Int("indexes", 1, "how many recent Common Crawl indexes to read")
+		limit    = flag.Int("limit", 0, "cap companies stored (0 = no cap); for -harvest-register, also caps pages read")
+	)
+	flag.Parse()
+
+	if !*crawl && !*register {
+		return false
+	}
+
+	stats, err := services.RunHarvest(services.HarvestOptions{
+		CommonCrawl:     *crawl,
+		StartupRegister: *register,
+		Indexes:         *indexes,
+		Limit:           *limit,
+	})
+	if err != nil {
+		log.Fatalf("harvest: %v", err)
+	}
+	log.Printf("harvest finished: %s", stats)
+	return true
 }
