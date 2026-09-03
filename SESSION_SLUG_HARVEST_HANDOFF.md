@@ -227,13 +227,29 @@ startup register: Razorsharp Technologies -> observe.ai (greenhouse/embed)
 Fixed for the harvest via `ccGreenhouseSlug`, which prefers the query
 parameter and falls back to the path.
 
-> **⚠ The same gap exists in `scanForATS` (`job_service.go`), which means
-> `DetectATS` cannot read an embedded Greenhouse board off a company's own
-> careers page either.** That is a live bug in the main discovery path, not
-> just the harvest. It was deliberately not fixed on this branch because
-> `job_service.go` carries unrelated in-progress work (`ListGlobalJobs`) that
-> should not be dragged into this PR. **Fix it separately** — one alternation
-> added to `greenhouseLinkRe`, plus a test.
+**Fixed in both paths.** `greenhouseLinkRe` now accepts the linked and the
+embedded shape and fills one capture group per shape, so `scanForATS` takes the
+first non-empty group rather than group 1. `DetectATS` can therefore read an
+embedded board off a careers page, which it could not before — this was a live
+bug in the main discovery path, not only in the harvest. The harvest's
+duplicate regex was removed; both paths share the one in `job_service.go`.
+
+Only the three hunks belonging to this change were staged from
+`job_service.go`; the in-progress `ListGlobalJobs` work in that file was left
+unstaged and untouched.
+### 3.8 An empty 200 was read as the end of the CDX walk
+
+The end of a walk is 400 or 404. A 200 carrying no rows is the index
+answering under load, and taking it literally is how Ashby stopped after one
+page: **13,000 rows read of the 20,412 its two pages hold**, with nothing
+logged as failed because nothing had failed. Empty pages are retried now, and
+only one that survives its retries ends the walk.
+
+This is the third variant of the same mistake in this file — a transient
+failure read as a terminal condition. The pattern to watch for: any branch
+that turns a network answer into "stop", where the answer could just mean
+"busy".
+
 ---
 
 ## 4. Verified against the live directory
