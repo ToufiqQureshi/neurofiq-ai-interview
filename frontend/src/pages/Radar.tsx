@@ -4,7 +4,10 @@ import { Link } from 'react-router-dom';
 
 export function Radar() {
   const [url, setUrl] = useState('');
-  const [scanState, setScanState] = useState<'idle' | 'scanning' | 'results'>('idle');
+  // 'failed' is separate from 'idle' so the terminal panel — and the [ERR]
+  // line the catch writes into it — survives a failed scan. Returning to idle
+  // unmounted the panel and threw the only record of what went wrong away.
+  const [scanState, setScanState] = useState<'idle' | 'scanning' | 'results' | 'failed'>('idle');
   const [progress, setProgress] = useState(0);
   const [error, setError] = useState<string | null>(null);
   const [radarData, setRadarData] = useState<any>(null);
@@ -58,14 +61,18 @@ export function Radar() {
       
       clearInterval(interval);
       progressTimer.current = null;
-      setProgress(100);
-      setLogs(l => [...l, '[OK] Analysis complete.']);
-      
+
       if (!res.ok) {
         throw new Error('Failed to analyze profile URL.');
       }
-      
+
       const data = await res.json();
+
+      // Logged here, not above: a 500 answers this call too, and announcing
+      // "[OK] Analysis complete" before checking res.ok reported a success the
+      // very next line threw on.
+      setProgress(100);
+      setLogs(l => [...l, '[OK] Analysis complete.']);
       
       setTimeout(() => {
         setRadarData(data);
@@ -75,7 +82,10 @@ export function Radar() {
     } catch (err: any) {
       clearInterval(interval);
       progressTimer.current = null;
-      setScanState('idle');
+      // 'failed', not 'idle'. The terminal panel renders while scanning, so
+      // returning to idle wiped the log the line below had just written — the
+      // failure was recorded where nobody could read it.
+      setScanState('failed');
       setLogs(l => [...l, '[ERR] Analysis failed.']);
       setError(err.message || 'Something went wrong');
     }
@@ -175,7 +185,7 @@ export function Radar() {
             </form>
 
             {/* Terminal Loading State */}
-            {scanState === 'scanning' && (
+            {(scanState === 'scanning' || scanState === 'failed') && (
               <div className="mt-16 animate-in fade-in slide-in-from-bottom-8 duration-700">
                 <div className="bg-zinc-900/80 backdrop-blur-xl border border-zinc-800 rounded-2xl p-6 font-mono text-sm max-w-2xl mx-auto shadow-2xl">
                   <div className="flex items-center gap-2 mb-4 border-b border-zinc-800 pb-4">

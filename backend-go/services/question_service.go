@@ -65,7 +65,10 @@ func GetOrGenerateQuestions(userID, repoFullName, jobID, companyID string) ([]mo
 	// plain set, and keying both on the analysis alone would serve whichever
 	// was generated first to everyone — the role would appear to work once and
 	// then silently stop.
-	fingerprint := analysisFingerprint(profile.AnalysisJSON + "\x00" + targetRole)
+	//
+	// An unframed interview keys on the analysis alone, exactly as before this
+	// parameter existed — see questionCacheKey.
+	fingerprint := analysisFingerprint(questionCacheKey(profile.AnalysisJSON, targetRole))
 
 	// 2. Reuse the questions generated from *this* analysis if we have them.
 	var cached []models.Question
@@ -170,6 +173,24 @@ func GetOrGenerateQuestions(userID, repoFullName, jobID, companyID string) ([]mo
 	}
 
 	return newQuestions, nil
+}
+
+// questionCacheKey combines an analysis with the role it is being practised
+// for, into the string the fingerprint is taken of.
+//
+// An empty role returns the analysis untouched. Appending the separator
+// unconditionally would have changed every fingerprint already stored, so the
+// first load of every cached repository would have missed and paid the worker
+// for a set it already held.
+//
+// A non-empty role is separated by a NUL, which cannot occur in either half.
+// Plain concatenation would let one analysis-and-role pair collide with a
+// different pair that happens to split the same characters elsewhere.
+func questionCacheKey(analysisJSON, targetRole string) string {
+	if targetRole == "" {
+		return analysisJSON
+	}
+	return analysisJSON + "\x00" + targetRole
 }
 
 // interviewTarget turns what the candidate pressed "Practice" on into the one

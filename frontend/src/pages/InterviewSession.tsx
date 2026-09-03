@@ -26,13 +26,19 @@ export function InterviewSession() {
   const recognitionRef = useRef<any>(null);
 
   // Generating questions is a paid LLM call, so it must happen exactly once
-  // per repo. React's StrictMode double-mounts effects in development, and
-  // without this guard every dev page load billed us twice.
+  // per repo AND target. React's StrictMode double-mounts effects in
+  // development, and without this guard every dev page load billed us twice.
+  //
+  // The target belongs in the key as well as the repo. Keyed on the repo
+  // alone, opening a second role on a repo already interviewed kept the first
+  // role's questions on screen: the effect never reran, so the page showed a
+  // set framed for an opening the candidate had left.
   const requestedRepo = useRef<string | null>(null);
 
   useEffect(() => {
-    if (!repoId || requestedRepo.current === repoId) return;
-    requestedRepo.current = repoId;
+    const requestKey = `${repoId}\u0000${targetParams}`;
+    if (!repoId || requestedRepo.current === requestKey) return;
+    requestedRepo.current = requestKey;
 
     // Staleness is decided by the ref, not by an effect-local flag.
     //
@@ -71,7 +77,7 @@ export function InterviewSession() {
       requestedRepo.current = null; // let a retry through
       setError(err.message);
     });
-  }, [repoId]);
+  }, [repoId, targetParams]);
 
   // AI Speaking (Text-to-Speech) - PONYTAIL: Native Web Speech API, $0 cost
   useEffect(() => {

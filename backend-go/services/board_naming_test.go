@@ -149,3 +149,60 @@ func TestGuessedTLDsProduceReadableDomains(t *testing.T) {
 		}
 	}
 }
+
+// "Lahore, Punjab, Pakistan" named a foreign country, was caught by the
+// foreign check, and was then rescued from it because Punjab is an Indian
+// state too — so a Pakistani city could be stored as an Indian company's area.
+func TestACrossBorderStateCannotOutweighAForeignCountry(t *testing.T) {
+	for _, foreign := range []string{
+		"Lahore, Punjab, Pakistan",
+		"Punjab, Pakistan",
+		"Remote — Punjab, Pakistan",
+	} {
+		if looksIndian(foreign) {
+			t.Errorf("%q reads as an Indian location", foreign)
+		}
+	}
+}
+
+// The narrowing must not cost the real state. Indian Punjab still passes,
+// either because nothing contradicts it or because India is named outright.
+func TestIndianPunjabStillReadsAsIndian(t *testing.T) {
+	for _, indian := range []string{
+		"Mohali, Punjab",
+		"Punjab, India",
+		"Ludhiana, Punjab, India",
+	} {
+		if !looksIndian(indian) {
+			t.Errorf("%q no longer reads as an Indian location", indian)
+		}
+	}
+}
+
+// "U.S." is how boards usually write it, and the trailing \b in the country
+// pattern could not match after a full stop — so only "U.S.A" was caught and
+// a US posting passed the foreign check.
+func TestTheDottedUSAbbreviationIsAForeignMarker(t *testing.T) {
+	for _, foreign := range []string{
+		"Bengaluru office, U.S.",
+		"Remote, U.S.A",
+		"Austin, U.S.A.",
+		"Bangalore, USA",
+	} {
+		if looksIndian(foreign) {
+			t.Errorf("%q reads as an Indian location", foreign)
+		}
+	}
+}
+
+// The abbreviation must not swallow ordinary words that merely start with it.
+func TestTheUSPatternDoesNotMatchUnrelatedText(t *testing.T) {
+	for _, indian := range []string{
+		"Bengaluru, India",
+		"Us Consulting Pvt Ltd, Pune",
+	} {
+		if !looksIndian(indian) {
+			t.Errorf("%q stopped reading as an Indian location", indian)
+		}
+	}
+}

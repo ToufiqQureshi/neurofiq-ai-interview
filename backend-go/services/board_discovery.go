@@ -367,7 +367,7 @@ var indiaLocationRe = regexp.MustCompile(`(?i)\b(` +
 // Measured cost of the rule: 0.37% of matching postings carry a foreign
 // marker, and most of those name India as well, so they survive.
 var foreignLocationRe = regexp.MustCompile(`(?i)\b(` + strings.Join([]string{
-	"japan", "thailand", "canada", "ontario", "united states", "u\\.s\\.a?", "usa",
+	"japan", "thailand", "canada", "ontario", "united states", "u\\.s(?:\\.a?)?", "usa",
 	"united kingdom", "england", "scotland", "singapore", "malaysia", "australia",
 	"germany", "france", "netherlands", "ireland", "poland", "brazil", "mexico",
 	"philippines", "vietnam", "indonesia", "china", "hong kong", "taiwan",
@@ -379,11 +379,35 @@ var foreignLocationRe = regexp.MustCompile(`(?i)\b(` + strings.Join([]string{
 	"oman", "bangladesh", "sri lanka", "nepal", "pakistan",
 }, "|") + `)\b`)
 
+// crossBorderStateHints are Indian state names that another country also uses
+// for a province of its own. They still say "somewhere in India" when nothing
+// contradicts them, but they cannot outweigh a named foreign country — see
+// indiaWordRe.
+var crossBorderStateHints = map[string]bool{"punjab": true}
+
 // indiaWordRe is the unambiguous evidence that a location really is in India:
 // the country itself, or one of its states. A bare city name is not enough,
 // because cities collide across countries — there is a Kochi in Japan and a
 // Surat in Thailand.
-var indiaWordRe = regexp.MustCompile(`(?i)\b(india|` + strings.Join(indiaStateHints, "|") + `)\b`)
+//
+// Cross-border state names are left out of THIS list, though they stay in
+// indiaLocationRe. Punjab is a province of Pakistan as well as a state of
+// India, so including it here let "Lahore, Punjab, Pakistan" name a foreign
+// country, be caught by the foreign check, and then be rescued from it — the
+// directory stored a Pakistani city as an Indian company's area. A location
+// that really is in Indian Punjab still passes, either because it names no
+// foreign country at all or because it also says India.
+var indiaWordRe = regexp.MustCompile(`(?i)\b(india|` + strings.Join(unambiguousIndiaStates(), "|") + `)\b`)
+
+func unambiguousIndiaStates() []string {
+	out := make([]string, 0, len(indiaStateHints))
+	for _, state := range indiaStateHints {
+		if !crossBorderStateHints[state] {
+			out = append(out, state)
+		}
+	}
+	return out
+}
 
 // looksIndian reports whether a role's stated location is in India.
 //
@@ -836,9 +860,47 @@ func guessCompanyWebsite(provider, slug string) string {
 //
 // Same provider AND same slug. Provider alone would accept any company that
 // happens to use Greenhouse, which is most of them.
+//
+// This looks for the board's own address rather than asking scanForATS what
+// the page links, because scanForATS answers with the FIRST board it
+// recognises, in a fixed provider order. A Lever company whose page also
+// mentions a Greenhouse board anywhere — a partner, an investor's careers
+// link, a "we also hire through" note — would have that Greenhouse hit
+// returned instead, and the corroboration would fail on a page that does link
+// the right board. The cost of that is a search we did not need to buy.
 func boardLinkMatches(page, provider, slug string) bool {
-	t, s := scanForATS(page)
-	return t == provider && strings.EqualFold(s, slug)
+	target := boardURL(provider, slug)
+	if target == "" {
+		return false
+	}
+
+	// Matched without the scheme: the same board is linked as https, as http,
+	// and protocol-relative, and all three are the same evidence.
+	needle := strings.ToLower(strings.TrimPrefix(strings.TrimPrefix(target, "https://"), "http://"))
+	haystack := strings.ToLower(page)
+
+	for from := 0; from < len(haystack); {
+		at := strings.Index(haystack[from:], needle)
+		if at < 0 {
+			return false
+		}
+		end := from + at + len(needle)
+		// The character after the slug decides it. Without this check
+		// "jobs.lever.co/cred" matches a link to jobs.lever.co/creditvidya —
+		// the exact confusion this pipeline removed slug guessing over.
+		if end >= len(haystack) || !isSlugByte(haystack[end]) {
+			return true
+		}
+		from += at + 1
+	}
+	return false
+}
+
+// isSlugByte reports whether a byte could be part of a board slug, and so
+// whether a match that ends before it is really a match.
+func isSlugByte(b byte) bool {
+	return b == '-' || b == '_' || b == '.' || b == ':' ||
+		(b >= 'a' && b <= 'z') || (b >= 'A' && b <= 'Z') || (b >= '0' && b <= '9')
 }
 
 func resolveCompanyWebsite(name string) string {
@@ -956,10 +1018,20 @@ func discoverFromBoards(query string, limit, floor int) ([]models.Company, error
 	if limit <= 0 || limit > maxNewCompaniesPerRun {
 		limit = maxNewCompaniesPerRun
 	}
-	// One search to find boards, then at most one per candidate we look up.
-	// Stopping before the search is cheaper than discovering mid-run that we
-	// cannot afford the lookups.
-	if remaining := SearchBudgetRemaining(); remaining <= limit+floor {
+	// One search to find boards. Everything after it may well be free — a
+	// company whose board page or own domain names its website costs nothing
+	// — so this asks only for the board search, not for the whole lookup
+	// allowance on top of it.
+	//
+	// It used to require limit+floor up front, which was right when every
+	// company cost a search and wrong the moment they stopped: with a handful
+	// of credits left, a run that would have spent one and resolved five
+	// companies for free refused to start at all.
+	//
+	// The lookups keep their own guard. mayStartLookup is checked immediately
+	// before each metered one, which is the only place that can know whether
+	// it is actually needed.
+	if remaining := SearchBudgetRemaining(); remaining <= floor {
 		return nil, fmt.Errorf("search budget nearly spent (%d left, %d reserved) — skipping discovery",
 			remaining, floor)
 	}

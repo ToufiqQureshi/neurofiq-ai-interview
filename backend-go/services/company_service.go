@@ -147,11 +147,16 @@ func CompanyFacets() (sectors, stages []string, err error) {
 // distinctCompanyValues reads one column's options, sorted, with a single
 // Unknown entry standing for every row the pipeline left blank.
 func distinctCompanyValues(column string) ([]string, error) {
+	// COALESCE because the column is nullable and Pluck scans into a plain
+	// string: one NULL row fails the whole scan, and the caller renders a
+	// filter with no options at all. Every blank collapses into Unknown
+	// immediately below, so a null and an empty string are already the same
+	// answer here.
 	var raw []string
 	if err := config.DB.Model(&models.Company{}).
 		Distinct().
 		Order(column).
-		Pluck(column, &raw).Error; err != nil {
+		Pluck("COALESCE("+column+", '')", &raw).Error; err != nil {
 		return nil, err
 	}
 

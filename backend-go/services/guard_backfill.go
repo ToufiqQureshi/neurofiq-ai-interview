@@ -3,6 +3,8 @@ package services
 import (
 	"log"
 
+	"gorm.io/gorm"
+
 	"github.com/ToufiqQureshi/neurofiq-ai-interview/backend-go/config"
 	"github.com/ToufiqQureshi/neurofiq-ai-interview/backend-go/models"
 )
@@ -174,20 +176,32 @@ func sweepMisnamedBoardCompanies() (companies, jobs int) {
 			continue
 		}
 
-		res := config.DB.Where("company_id = ?", c.ID).Delete(&models.Job{})
-		if res.Error != nil {
-			log.Printf("guard backfill: could not clear roles for %q: %v", c.Name, res.Error)
-			continue
-		}
-		if err := config.DB.Delete(&models.Company{}, "id = ?", c.ID).Error; err != nil {
+		// Both deletes or neither. Separately, a failure on the second leaves
+		// the rejected company in the table with its roles already gone — it
+		// stops being a lie about whose roles they are and starts being a lie
+		// about a company that is hiring, and the next sweep sees a row it
+		// still wants to delete but no longer has anything to report.
+		var removed int64
+		err := config.DB.Transaction(func(tx *gorm.DB) error {
+			res := tx.Where("company_id = ?", c.ID).Delete(&models.Job{})
+			if res.Error != nil {
+				return res.Error
+			}
+			if err := tx.Delete(&models.Company{}, "id = ?", c.ID).Error; err != nil {
+				return err
+			}
+			removed = res.RowsAffected
+			return nil
+		})
+		if err != nil {
 			log.Printf("guard backfill: could not remove %q: %v", c.Name, err)
 			continue
 		}
 
 		log.Printf("guard backfill: removed %q (%s/%s) and its %d roles — discovery would not store this name for this slug",
-			c.Name, c.ATSType, c.ATSSlug, res.RowsAffected)
+			c.Name, c.ATSType, c.ATSSlug, removed)
 		companies++
-		jobs += int(res.RowsAffected)
+		jobs += int(removed)
 	}
 	return companies, jobs
 }

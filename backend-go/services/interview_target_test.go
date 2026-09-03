@@ -52,16 +52,25 @@ func TestFingerprintSeparatorPreventsCollisions(t *testing.T) {
 	}
 }
 
-// An empty target must produce the plain key exactly, so an ordinary
-// interview keeps using sets cached before the role was ever a parameter.
-func TestUnframedInterviewsKeepAStableKey(t *testing.T) {
+// An unframed interview must key on the analysis ALONE — the same key it had
+// before a role was ever a parameter.
+//
+// The first version of this appended the separator unconditionally, which
+// changed every existing fingerprint: the first load of every already-cached
+// repository would have missed and paid the worker for a set it already held.
+// The test that shipped with it compared the new key against itself and so
+// asserted nothing; this compares against the key the cache actually contains.
+func TestUnframedInterviewsKeepTheirExistingCacheKey(t *testing.T) {
 	analysis := `{"summary":"a go service"}`
+
 	if interviewTarget("", "") != "" {
 		t.Fatal("no ids produced a target")
 	}
-	if analysisFingerprint(analysis+"\x00"+interviewTarget("", "")) !=
-		analysisFingerprint(analysis+"\x00") {
-		t.Error("an unframed interview does not key on the analysis alone")
+	if questionCacheKey(analysis, "") != analysis {
+		t.Error("an unframed interview no longer keys on the analysis alone")
+	}
+	if analysisFingerprint(questionCacheKey(analysis, "")) != analysisFingerprint(analysis) {
+		t.Error("an unframed fingerprint differs from the one already stored")
 	}
 }
 

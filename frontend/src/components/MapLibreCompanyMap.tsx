@@ -219,7 +219,7 @@ export default function MapLibreCompanyMap({ companies, selectedHub }: MapLibreC
         const practiceBtn = document.getElementById(`map-practice-btn-${c.id}`);
         if (practiceBtn) {
           practiceBtn.onclick = () => {
-            navigate('/dashboard');
+            navigate(`/repositories?company=${encodeURIComponent(c.id)}`);
           };
         }
 

@@ -203,7 +203,7 @@ export function Repositories() {
                     </span>
                   </div>
                   <Link
-                    to={`/analyze/${encodeURIComponent(repo.full_name)}`}
+                    to={`/analyze/${encodeURIComponent(repo.full_name)}${targetQuery(readTarget(location.search))}`}
                     className="mt-4 block w-full py-2.5 text-center text-xs font-semibold text-white bg-ink hover:bg-black rounded-full transition-colors"
                   >
                     {status === 'pending' ? 'View progress' : 'Continue interview'}
