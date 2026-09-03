@@ -88,10 +88,29 @@ var commonCrawlHosts = []ccHost{
 	{query: "*.keka.com", provider: "keka", slugFrom: ccSubdomainSlug("keka.com")},
 	{query: "*.darwinbox.in", provider: "darwinbox", slugFrom: ccSubdomainSlug("darwinbox.in")},
 	{query: "*.darwinbox.com", provider: "darwinbox", slugFrom: ccSubdomainSlug("darwinbox.com")},
-	// Workday is deliberately absent. Its slug is "tenant:region:site" and the
-	// site id is not in the URL — DetectATS probes the live API for it, five
-	// candidates deep. Doing that for a thousand crawled tenants is a
-	// different kind of run from this one, and belongs behind its own switch.
+	// Workday carries a tenant and a region in the URL but not the job-site id,
+	// so what this emits is an incomplete slug — "tenant:region:" — and
+	// admitCandidate resolves the missing third part against the live API.
+	// See resolveWorkdaySlug for why that is done there rather than here.
+	{query: "*.myworkdayjobs.com", provider: "workday", slugFrom: ccWorkdayPartialSlug},
+}
+
+// ccWorkdayPartialSlug reads the two parts of a Workday slug that are in the
+// URL and leaves the third empty.
+//
+// A Workday board is <tenant>.<region>.myworkdayjobs.com/<site>, and the site
+// id is not reliably in a crawled URL — the host names the tenant, the path
+// may name a locale, a job, or nothing. So this returns "tenant:region:" and
+// the resolution happens once, later, only for tenants that survive the free
+// checks. Emitting a complete-looking slug here would mean probing the live
+// API for all 1,166 crawled tenants during collection, which is the wrong
+// place: collection makes no board calls.
+func ccWorkdayPartialSlug(u string) string {
+	m := workdayLinkRe.FindStringSubmatch(u)
+	if m == nil {
+		return ""
+	}
+	return m[1] + ":" + m[2] + ":"
 }
 
 // ccPathSlug reads the slug out of the URL path using the same regexes

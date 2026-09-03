@@ -1,6 +1,7 @@
 package services
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/ToufiqQureshi/neurofiq-ai-interview/backend-go/models"
@@ -200,6 +201,7 @@ func TestCommonCrawlHostsYieldReadableSlugs(t *testing.T) {
 		"*.keka.com":                    "https://acme.keka.com/careers",
 		"*.darwinbox.in":                "https://acme.darwinbox.in/ms/candidate/careers",
 		"*.darwinbox.com":               "https://acme.darwinbox.com/ms/candidate/careers",
+		"*.myworkdayjobs.com":           "https://acme.wd5.myworkdayjobs.com/en-US/External",
 	}
 
 	for _, host := range commonCrawlHosts {
@@ -371,5 +373,57 @@ func TestFirstGroup(t *testing.T) {
 	}
 	if got := firstGroup([]string{"whole"}); got != "" {
 		t.Errorf("firstGroup with no groups = %q, want empty", got)
+	}
+}
+
+// A crawled Workday URL names the tenant and the region but not the job-site
+// id, so the collector emits an incomplete slug and admission fills it in.
+func TestCCWorkdayPartialSlug(t *testing.T) {
+	cases := map[string]string{
+		"https://fnz.wd3.myworkdayjobs.com/fnz_careers/job/Pune/X_REQ-1": "fnz:wd3:",
+		"https://broadcom.wd1.myworkdayjobs.com/external_career":         "broadcom:wd1:",
+		"https://gsknch.wd3.myworkdayjobs.com/en-US/gskcareers":          "gsknch:wd3:",
+		"https://example.com/careers":                                    "",
+	}
+	for in, want := range cases {
+		if got := ccWorkdayPartialSlug(in); got != want {
+			t.Errorf("ccWorkdayPartialSlug(%q) = %q, want %q", in, got, want)
+		}
+	}
+
+	// The partial form must survive validATSSlug, or admission drops it before
+	// it ever reaches the resolver.
+	if !validATSSlug("fnz:wd3:") {
+		t.Error("the partial Workday slug must pass validATSSlug")
+	}
+}
+
+// resolveWorkdaySlug probes the live API, so only its offline branches are
+// exercised here: a slug that is already complete, and one that cannot be.
+func TestResolveWorkdaySlugOfflineBranches(t *testing.T) {
+	if got := resolveWorkdaySlug("acme:wd5:External"); got != "acme:wd5:External" {
+		t.Errorf("a complete slug must pass through untouched, got %q", got)
+	}
+	for _, bad := range []string{"acme", "acme:wd5", "acme:wd5:x:y", ":wd5:", "acme::"} {
+		if got := resolveWorkdaySlug(bad); got != "" {
+			t.Errorf("resolveWorkdaySlug(%q) = %q, want empty", bad, got)
+		}
+	}
+}
+
+// Every provider the crawl collects for must be one FetchATSJobs can read.
+// Workday is the one whose slug is not complete at collection time, so its
+// entry is checked against the resolved shape rather than the emitted one.
+func TestCommonCrawlProvidersAreAllReadable(t *testing.T) {
+	for _, host := range commonCrawlHosts {
+		probe := "acme"
+		if host.provider == "workday" {
+			probe = "acme:wd5:External"
+		}
+		_, err := FetchATSJobs("", host.provider, probe)
+		if err != nil && strings.Contains(err.Error(), "unknown ATS provider") {
+			t.Errorf("crawl host %q names provider %q, which FetchATSJobs cannot read",
+				host.query, host.provider)
+		}
 	}
 }

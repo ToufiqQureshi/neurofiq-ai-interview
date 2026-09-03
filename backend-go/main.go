@@ -107,7 +107,7 @@ func main() {
 		&models.User{}, &models.GithubProfile{}, &models.Question{},
 		&models.InterviewSession{},
 		&models.Company{}, &models.Job{}, &models.ScrapeUsage{},
-		&models.CronLease{},
+		&models.CronLease{}, &models.HarvestState{},
 	); err != nil {
 		log.Fatalf("Migration failed: %v", err)
 	}
@@ -348,6 +348,20 @@ func main() {
 	}); err != nil {
 		log.Fatalf("Failed to schedule enrichment: %v", err)
 	}
+	// The slug harvest reads boards out of Common Crawl's URL index, which
+	// costs no metered search at all — the constraint discovery lives under.
+	//
+	// Three-hourly against a source that publishes monthly looks wrong and is
+	// not: RunScheduledHarvest compares the newest published index against the
+	// one it last read and returns after a single request when they match. The
+	// cadence therefore decides how promptly a new index is noticed, not how
+	// often ten thousand boards are re-read. Anything rarer would leave a
+	// month's worth of new companies waiting on the next tick.
+	if _, err := scheduler.AddFunc("@every 3h", func() {
+		safely("slug harvest", services.RunScheduledHarvest)
+	}); err != nil {
+		log.Fatalf("Failed to schedule the slug harvest: %v", err)
+	}
 	// Housekeeping: reclaim abandoned analyses and forget idle rate-limit
 	// buckets. Cheap, and it keeps a long-running process from drifting.
 	if _, err := scheduler.AddFunc("@every 15m", func() {
@@ -413,6 +427,7 @@ func main() {
 	<-scheduler.Stop().Done()
 	services.ReleaseCronLease(services.DiscoveryLeaseName)
 	services.ReleaseCronLease(services.JobSyncLeaseName)
+	services.ReleaseCronLease(services.SlugHarvestLeaseName)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()

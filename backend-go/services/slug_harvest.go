@@ -373,6 +373,21 @@ func admitCandidate(c slugCandidate, idx *directoryIndex) harvestOutcome {
 		return outcomeSkipped
 	}
 
+	// A Workday slug arrives from the crawl without its job-site id, which is
+	// not in the URL. Resolving it costs live API calls, so it happens here —
+	// after the free checks above have already discarded the tenants we
+	// recognise, and never during collection.
+	if provider == "workday" {
+		resolved := resolveWorkdaySlug(slug)
+		if resolved == "" {
+			return outcomeDeadBoard
+		}
+		slug = resolved
+		if idx.hasBoard(provider, slug) {
+			return outcomeDuplicate
+		}
+	}
+
 	// The board's own API. Free, and it answers both remaining questions at
 	// once: is this a real live board, and does it hire here.
 	jobs, err := FetchATSJobs("", provider, slug)
@@ -580,4 +595,103 @@ func tidyLocation(raw string) string {
 		s = strings.ReplaceAll(s, ",,", ",")
 	}
 	return strings.Trim(s, " ,")
+}
+
+// SlugHarvestLeaseName is the cron lease for the scheduled harvest.
+const SlugHarvestLeaseName = "slug-harvest"
+
+// slugHarvestLeaseTTL spans a full tick, so a second instance cannot repeat
+// the tick this one just ran.
+const slugHarvestLeaseTTL = 3 * time.Hour
+
+// scheduledHarvestLimit caps what one scheduled tick will store.
+//
+// A manual backfill passes zero and takes everything; a scheduled run should
+// not, because the tick that follows a newly published index is the one that
+// finds thousands of boards at once and there is no reason for it to hold the
+// lease for hours. What it skips is not lost — the index is recorded only
+// after a completed pass, so the next tick continues where this one stopped.
+const scheduledHarvestLimit = 400
+
+// RunScheduledHarvest is the cron entry point.
+//
+// It is deliberately cheap to call often and expensive only when there is
+// something new. Common Crawl publishes about one index a month; a tick that
+// finds the index it already read logs one line and returns, having spent a
+// single request. That is what makes a three-hourly schedule reasonable for a
+// monthly source — the schedule decides how promptly a new index is noticed,
+// not how often the work is redone.
+func RunScheduledHarvest() {
+	if !AcquireCronLease(SlugHarvestLeaseName, slugHarvestLeaseTTL) {
+		log.Printf("slug harvest: another instance holds the lease, skipping")
+		return
+	}
+
+	indexes, err := LatestCommonCrawlIndexes(1)
+	if err != nil || len(indexes) == 0 {
+		log.Printf("slug harvest: could not read the Common Crawl index list: %v", err)
+		return
+	}
+	newest := indexes[0]
+
+	var state models.HarvestState
+	if err := config.DB.Where("source = ?", SourceCommonCrawl).First(&state).Error; err == nil &&
+		state.LastIndex == newest {
+		log.Printf("slug harvest: %s already read (last run %s, %d stored) — nothing new to collect",
+			newest, state.LastRunAt.Format(time.RFC3339), state.Stored)
+		return
+	}
+
+	log.Printf("slug harvest: %s is new, collecting", newest)
+	stats := HarvestSlugs(HarvestFromCommonCrawl([]string{newest}), scheduledHarvestLimit)
+
+	// Recorded only after the pass completes. A run that dies half way leaves
+	// the index unrecorded, so the next tick picks it up again rather than
+	// skipping the half it never read.
+	if err := config.DB.Save(&models.HarvestState{
+		Source:    SourceCommonCrawl,
+		LastIndex: newest,
+		LastRunAt: time.Now(),
+		Stored:    stats.Stored,
+	}).Error; err != nil {
+		log.Printf("slug harvest: could not record %s as read: %v", newest, err)
+	}
+}
+
+// resolveWorkdaySlug fills in the job-site id a crawled Workday URL does not
+// carry, returning "" when no candidate site answers with postings.
+//
+// A Workday board is <tenant>.<region>.myworkdayjobs.com/<site>. The crawl
+// gives the first two; the third has to be asked for, which is what
+// scanForATS already does when it finds a Workday link on a careers page.
+// This is the same probe, reached from the other direction.
+//
+// Worst case is five requests for a tenant that answers to none of the common
+// site ids, and one for a tenant that answers to the first. That is affordable
+// here and would not have been during collection, where it would have run for
+// every one of the 1,166 crawled tenants before anything had been filtered.
+//
+// A slug that already carries a site id is returned untouched, so a candidate
+// from any other source passes through.
+func resolveWorkdaySlug(slug string) string {
+	parts := strings.Split(slug, ":")
+	if len(parts) != 3 {
+		return ""
+	}
+	tenant, region, site := parts[0], parts[1], parts[2]
+	if site != "" {
+		return slug
+	}
+	if tenant == "" || region == "" {
+		return ""
+	}
+
+	for _, candidate := range workdaySiteCandidates {
+		full := tenant + ":" + region + ":" + candidate
+		if jobs, err := fetchWorkdayJobs(full); err == nil && len(jobs) > 0 {
+			return full
+		}
+		time.Sleep(harvestPoliteness)
+	}
+	return ""
 }
