@@ -1201,19 +1201,46 @@ func discoverFromBoards(query string, limit, floor int) ([]models.Company, error
 // Level AI is on both Lever and Ashby — and overwriting on every rotation made
 // its board flap between them, replacing all of its roles each time. The first
 // board found wins; a second one adds nothing the directory can show.
-func attachBoardTo(dup *models.Company, hit boardHit) {
+// attachBoardTo reports whether it actually attached the board, so a caller
+// that runs many of these concurrently — the slug harvest does, one goroutine
+// per candidate — can tell a real attach from losing a race for the same
+// company.
+//
+// The in-memory guard this replaced (checking dup.ATSSlug before writing) was
+// not enough for that caller: two goroutines can both read the same *Company
+// with an empty slug, both pass the check, and both fire an UPDATE — the
+// second silently overwriting the first's board, and the harvest's own
+// Attached counter double-counting one company. The WHERE clause below is
+// what actually serialises this: only the update that finds the row still
+// unattached does anything, so the loser's RowsAffected is 0.
+func attachBoardTo(dup *models.Company, hit boardHit) bool {
 	if strings.TrimSpace(dup.ATSSlug) != "" {
-		return
+		return false
 	}
-	if err := config.DB.Model(&models.Company{}).Where("id = ?", dup.ID).Updates(map[string]interface{}{
-		"ats_type": hit.Provider, "ats_slug": hit.Slug,
-		"careers_url": hit.URL, "ats_checked_at": time.Now(),
-	}).Error; err != nil {
-		log.Printf("board discovery: failed to attach board %q to %q: %v", hit.Slug, dup.Name, err)
-		return
+	result := config.DB.Model(&models.Company{}).
+		Where("id = ? AND (ats_slug IS NULL OR ats_slug = '')", dup.ID).
+		Updates(map[string]interface{}{
+			"ats_type": hit.Provider, "ats_slug": hit.Slug,
+			"careers_url": hit.URL, "ats_checked_at": time.Now(),
+		})
+	if result.Error != nil {
+		log.Printf("board discovery: failed to attach board %q to %q: %v", hit.Slug, dup.Name, result.Error)
+		return false
 	}
+	if result.RowsAffected == 0 {
+		// Another goroutine attached a board to this company first.
+		return false
+	}
+	// dup.ATSSlug is deliberately left untouched here. The slug harvest calls
+	// this from several goroutines that can hold the very same *Company
+	// pointer (idx.duplicate hands out the one stored in its maps), and every
+	// other reference to the field is a read with no synchronisation of its
+	// own — a write here would race with those reads. The WHERE clause above
+	// is what actually prevents a double attach; this field is just the
+	// in-memory mirror the next full index rebuild will refresh.
 	log.Printf("board discovery: attached %s board %q to existing company %q",
 		hit.Provider, hit.Slug, dup.Name)
+	return true
 }
 
 // firstIndianLocation returns the first Indian location among a board's

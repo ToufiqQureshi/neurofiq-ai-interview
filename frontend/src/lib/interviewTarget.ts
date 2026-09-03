@@ -44,3 +44,38 @@ export function targetApiParams(target: InterviewTarget): string {
   else if (target.company) params.set('company_id', target.company);
   return params.toString();
 }
+
+// The public Job Map's Practice buttons link into /repositories, which sits
+// behind ProtectedRoute. A visitor who is not logged in — the whole audience
+// this feature is for, since a logged-in one would already be past the map —
+// gets bounced to /auth, and the target in the URL would be lost there: the
+// GitHub OAuth leg is a full-page redirect through GitHub's own domain, so
+// nothing on the query string survives it, and the server-side callback can
+// only send the browser back to a fixed path. sessionStorage is what
+// survives that round trip; the target rides in it rather than in the URL for
+// exactly this one hop.
+const RETURN_TO_KEY = 'nf_return_to';
+
+// rememberReturnTo records where an unauthenticated visitor was headed, so
+// they can be sent back there once they are signed in.
+export function rememberReturnTo(pathWithSearch: string): void {
+  try {
+    sessionStorage.setItem(RETURN_TO_KEY, pathWithSearch);
+  } catch {
+    // Private browsing or a blocked storage API. Worst case is the same
+    // behaviour this replaces — landing on /dashboard — so failing silently
+    // is the right call rather than blocking sign-in over it.
+  }
+}
+
+// consumeReturnTo reads and clears the remembered path. Cleared on read so a
+// path visited once cannot keep redirecting a later, unrelated login.
+export function consumeReturnTo(): string | null {
+  try {
+    const value = sessionStorage.getItem(RETURN_TO_KEY);
+    if (value) sessionStorage.removeItem(RETURN_TO_KEY);
+    return value;
+  } catch {
+    return null;
+  }
+}

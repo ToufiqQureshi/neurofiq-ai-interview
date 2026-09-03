@@ -93,15 +93,30 @@ The same lesson as Firecrawl: check what happens when the good provider is
 gone.
 
 **Search is the only metered step in discovery, so it is rationed.** One
-search per rotation tick (three-hourly), plus one per company whose homepage
-is *looked up* — count attempts, not saves. That distinction is the whole
-guard: a candidate rejected after its lookup (no site found, domain already
-held) has spent a search too, so a run bounded by companies stored could spend
-one search per board hit — 26, not 6. `mayStartLookup` stops the loop at
-`maxNewCompaniesPerRun` lookups, which is what actually bounds a tick at 6.
-Job syncing is free and stays hourly on its own lease, so listings remain
-fresh while discovery slows. A board skipped by the cap is not lost: the
-rotation comes back.
+search per rotation tick (three-hourly) to find boards, plus — only when
+nothing free named the company's site — one per company whose homepage is
+*looked up*. `websiteFromBoardPage` and `guessCompanyWebsite` (the slug tried
+as a domain label, accepted only when the candidate site links back to the
+same board) both run before that lookup, so most companies never spend a
+search at all: of 145 stored in board search's first two days, 92 sat on their
+own slug under one of five TLDs. Count attempts, not saves: a candidate
+rejected after its lookup (no site found, domain already held) has still spent
+a search. `mayStartLookup` gates each lookup individually against
+`maxNewCompaniesPerRun`, and the loop itself stops at `limit` companies
+*stored* — the two are different caps now that a company can be stored for
+free, so a full tick can save more than it ever looks up. Job syncing is free
+and stays hourly on its own lease, so listings remain fresh while discovery
+slows. A board skipped by the cap is not lost: the rotation comes back.
+
+**Board slugs are also harvested for free, on their own schedule.**
+`slug_harvest.go` reads board URLs out of Common Crawl's public index — the
+same URLs discovery would otherwise have to search for — and admits them
+through discovery's own rules (`boardRowIsAdmissible`, live board, Indian
+role, not a duplicate). No metered call anywhere in that path. It runs off
+`RunScheduledHarvest` every three hours, but Common Crawl only publishes an
+index monthly, so nearly every tick reads the last-seen index id
+(`HarvestState`) and returns after one request; the cadence controls how
+promptly a new index is noticed, not how often 13,000+ boards are re-read.
 
 A quarter of the monthly budget is reserved for the rotation, checked before
 the board search *and* before every lookup — a manual run that passed the

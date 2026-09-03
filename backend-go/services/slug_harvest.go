@@ -299,8 +299,15 @@ func HarvestSlugs(candidates []slugCandidate, limit int) (HarvestStats, error) {
 				}
 			}()
 
-			outcome := admitCandidate(c, idx)
-			time.Sleep(harvestPoliteness)
+			outcome, networked := admitCandidate(c, idx)
+			// Politeness is owed to the board providers, not to a candidate
+			// that never reached one. Most of a run's candidates are already
+			// stored or fail a free check (idx.hasBoard, an inadmissible
+			// slug), and sleeping there too turned a majority-free pass
+			// through the input into several minutes of pure idle time.
+			if networked {
+				time.Sleep(harvestPoliteness)
+			}
 
 			mu.Lock()
 			defer mu.Unlock()
@@ -348,14 +355,14 @@ const (
 // candidate rejected at the first step costs nothing at all, which matters
 // when the input is thirteen thousand slugs of which most are already stored,
 // dead, or hiring nowhere near India.
-func admitCandidate(c slugCandidate, idx *directoryIndex) harvestOutcome {
+func admitCandidate(c slugCandidate, idx *directoryIndex) (harvestOutcome, bool) {
 	provider := strings.ToLower(strings.TrimSpace(c.Provider))
 	slug := strings.TrimSpace(c.Slug)
 	if provider == "" || slug == "" || !validATSSlug(slug) || !boardSlugIsAdmissible(slug) {
-		return outcomeSkipped
+		return outcomeSkipped, false
 	}
 	if idx.hasBoard(provider, slug) {
-		return outcomeDuplicate
+		return outcomeDuplicate, false
 	}
 
 	// A harvested slug carries no page title, so the name starts as whatever
@@ -366,11 +373,11 @@ func admitCandidate(c slugCandidate, idx *directoryIndex) harvestOutcome {
 		name = slugDisplayName(slug)
 	}
 	if !boardRowIsAdmissible(name, slug) {
-		return outcomeSkipped
+		return outcomeSkipped, false
 	}
 	if sharedBoardRe.MatchString(name) || sharedBoardRe.MatchString(slug) ||
 		aggregatorBoardRe.MatchString(name) || aggregatorBoardRe.MatchString(slug) {
-		return outcomeSkipped
+		return outcomeSkipped, false
 	}
 
 	// A Workday slug arrives from the crawl without its job-site id, which is
@@ -380,11 +387,11 @@ func admitCandidate(c slugCandidate, idx *directoryIndex) harvestOutcome {
 	if provider == "workday" {
 		resolved := resolveWorkdaySlug(slug)
 		if resolved == "" {
-			return outcomeDeadBoard
+			return outcomeDeadBoard, true
 		}
 		slug = resolved
 		if idx.hasBoard(provider, slug) {
-			return outcomeDuplicate
+			return outcomeDuplicate, true
 		}
 	}
 
@@ -392,26 +399,31 @@ func admitCandidate(c slugCandidate, idx *directoryIndex) harvestOutcome {
 	// once: is this a real live board, and does it hire here.
 	jobs, err := FetchATSJobs("", provider, slug)
 	if err != nil || len(jobs) == 0 {
-		return outcomeDeadBoard
+		return outcomeDeadBoard, true
 	}
 	// A board whose only roles are talent-pool signups is not hiring.
 	jobs = dropTalentPools(jobs)
 	jobs = tidyLocations(jobs)
 	if len(jobs) == 0 {
-		return outcomeDeadBoard
+		return outcomeDeadBoard, true
 	}
 	if len(jobs) > maxBoardRoles {
-		return outcomeSkipped
+		return outcomeSkipped, true
 	}
 	area := firstIndianLocation(jobs)
 	if area == "" {
-		return outcomeNotIndian
+		return outcomeNotIndian, true
 	}
 
 	// Name-level duplicate, before spending anything on the website.
 	if dup := idx.duplicate(name, ""); dup != nil {
-		attachBoardTo(dup, boardHit{Provider: provider, Slug: slug, URL: boardURL(provider, slug)})
-		return outcomeAttached
+		if attachBoardTo(dup, boardHit{Provider: provider, Slug: slug, URL: boardURL(provider, slug)}) {
+			return outcomeAttached, true
+		}
+		// Lost the race, or the company already had a board by the time this
+		// candidate reached it — either way it is a duplicate, not a company
+		// this candidate changed.
+		return outcomeDuplicate, true
 	}
 
 	// The company's own site. The register hands one over; otherwise the free
@@ -430,18 +442,13 @@ func admitCandidate(c slugCandidate, idx *directoryIndex) harvestOutcome {
 	}
 	domain := extractDomain(website)
 	if domain == "" {
-		return outcomeSkipped
+		return outcomeSkipped, true
 	}
 	if dup := idx.duplicate(name, domain); dup != nil {
-		attachBoardTo(dup, boardHit{Provider: provider, Slug: slug, URL: boardURL(provider, slug)})
-		return outcomeAttached
-	}
-
-	// The register's area is a registered office, which is frequently a
-	// founder's home. A location the board itself stated is where the work is,
-	// so it wins whenever there is one.
-	if area == "" {
-		area = strings.TrimSpace(c.Area)
+		if attachBoardTo(dup, boardHit{Provider: provider, Slug: slug, URL: boardURL(provider, slug)}) {
+			return outcomeAttached, true
+		}
+		return outcomeDuplicate, true
 	}
 
 	company := models.Company{
@@ -460,13 +467,18 @@ func admitCandidate(c slugCandidate, idx *directoryIndex) harvestOutcome {
 	now := time.Now()
 	company.ATSCheckedAt = &now
 
-	// Coordinates the register measured beat the ones fallbackCoordsForArea
-	// derives from a hash of the company's name. Where the register has none,
-	// geocoding the area is the same free Nominatim call discovery makes.
-	if c.Lat != nil && c.Lng != nil {
-		company.Lat, company.Lng = c.Lat, c.Lng
-	} else if lat, lng, geoErr := geocodeArea(area); geoErr == nil {
+	// The pin has to agree with the area printed beside it, so it is geocoded
+	// from the area actually stored — which firstIndianLocation guarantees is
+	// a location the board itself stated. The register's own coordinates are
+	// its registered office, frequently a founder's home in another city
+	// entirely: taking those first put a Bengaluru company's pin on a Mumbai
+	// address, and the card and the map then disagreed about where the work
+	// is. They stay as the fallback for the case geocoding cannot answer,
+	// which is still better than fallbackCoordsForArea's hash of a name.
+	if lat, lng, geoErr := geocodeArea(area); geoErr == nil {
 		company.Lat, company.Lng = lat, lng
+	} else if c.Lat != nil && c.Lng != nil {
+		company.Lat, company.Lng = c.Lat, c.Lng
 	}
 
 	result := config.DB.Clauses(clause.OnConflict{
@@ -475,10 +487,10 @@ func admitCandidate(c slugCandidate, idx *directoryIndex) harvestOutcome {
 	}).Create(&company)
 	if result.Error != nil {
 		log.Printf("slug harvest: failed to save %q: %v", name, result.Error)
-		return outcomeSkipped
+		return outcomeSkipped, true
 	}
 	if result.RowsAffected == 0 {
-		return outcomeDuplicate
+		return outcomeDuplicate, true
 	}
 	idx.remember(company)
 
@@ -490,7 +502,7 @@ func admitCandidate(c slugCandidate, idx *directoryIndex) harvestOutcome {
 	} else {
 		log.Printf("slug harvest: %s (%s/%s) -> %d roles", name, provider, slug, n)
 	}
-	return outcomeStored
+	return outcomeStored, true
 }
 
 // HarvestOptions is what an operator chose on the command line.
