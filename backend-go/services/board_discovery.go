@@ -498,13 +498,25 @@ func nameAgreesWithSlug(name, slug string) bool {
 
 // titleCandidates are the parts of a title that could name the company.
 func titleCandidates(name string) []string {
-	out := []string{name}
+	// Extracted candidates first, the untouched title last. companyNameFromBoard
+	// returns the first candidate nameAgreesWithSlug accepts, and that
+	// tolerance is loose enough — a near-length prefix match — that a raw
+	// title with a short trailing role fragment can pass on its own: "Zeta -
+	// Lead" against slug "zeta" differs by only four characters, the same
+	// tolerance meant for "Sprinto" against "sprintohq". Checked first, that
+	// let the raw title win before titleCompanyHeadRe's own "Zeta" ever got a
+	// turn — two board-search rows shipped exactly that way. The extracted
+	// candidates are always the more specific answer when they exist, so they
+	// go first; the untouched title stays as the fallback for a title that
+	// carries no "at" or "-" separator to extract from at all.
+	var out []string
 	if m := titleCompanyTailRe.FindStringSubmatch(name); m != nil {
 		out = append(out, strings.TrimSpace(m[1]))
 	}
 	if m := titleCompanyHeadRe.FindStringSubmatch(name); m != nil {
 		out = append(out, strings.TrimSpace(m[1]))
 	}
+	out = append(out, name)
 	return out
 }
 

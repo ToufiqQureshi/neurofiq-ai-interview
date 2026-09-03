@@ -59,6 +59,15 @@ func TestCompanyNameFromBoard(t *testing.T) {
 		{"Software Engineer I (Bangalore, India) at Aiprise", "aiprise", "Aiprise"},
 		{"Jobgether - Software Engineer", "jobgether", "Jobgether"},
 
+		// Two rows the directory actually stored this way: the raw title's
+		// diff against the slug (4 characters, "Lead"/"IC4") sat inside
+		// nameAgreesWithSlug's near-length tolerance, so it passed and won
+		// before titleCompanyHeadRe's own "Zeta"/"Protolabs" ever got a turn.
+		// Same failure shape as Jobgether above, just short enough on the
+		// trailing fragment to slip past the guard meant to catch it.
+		{"Zeta - Lead", "zeta", "Zeta"},
+		{"Protolabs - IC4", "protolabs", "Protolabs"},
+
 		// The title names a role and a city and never names the company at
 		// all, so nothing in it agrees with the slug. Taking it verbatim is
 		// what produced a row whose name was a job title, whose ATS slug was
