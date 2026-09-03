@@ -3,6 +3,7 @@ package services
 import (
 	"bufio"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"net/http"
@@ -177,11 +178,17 @@ func HarvestFromCommonCrawl(indexes []string) []slugCandidate {
 				}
 				urls, more, err := ccFetchPage(index, host.query, page)
 				if err != nil {
-					// One page failing is not the end of the host. The first
-					// version broke here, which is how a single 504 on page 1
-					// cost every page after it: Ashby collected 345 slugs where
-					// its two pages hold 2,955. Skip the page, keep walking.
 					failed++
+					// An empty page that survived its retries is the host being
+					// genuinely out of data, so stop. Anything else is one bad
+					// page: the first version broke here, which is how a single
+					// 504 on page 1 cost every page after it — Ashby collected
+					// 345 slugs where its two pages hold 2,955.
+					if errors.Is(err, errEmptyPage) {
+						log.Printf("common crawl: %s %s page %d empty after retries, stopping",
+							index, host.query, page)
+						break
+					}
 					log.Printf("common crawl: %s %s page %d failed, continuing: %v",
 						index, host.query, page, err)
 					continue
@@ -321,36 +328,36 @@ func ccFetchPageOnce(index, query string, page int) (urls []string, more, retrya
 	if scanErr := scanner.Err(); scanErr != nil {
 		return nil, false, true, scanErr
 	}
-	// An empty page means the walk is over; a full one means try the next.
-	return urls, len(urls) > 0, false, nil
+	// A 200 carrying no rows is not the end of the walk.
+	//
+	// The end is 400 or 404, handled above. This is the index answering
+	// successfully and returning nothing, which it does under load — and
+	// treating it as the end is how Ashby stopped after one page: 13,000 rows
+	// read of the 20,412 its two pages hold, with nothing logged as failed
+	// because nothing had failed. Retrying is what separates a busy moment
+	// from a genuinely exhausted host.
+	if len(urls) == 0 {
+		return nil, false, true, errEmptyPage
+	}
+	return urls, true, false, nil
 }
 
-// greenhouseEmbedRe reads the slug out of Greenhouse's embedded board URL.
-//
-// A company that embeds its board rather than linking it serves
-// boards.greenhouse.io/embed/job_board?for=observeai, where the company is in
-// the query string and the path segment is the literal word "embed".
-// greenhouseLinkRe reads the path, so it returns "embed" for every such URL —
-// one useless slug standing in for every embedding company.
-//
-// nonSlugSegments catches it, so nothing bad is stored; the cost is that those
-// companies are simply never found. This was visible in the register run:
-// Observe.ai resolved to "greenhouse/embed" and was dropped.
-//
-// NOTE: scanForATS in job_service.go has the same gap, which means DetectATS
-// cannot read an embedded Greenhouse board off a company's careers page
-// either. That is a wider fix than this branch should make — see the handoff.
-var greenhouseEmbedRe = regexp.MustCompile(`(?i)greenhouse\.io/embed/job_board\?for=([a-zA-Z0-9_-]+)`)
+// errEmptyPage is a 200 that carried no rows — retryable, and distinct from
+// the 400/404 that genuinely ends a walk.
+var errEmptyPage = errors.New("cdx returned an empty page")
 
-// ccGreenhouseSlug prefers the embed form's query parameter and falls back to
-// the ordinary path slug.
+// ccGreenhouseSlug reads a Greenhouse slug out of a crawled URL.
+//
+// greenhouseLinkRe accepts both shapes Greenhouse serves — the linked board
+// at /<slug> and the embedded one at /embed/job_board?for=<slug> — and fills
+// one capture group per shape, so the slug is whichever group is not empty.
+// Reading group 1 unconditionally returned "embed" for every embedding
+// company, which nonSlugSegments then rejected: the company was never found
+// rather than found wrong. Observe.ai surfaced it during the register run.
 func ccGreenhouseSlug(u string) string {
-	if m := greenhouseEmbedRe.FindStringSubmatch(u); m != nil {
-		return m[1]
-	}
 	m := greenhouseLinkRe.FindStringSubmatch(u)
 	if m == nil {
 		return ""
 	}
-	return m[1]
+	return firstGroup(m)
 }

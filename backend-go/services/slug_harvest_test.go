@@ -329,3 +329,47 @@ func TestCCGreenhouseSlugReadsEmbedForm(t *testing.T) {
 		t.Error(`"embed" must stay inadmissible as a slug`)
 	}
 }
+
+// scanForATS must read an embedded Greenhouse board as well as a linked one.
+//
+// A company that embeds serves boards.greenhouse.io/embed/job_board?for=X,
+// where the company is in the query string. Reading the path returned the
+// literal "embed", which nonSlugSegments rejects — so DetectATS could not read
+// an embedded board off a careers page at all, and the company sat at zero
+// roles with nothing logged. Observe.ai's careers page is one such.
+func TestScanForATSReadsEmbeddedGreenhouse(t *testing.T) {
+	cases := []struct{ page, provider, slug string }{
+		{`<iframe src="https://boards.greenhouse.io/embed/job_board?for=observeai">`, "greenhouse", "observeai"},
+		{`<script src="https://boards.greenhouse.io/embed/job_board/js?for=acme">`, "greenhouse", "acme"},
+		// Every shape that already worked must keep working.
+		{`<a href="https://boards.greenhouse.io/sprinto">Careers</a>`, "greenhouse", "sprinto"},
+		{`<a href="https://job-boards.greenhouse.io/zeptonow/jobs/9">x</a>`, "greenhouse", "zeptonow"},
+		{`<a href="https://job-boards.eu.greenhouse.io/groww">x</a>`, "greenhouse", "groww"},
+		{`<a href="https://jobs.lever.co/Sprinto">x</a>`, "lever", "Sprinto"},
+		{`<a href="https://jobs.ashbyhq.com/cartesia">x</a>`, "ashby", "cartesia"},
+		{`<a href="https://acme.keka.com/careers">x</a>`, "keka", "acme"},
+		{`<p>no board here</p>`, "", ""},
+	}
+	for _, c := range cases {
+		provider, slug := scanForATS(c.page)
+		if provider != c.provider || slug != c.slug {
+			t.Errorf("scanForATS(%.60s) = (%q, %q), want (%q, %q)",
+				c.page, provider, slug, c.provider, c.slug)
+		}
+	}
+}
+
+func TestFirstGroup(t *testing.T) {
+	if got := firstGroup([]string{"whole", "", "second"}); got != "second" {
+		t.Errorf("firstGroup skipped the empty group: %q", got)
+	}
+	if got := firstGroup([]string{"whole", "first", ""}); got != "first" {
+		t.Errorf("firstGroup = %q, want first", got)
+	}
+	if got := firstGroup([]string{"whole", "", ""}); got != "" {
+		t.Errorf("firstGroup with nothing filled = %q, want empty", got)
+	}
+	if got := firstGroup([]string{"whole"}); got != "" {
+		t.Errorf("firstGroup with no groups = %q, want empty", got)
+	}
+}

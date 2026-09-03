@@ -26,7 +26,17 @@ import (
 var (
 	// Greenhouse serves regional boards too (e.g. job-boards.eu.greenhouse.io),
 	// so allow an optional region segment before greenhouse.io.
-	greenhouseLinkRe      = regexp.MustCompile(`(?:boards|job-boards)\.(?:[a-z]{2}\.)?greenhouse\.io/([a-zA-Z0-9_-]+)`)
+	// The embed form is listed first because the alternation is ordered and the
+	// plain path would otherwise match it, returning the literal segment
+	// "embed" as the slug.
+	//
+	// A company that embeds its board rather than linking it serves
+	// boards.greenhouse.io/embed/job_board?for=observeai — the company is in
+	// the query string. Without this, every embedding company collapsed to the
+	// same inadmissible slug, so DetectATS could not read an embedded board off
+	// a careers page at all and the company was silently left at zero roles.
+	// Observe.ai is one: its careers page embeds rather than links.
+	greenhouseLinkRe      = regexp.MustCompile(`(?:boards|job-boards)\.(?:[a-z]{2}\.)?greenhouse\.io/(?:embed/job_board(?:/js)?\?for=([a-zA-Z0-9_-]+)|([a-zA-Z0-9_-]+))`)
 	leverLinkRe           = regexp.MustCompile(`jobs\.lever\.co/([a-zA-Z0-9_-]+)`)
 	ashbyLinkRe           = regexp.MustCompile(`jobs\.ashbyhq\.com/([a-zA-Z0-9_.-]+)`)
 	workableLinkRe        = regexp.MustCompile(`apply\.workable\.com/([a-zA-Z0-9_-]+)`)
@@ -168,6 +178,19 @@ type workdayResponse struct {
 
 // scanForATS looks for an embedded ATS job-board link in page content and
 // returns the provider and its board slug.
+// firstGroup returns the first non-empty capture group of a match.
+//
+// A pattern that accepts more than one URL shape carries one group per shape
+// and fills exactly one of them.
+func firstGroup(m []string) string {
+	for _, g := range m[1:] {
+		if g != "" {
+			return g
+		}
+	}
+	return ""
+}
+
 func scanForATS(content string) (atsType, atsSlug string) {
 	// Ordered most-specific first; keka's pattern is a bare subdomain match
 	// so it must not shadow the others.
@@ -184,7 +207,14 @@ func scanForATS(content string) (atsType, atsSlug string) {
 		{"darwinbox", darwinboxLinkRe},
 	} {
 		if m := p.re.FindStringSubmatch(content); m != nil {
-			return p.name, m[1]
+			// First non-empty group, not group 1. A pattern that has to accept
+			// two URL shapes carries two groups and only one of them fills:
+			// Greenhouse's board is linked as /<slug> or embedded as
+			// /embed/job_board?for=<slug>, and reading group 1 unconditionally
+			// returned "" for whichever shape did not match.
+			if slug := firstGroup(m); slug != "" {
+				return p.name, slug
+			}
 		}
 	}
 
