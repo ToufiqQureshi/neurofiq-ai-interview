@@ -377,6 +377,7 @@ func admitCandidate(c slugCandidate, idx *directoryIndex) harvestOutcome {
 	}
 	// A board whose only roles are talent-pool signups is not hiring.
 	jobs = dropTalentPools(jobs)
+	jobs = tidyLocations(jobs)
 	if len(jobs) == 0 {
 		return outcomeDeadBoard
 	}
@@ -551,4 +552,28 @@ func dropTalentPools(jobs []models.Job) []models.Job {
 		kept = append(kept, j)
 	}
 	return kept
+}
+
+// tidyLocations normalises the whitespace a board puts in a location string.
+//
+// Darwinbox returns "Bengaluru, Karnataka, India" — a literal carriage
+// return inside the field, which reaches the card and the area column exactly
+// as written. Every producer of a location ends up here, so the cleanup
+// belongs here rather than in each reader.
+func tidyLocations(jobs []models.Job) []models.Job {
+	for i := range jobs {
+		jobs[i].Location = tidyLocation(jobs[i].Location)
+	}
+	return jobs
+}
+
+// tidyLocation collapses internal whitespace and tidies the punctuation that
+// collapsing can leave stranded (", ," and a trailing comma).
+func tidyLocation(raw string) string {
+	s := whitespaceRe.ReplaceAllString(strings.TrimSpace(raw), " ")
+	s = strings.ReplaceAll(s, " ,", ",")
+	for strings.Contains(s, ",,") {
+		s = strings.ReplaceAll(s, ",,", ",")
+	}
+	return strings.Trim(s, " ,")
 }

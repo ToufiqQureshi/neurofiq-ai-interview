@@ -276,3 +276,56 @@ func TestDropTalentPools(t *testing.T) {
 		}
 	}
 }
+
+// Darwinbox returns "Bengaluru, Karnataka\r, India" — a literal carriage
+// return inside the field, which reached the company card exactly as written.
+func TestTidyLocation(t *testing.T) {
+	cases := map[string]string{
+		"Bengaluru, Karnataka\r, India":    "Bengaluru, Karnataka, India",
+		"Neemuch, Madhya Pradesh\r, India": "Neemuch, Madhya Pradesh, India",
+		"  Bangalore  ":                    "Bangalore",
+		"Pune,\n\tMaharashtra":             "Pune, Maharashtra",
+		"Mumbai,":                          "Mumbai",
+		"Gurgaon, Noida":                   "Gurgaon, Noida",
+		"India":                            "India",
+	}
+	for in, want := range cases {
+		if got := tidyLocation(in); got != want {
+			t.Errorf("tidyLocation(%q) = %q, want %q", in, got, want)
+		}
+	}
+
+	// Tidying must not change whether a location reads as Indian.
+	if !looksIndian(tidyLocation("Bengaluru, Karnataka\r, India")) {
+		t.Error("tidying broke the India check")
+	}
+}
+
+// A company that embeds its Greenhouse board rather than linking it serves
+// boards.greenhouse.io/embed/job_board?for=observeai — the company is in the
+// query string and the path segment is the literal word "embed".
+// greenhouseLinkRe reads the path, so every embedding company collapses to one
+// useless slug. The register run showed it: Observe.ai resolved to
+// "greenhouse/embed" and was dropped.
+func TestCCGreenhouseSlugReadsEmbedForm(t *testing.T) {
+	cases := map[string]string{
+		"https://boards.greenhouse.io/embed/job_board?for=observeai": "observeai",
+		"https://boards.greenhouse.io/embed/job_board?for=acme&b=1":  "acme",
+		// The ordinary forms must keep working.
+		"https://boards.greenhouse.io/acme":              "acme",
+		"https://job-boards.greenhouse.io/acme/jobs/123": "acme",
+		"https://job-boards.eu.greenhouse.io/acme":       "acme",
+		"https://example.com/careers":                    "",
+	}
+	for in, want := range cases {
+		if got := ccGreenhouseSlug(in); got != want {
+			t.Errorf("ccGreenhouseSlug(%q) = %q, want %q", in, got, want)
+		}
+	}
+
+	// The bad slug this replaces would have been rejected anyway, which is why
+	// the symptom was a missing company rather than a wrong one.
+	if boardSlugIsAdmissible("embed") {
+		t.Error(`"embed" must stay inadmissible as a slug`)
+	}
+}

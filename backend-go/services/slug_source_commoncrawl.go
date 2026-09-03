@@ -49,8 +49,12 @@ import (
 // commonCrawlCollections is where the list of published indexes lives.
 const commonCrawlCollections = "https://index.commoncrawl.org/collinfo.json"
 
-// ccIndexPageSize is the CDX API's own paging unit. The API reports how many
-// pages a query has; this walks them.
+// ccMaxPagesPerHost bounds the page walk.
+//
+// The API pages in blocks and answers past the end with 400 or 404, so the
+// walk normally stops on its own; this is the ceiling for the case where it
+// does not. Eight covers every host measured — the widest, Greenhouse and
+// Workday, held five pages each.
 const ccMaxPagesPerHost = 8
 
 // ccClient is separate from externalClient because a CDX page is a large
@@ -74,8 +78,8 @@ type ccHost struct {
 // this can find but nothing can read is wasted work, and a board something can
 // read but this never finds is only ever discovered by accident.
 var commonCrawlHosts = []ccHost{
-	{query: "job-boards.greenhouse.io/*", provider: "greenhouse", slugFrom: ccPathSlug(greenhouseLinkRe)},
-	{query: "boards.greenhouse.io/*", provider: "greenhouse", slugFrom: ccPathSlug(greenhouseLinkRe)},
+	{query: "job-boards.greenhouse.io/*", provider: "greenhouse", slugFrom: ccGreenhouseSlug},
+	{query: "boards.greenhouse.io/*", provider: "greenhouse", slugFrom: ccGreenhouseSlug},
 	{query: "jobs.lever.co/*", provider: "lever", slugFrom: ccPathSlug(leverLinkRe)},
 	{query: "jobs.ashbyhq.com/*", provider: "ashby", slugFrom: ccPathSlug(ashbyLinkRe)},
 	{query: "apply.workable.com/*", provider: "workable", slugFrom: ccPathSlug(workableLinkRe)},
@@ -166,16 +170,23 @@ func HarvestFromCommonCrawl(indexes []string) []slugCandidate {
 
 	for _, index := range indexes {
 		for _, host := range commonCrawlHosts {
-			found := 0
+			found, rows, failed := 0, 0, 0
 			for page := 0; page < ccMaxPagesPerHost; page++ {
 				if page > 0 {
 					time.Sleep(ccPageGap)
 				}
 				urls, more, err := ccFetchPage(index, host.query, page)
 				if err != nil {
-					log.Printf("common crawl: %s %s page %d: %v", index, host.query, page, err)
-					break
+					// One page failing is not the end of the host. The first
+					// version broke here, which is how a single 504 on page 1
+					// cost every page after it: Ashby collected 345 slugs where
+					// its two pages hold 2,955. Skip the page, keep walking.
+					failed++
+					log.Printf("common crawl: %s %s page %d failed, continuing: %v",
+						index, host.query, page, err)
+					continue
 				}
+				rows += len(urls)
 				for _, u := range urls {
 					slug := host.slugFrom(u)
 					if slug == "" {
@@ -201,7 +212,12 @@ func HarvestFromCommonCrawl(indexes []string) []slugCandidate {
 					break
 				}
 			}
-			log.Printf("common crawl: %s %s -> %d new slugs", index, host.query, found)
+			// Rows and failures, not just the slug count. A host that returns
+			// far fewer slugs than usual is either genuinely smaller or was
+			// half-read, and the slug count alone cannot tell those apart —
+			// which is exactly the ambiguity that hid the bug above.
+			log.Printf("common crawl: %s %s -> %d new slugs (%d rows, %d pages failed)",
+				index, host.query, found, rows, failed)
 			time.Sleep(ccPageGap)
 		}
 	}
@@ -307,4 +323,34 @@ func ccFetchPageOnce(index, query string, page int) (urls []string, more, retrya
 	}
 	// An empty page means the walk is over; a full one means try the next.
 	return urls, len(urls) > 0, false, nil
+}
+
+// greenhouseEmbedRe reads the slug out of Greenhouse's embedded board URL.
+//
+// A company that embeds its board rather than linking it serves
+// boards.greenhouse.io/embed/job_board?for=observeai, where the company is in
+// the query string and the path segment is the literal word "embed".
+// greenhouseLinkRe reads the path, so it returns "embed" for every such URL —
+// one useless slug standing in for every embedding company.
+//
+// nonSlugSegments catches it, so nothing bad is stored; the cost is that those
+// companies are simply never found. This was visible in the register run:
+// Observe.ai resolved to "greenhouse/embed" and was dropped.
+//
+// NOTE: scanForATS in job_service.go has the same gap, which means DetectATS
+// cannot read an embedded Greenhouse board off a company's careers page
+// either. That is a wider fix than this branch should make — see the handoff.
+var greenhouseEmbedRe = regexp.MustCompile(`(?i)greenhouse\.io/embed/job_board\?for=([a-zA-Z0-9_-]+)`)
+
+// ccGreenhouseSlug prefers the embed form's query parameter and falls back to
+// the ordinary path slug.
+func ccGreenhouseSlug(u string) string {
+	if m := greenhouseEmbedRe.FindStringSubmatch(u); m != nil {
+		return m[1]
+	}
+	m := greenhouseLinkRe.FindStringSubmatch(u)
+	if m == nil {
+		return ""
+	}
+	return m[1]
 }
