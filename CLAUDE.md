@@ -93,15 +93,19 @@ The same lesson as Firecrawl: check what happens when the good provider is
 gone.
 
 **Search is the only metered step in discovery, so it is rationed.** One
-search per rotation tick (three-hourly) to find boards, plus — only when
-nothing free named the company's site — one per company whose homepage is
-*looked up*. `websiteFromBoardPage` and `guessCompanyWebsite` (the slug tried
-as a domain label, accepted only when the candidate site links back to the
-same board) both run before that lookup, so most companies never spend a
-search at all: of 145 stored in board search's first two days, 92 sat on their
-own slug under one of five TLDs. Count attempts, not saves: a candidate
-rejected after its lookup (no site found, domain already held) has still spent
-a search. `mayStartLookup` gates each lookup individually against
+search per rotation tick to find boards, plus — only when nothing free named
+the company's site — one per company whose homepage is *looked up*.
+`RunDiscoveryRotation` runs every 15 minutes, matching
+`discoveryIntervalSeconds` — frequent enough that the shared monthly
+allowance would be gone well before the month is out on its own, which is
+exactly why the budget guard below exists.
+`websiteFromBoardPage` and `guessCompanyWebsite` (the slug tried as a domain
+label, accepted only when the candidate site links back to the same board)
+both run before that lookup, so most companies never spend a search at all:
+of 145 stored in board search's first two days, 92 sat on their own slug
+under one of five TLDs. Count attempts, not saves: a candidate rejected
+after its lookup (no site found, domain already held) has still spent a
+search. `mayStartLookup` gates each lookup individually against
 `maxNewCompaniesPerRun`, and the loop itself stops at `limit` companies
 *stored* — the two are different caps now that a company can be stored for
 free, so a full tick can save more than it ever looks up. Job syncing is free

@@ -272,10 +272,11 @@ func HarvestSlugs(candidates []slugCandidate, limit int) (HarvestStats, error) {
 	}
 
 	var (
-		mu   sync.Mutex
-		wg   sync.WaitGroup
-		sem  = make(chan struct{}, harvestConcurrency)
-		done bool
+		mu      sync.Mutex
+		wg      sync.WaitGroup
+		sem     = make(chan struct{}, harvestConcurrency)
+		done    bool
+		saveErr error
 	)
 
 	for _, cand := range candidates {
@@ -299,7 +300,7 @@ func HarvestSlugs(candidates []slugCandidate, limit int) (HarvestStats, error) {
 				}
 			}()
 
-			outcome, networked := admitCandidate(c, idx)
+			outcome, networked, err := admitCandidate(c, idx)
 			// Politeness is owed to the board providers, not to a candidate
 			// that never reached one. Most of a run's candidates are already
 			// stored or fail a free check (idx.hasBoard, an inadmissible
@@ -311,6 +312,16 @@ func HarvestSlugs(candidates []slugCandidate, limit int) (HarvestStats, error) {
 
 			mu.Lock()
 			defer mu.Unlock()
+			// A candidate the pipeline rejected on its merits and one this
+			// process simply failed to save are not the same outcome, even
+			// though admitCandidate returns outcomeSkipped for both — the
+			// caller still needs a stats bucket for it. err is what tells
+			// them apart: it is set only for the second case, and it is what
+			// stops RunScheduledHarvest from recording this index as read,
+			// since the candidate was never actually admitted or rejected.
+			if err != nil && saveErr == nil {
+				saveErr = err
+			}
 			switch outcome {
 			case outcomeSkipped:
 				stats.Skipped++
@@ -333,6 +344,9 @@ func HarvestSlugs(candidates []slugCandidate, limit int) (HarvestStats, error) {
 	wg.Wait()
 
 	log.Printf("slug harvest: %s", stats)
+	if saveErr != nil {
+		return stats, fmt.Errorf("at least one company failed to save: %w", saveErr)
+	}
 	return stats, nil
 }
 
@@ -355,14 +369,14 @@ const (
 // candidate rejected at the first step costs nothing at all, which matters
 // when the input is thirteen thousand slugs of which most are already stored,
 // dead, or hiring nowhere near India.
-func admitCandidate(c slugCandidate, idx *directoryIndex) (harvestOutcome, bool) {
+func admitCandidate(c slugCandidate, idx *directoryIndex) (harvestOutcome, bool, error) {
 	provider := strings.ToLower(strings.TrimSpace(c.Provider))
 	slug := strings.TrimSpace(c.Slug)
 	if provider == "" || slug == "" || !validATSSlug(slug) || !boardSlugIsAdmissible(slug) {
-		return outcomeSkipped, false
+		return outcomeSkipped, false, nil
 	}
 	if idx.hasBoard(provider, slug) {
-		return outcomeDuplicate, false
+		return outcomeDuplicate, false, nil
 	}
 
 	// A harvested slug carries no page title, so the name starts as whatever
@@ -373,11 +387,11 @@ func admitCandidate(c slugCandidate, idx *directoryIndex) (harvestOutcome, bool)
 		name = slugDisplayName(slug)
 	}
 	if !boardRowIsAdmissible(name, slug) {
-		return outcomeSkipped, false
+		return outcomeSkipped, false, nil
 	}
 	if sharedBoardRe.MatchString(name) || sharedBoardRe.MatchString(slug) ||
 		aggregatorBoardRe.MatchString(name) || aggregatorBoardRe.MatchString(slug) {
-		return outcomeSkipped, false
+		return outcomeSkipped, false, nil
 	}
 
 	// A Workday slug arrives from the crawl without its job-site id, which is
@@ -387,11 +401,11 @@ func admitCandidate(c slugCandidate, idx *directoryIndex) (harvestOutcome, bool)
 	if provider == "workday" {
 		resolved := resolveWorkdaySlug(slug)
 		if resolved == "" {
-			return outcomeDeadBoard, true
+			return outcomeDeadBoard, true, nil
 		}
 		slug = resolved
 		if idx.hasBoard(provider, slug) {
-			return outcomeDuplicate, true
+			return outcomeDuplicate, true, nil
 		}
 	}
 
@@ -399,31 +413,31 @@ func admitCandidate(c slugCandidate, idx *directoryIndex) (harvestOutcome, bool)
 	// once: is this a real live board, and does it hire here.
 	jobs, err := FetchATSJobs("", provider, slug)
 	if err != nil || len(jobs) == 0 {
-		return outcomeDeadBoard, true
+		return outcomeDeadBoard, true, nil
 	}
 	// A board whose only roles are talent-pool signups is not hiring.
 	jobs = dropTalentPools(jobs)
 	jobs = tidyLocations(jobs)
 	if len(jobs) == 0 {
-		return outcomeDeadBoard, true
+		return outcomeDeadBoard, true, nil
 	}
 	if len(jobs) > maxBoardRoles {
-		return outcomeSkipped, true
+		return outcomeSkipped, true, nil
 	}
 	area := firstIndianLocation(jobs)
 	if area == "" {
-		return outcomeNotIndian, true
+		return outcomeNotIndian, true, nil
 	}
 
 	// Name-level duplicate, before spending anything on the website.
 	if dup := idx.duplicate(name, ""); dup != nil {
 		if attachBoardTo(dup, boardHit{Provider: provider, Slug: slug, URL: boardURL(provider, slug)}) {
-			return outcomeAttached, true
+			return outcomeAttached, true, nil
 		}
 		// Lost the race, or the company already had a board by the time this
 		// candidate reached it — either way it is a duplicate, not a company
 		// this candidate changed.
-		return outcomeDuplicate, true
+		return outcomeDuplicate, true, nil
 	}
 
 	// The company's own site. The register hands one over; otherwise the free
@@ -442,13 +456,13 @@ func admitCandidate(c slugCandidate, idx *directoryIndex) (harvestOutcome, bool)
 	}
 	domain := extractDomain(website)
 	if domain == "" {
-		return outcomeSkipped, true
+		return outcomeSkipped, true, nil
 	}
 	if dup := idx.duplicate(name, domain); dup != nil {
 		if attachBoardTo(dup, boardHit{Provider: provider, Slug: slug, URL: boardURL(provider, slug)}) {
-			return outcomeAttached, true
+			return outcomeAttached, true, nil
 		}
-		return outcomeDuplicate, true
+		return outcomeDuplicate, true, nil
 	}
 
 	company := models.Company{
@@ -486,11 +500,16 @@ func admitCandidate(c slugCandidate, idx *directoryIndex) (harvestOutcome, bool)
 		DoNothing: true,
 	}).Create(&company)
 	if result.Error != nil {
+		// Distinct from an ordinary reject: the candidate was never actually
+		// judged, so it must not be allowed to look like one. Reported to the
+		// caller as an error rather than folded into outcomeSkipped, which
+		// otherwise reads identically to a candidate the rules correctly
+		// turned down — see HarvestSlugs.
 		log.Printf("slug harvest: failed to save %q: %v", name, result.Error)
-		return outcomeSkipped, true
+		return outcomeSkipped, true, fmt.Errorf("saving %q: %w", name, result.Error)
 	}
 	if result.RowsAffected == 0 {
-		return outcomeDuplicate, true
+		return outcomeDuplicate, true, nil
 	}
 	idx.remember(company)
 
@@ -502,7 +521,7 @@ func admitCandidate(c slugCandidate, idx *directoryIndex) (harvestOutcome, bool)
 	} else {
 		log.Printf("slug harvest: %s (%s/%s) -> %d roles", name, provider, slug, n)
 	}
-	return outcomeStored, true
+	return outcomeStored, true, nil
 }
 
 // HarvestOptions is what an operator chose on the command line.
