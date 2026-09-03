@@ -126,17 +126,39 @@ through that path would drain the year's budget.
 
 ### Running it
 
+**Scheduled.** The cron ticks every three hours and does nothing unless a new
+Common Crawl index has been published:
+
+```
+@every 3h  →  RunScheduledHarvest
+              newest index == last read?  →  one request, return
+              otherwise                   →  collect, admit, record the index
+```
+
+Three-hourly against a monthly source is deliberate. The cadence decides how
+promptly a new index is *noticed*; `HarvestState.LastIndex` decides whether any
+work happens. Without that check the same schedule would make roughly 85,000
+requests a day against other people's boards to rediscover companies already
+stored — the last manual run ended `duplicate=227 stored=28`, which is what a
+tick doing nothing expensively looks like.
+
+A scheduled tick stores at most 400 companies. What it skips is not lost: the
+index is recorded only after a pass completes, so the next tick continues.
+
+**Manual**, for a backfill across several indexes or to run the register path:
+
 ```bash
 cd backend-go
+go run . -harvest-crawl -indexes 4             # four indexes, no store cap
 go run . -harvest-crawl -indexes 1 -limit 50   # smoke test
-go run . -harvest-crawl -indexes 4             # full backfill
 go run . -harvest-register -limit 200          # company info path
 ```
 
-It exits instead of serving, so it cannot collide with a running instance.
-Cadence: **monthly**, matching Common Crawl's publish cycle. Running it daily
-returns the same data. It is not what keeps jobs fresh — the existing hourly
-`RunJobSync` does that; the harvest only adds new companies.
+The flags exit instead of serving, so a manual run cannot collide with the
+running instance. Neither path spends a metered search.
+
+The harvest does not keep jobs fresh — the existing hourly `RunJobSync` does
+that. The harvest only adds new companies.
 
 ---
 
@@ -337,10 +359,11 @@ why `registerAccelerators` defaults to that slice.
 2. **Lever is absent from Common Crawl** — one block in the whole index, vs six
    for Greenhouse. Lever boards must keep coming from discovery's search. Do
    not remove that path.
-3. **Workday is deliberately not harvested.** Its slug is `tenant:region:site`
-   and the site id is not in the URL — `DetectATS` probes the live API up to
-   five candidates deep. Doing that for 1,166 crawled tenants is a different
-   kind of run and belongs behind its own switch.
+3. ~~**Workday is deliberately not harvested.**~~ **Done.** Collection emits an
+   incomplete `tenant:region:` slug and makes no board calls; `admitCandidate`
+   resolves the job-site id against the live API after the free checks have
+   discarded the tenants already stored. Worst case five requests per tenant,
+   against 1,166 probed blindly had this been done during collection.
 4. **`-harvest-register` verification.** Implemented and building; live-run
    result should be recorded here.
 5. **DPIIT stage enrichment is a separate task.** `enrichment.go` says "Funding
