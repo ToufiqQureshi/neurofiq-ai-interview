@@ -152,11 +152,18 @@ func distinctCompanyValues(column string) ([]string, error) {
 	// filter with no options at all. Every blank collapses into Unknown
 	// immediately below, so a null and an empty string are already the same
 	// answer here.
+	// Ordered by the same expression it selects. Postgres rejects a SELECT
+	// DISTINCT whose ORDER BY names something outside the select list
+	// (SQLSTATE 42P10), so ordering by the bare column while plucking the
+	// COALESCE failed every call — and HandleGetCompanies drops the error,
+	// which would have rendered the filter with no options at all.
+	selected := "COALESCE(" + column + ", '')"
+
 	var raw []string
 	if err := config.DB.Model(&models.Company{}).
 		Distinct().
-		Order(column).
-		Pluck("COALESCE("+column+", '')", &raw).Error; err != nil {
+		Order(selected).
+		Pluck(selected, &raw).Error; err != nil {
 		return nil, err
 	}
 

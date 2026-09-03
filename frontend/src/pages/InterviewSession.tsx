@@ -63,17 +63,25 @@ export function InterviewSession() {
       return data;
     })
     .then(data => {
-      if (requestedRepo.current !== repoId) return; // a different repo is loading now
+      // Against requestKey, not repoId: the ref holds the composite key, and
+      // comparing it with the bare repo never matched — every response was
+      // discarded and the page sat on "Generating tailored questions" forever.
+      if (requestedRepo.current !== requestKey) return; // a different request is loading now
       const list = Array.isArray(data) ? data : data?.questions;
       if (Array.isArray(list) && list.length > 0) {
         setQuestions(list);
         setAnswers(new Array(list.length).fill(''));
+        // Back to the first question. The same repo under a new target is a
+        // different interview: leaving the index where it was let someone on
+        // question four start the new set there and finish it in two answers.
+        setCurrentQuestionIdx(0);
+        setInput('');
       } else {
         setError('No questions came back for this repository.');
       }
     })
     .catch(err => {
-      if (requestedRepo.current !== repoId) return;
+      if (requestedRepo.current !== requestKey) return;
       requestedRepo.current = null; // let a retry through
       setError(err.message);
     });

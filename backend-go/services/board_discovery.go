@@ -884,16 +884,34 @@ func boardLinkMatches(page, provider, slug string) bool {
 		if at < 0 {
 			return false
 		}
-		end := from + at + len(needle)
-		// The character after the slug decides it. Without this check
-		// "jobs.lever.co/cred" matches a link to jobs.lever.co/creditvidya —
-		// the exact confusion this pipeline removed slug guessing over.
-		if end >= len(haystack) || !isSlugByte(haystack[end]) {
+		start := from + at
+		end := start + len(needle)
+
+		// Both edges have to be clean, and for different reasons.
+		//
+		// After the slug: without it "jobs.lever.co/cred" matches a link to
+		// jobs.lever.co/creditvidya — the exact confusion this pipeline
+		// removed slug guessing over.
+		//
+		// Before the host: without it "notjobs.lever.co/acme" contains
+		// "jobs.lever.co/acme", so any domain ending in the board's host
+		// would corroborate a guess and file a company under the wrong one.
+		afterIsClean := end >= len(haystack) || !isSlugByte(haystack[end])
+		beforeIsClean := start == 0 || !isHostByte(haystack[start-1])
+		if afterIsClean && beforeIsClean {
 			return true
 		}
 		from += at + 1
 	}
 	return false
+}
+
+// isHostByte reports whether a byte could be part of the hostname to the left
+// of a match — the label separator "." included, since that is what makes
+// "notjobs.lever.co" and "jobs.lever.co" different hosts.
+func isHostByte(b byte) bool {
+	return b == '-' || b == '.' ||
+		(b >= 'a' && b <= 'z') || (b >= 'A' && b <= 'Z') || (b >= '0' && b <= '9')
 }
 
 // isSlugByte reports whether a byte could be part of a board slug, and so

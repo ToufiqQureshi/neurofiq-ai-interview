@@ -206,3 +206,33 @@ func TestTheUSPatternDoesNotMatchUnrelatedText(t *testing.T) {
 		}
 	}
 }
+
+// A substring match is not a host match. "notjobs.lever.co/acme" contains
+// "jobs.lever.co/acme", so without a boundary on the left of the host any
+// domain ending in the board's host would corroborate a guessed website — and
+// the company would be stored against the wrong domain.
+func TestASuffixHostDoesNotCorroborateTheBoard(t *testing.T) {
+	for _, page := range []string{
+		`<a href="https://notjobs.lever.co/acme">Careers</a>`,
+		`<a href="https://myjobs.lever.co/acme">Careers</a>`,
+		`<a href="https://x-jobs.lever.co/acme">Careers</a>`,
+	} {
+		if boardLinkMatches(page, "lever", "acme") {
+			t.Errorf("a lookalike host corroborated the board: %s", page)
+		}
+	}
+}
+
+// The real host must still match, in every shape a page links it.
+func TestTheRealHostStillCorroboratesTheBoard(t *testing.T) {
+	for _, page := range []string{
+		`<a href="https://jobs.lever.co/acme">Careers</a>`,
+		`<a href="http://jobs.lever.co/acme/some-role-id">Apply</a>`,
+		`<a href="//jobs.lever.co/acme">Careers</a>`,
+		`window.open('https://jobs.lever.co/acme')`,
+	} {
+		if !boardLinkMatches(page, "lever", "acme") {
+			t.Errorf("the company's own board failed to corroborate: %s", page)
+		}
+	}
+}

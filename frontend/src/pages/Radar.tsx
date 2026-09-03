@@ -205,24 +205,38 @@ export function Radar() {
                         <span>{log}</span>
                       </div>
                     ))}
-                    <div className="flex items-start gap-2 text-indigo-400 animate-pulse">
-                      <span className="opacity-50">❯</span>
-                      <span className="w-2 h-4 bg-indigo-400 inline-block" />
-                    </div>
+                    {/* The blinking cursor says "still working", so it stops
+                        when the work has stopped. */}
+                    {scanState === 'scanning' && (
+                      <div className="flex items-start gap-2 text-indigo-400 animate-pulse">
+                        <span className="opacity-50">❯</span>
+                        <span className="w-2 h-4 bg-indigo-400 inline-block" />
+                      </div>
+                    )}
                   </div>
-                  
-                  <div>
-                    <div className="flex justify-between text-xs text-zinc-500 mb-2">
-                      <span>PROCESSING</span>
-                      <span>{progress}%</span>
+
+                  {/* A failed scan keeps its log but drops the progress bar.
+                      Leaving it at "PROCESSING 45%" read as a scan still
+                      running, which is the same overstatement the invented
+                      log lines were removed for. */}
+                  {scanState === 'scanning' ? (
+                    <div>
+                      <div className="flex justify-between text-xs text-zinc-500 mb-2">
+                        <span>PROCESSING</span>
+                        <span>{progress}%</span>
+                      </div>
+                      <div className="w-full h-1 bg-zinc-800 rounded-full overflow-hidden">
+                        <div
+                          className="h-full bg-indigo-500 shadow-[0_0_10px_rgba(99,102,241,0.8)] transition-all duration-300 ease-out"
+                          style={{ width: `${progress}%` }}
+                        />
+                      </div>
                     </div>
-                    <div className="w-full h-1 bg-zinc-800 rounded-full overflow-hidden">
-                      <div 
-                        className="h-full bg-indigo-500 shadow-[0_0_10px_rgba(99,102,241,0.8)] transition-all duration-300 ease-out" 
-                        style={{ width: `${progress}%` }}
-                      />
+                  ) : (
+                    <div className="flex justify-between text-xs text-red-400">
+                      <span>SCAN FAILED</span>
                     </div>
-                  </div>
+                  )}
                 </div>
               </div>
             )}
