@@ -1,6 +1,7 @@
 package services
 
 import (
+	"fmt"
 	"log"
 	"regexp"
 	"strings"
@@ -253,18 +254,21 @@ func candidateDetail(c slugCandidate) int {
 //
 // limit caps how many companies one run will store; zero means no cap, which
 // is what a one-time backfill wants and a scheduled run should never use.
-func HarvestSlugs(candidates []slugCandidate, limit int) HarvestStats {
+func HarvestSlugs(candidates []slugCandidate, limit int) (HarvestStats, error) {
 	stats := HarvestStats{}
 	candidates = dedupeCandidates(candidates)
 	stats.Candidates = len(candidates)
 	if len(candidates) == 0 {
-		return stats
+		return stats, nil
 	}
 
+	// A directory we could not read is not an empty directory. Swallowing this
+	// returned zero-of-everything with a nil error, so an automated run
+	// reported a clean harvest that had evaluated nothing — and every
+	// candidate would have looked new to the dedupe that never happened.
 	idx, err := newDirectoryIndex()
 	if err != nil {
-		log.Printf("slug harvest: could not read the directory: %v", err)
-		return stats
+		return stats, fmt.Errorf("could not read the directory: %w", err)
 	}
 
 	var (
@@ -322,7 +326,7 @@ func HarvestSlugs(candidates []slugCandidate, limit int) HarvestStats {
 	wg.Wait()
 
 	log.Printf("slug harvest: %s", stats)
-	return stats
+	return stats, nil
 }
 
 type harvestOutcome int
@@ -519,7 +523,7 @@ func RunHarvest(opts HarvestOptions) (HarvestStats, error) {
 	}
 
 	log.Printf("harvest: %d candidates collected", len(candidates))
-	return HarvestSlugs(candidates, opts.Limit), nil
+	return HarvestSlugs(candidates, opts.Limit)
 }
 
 // talentPoolRe matches the evergreen "send us your CV" posting most boards
