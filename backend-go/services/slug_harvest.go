@@ -643,7 +643,14 @@ func RunScheduledHarvest() {
 	}
 
 	log.Printf("slug harvest: %s is new, collecting", newest)
-	stats := HarvestSlugs(HarvestFromCommonCrawl([]string{newest}), scheduledHarvestLimit)
+	stats, err := HarvestSlugs(HarvestFromCommonCrawl([]string{newest}), scheduledHarvestLimit)
+	if err != nil {
+		// Same reasoning as the record below: a pass that could not run must
+		// not mark the index as read, or the next tick skips an index nothing
+		// ever collected.
+		log.Printf("slug harvest: %s not collected: %v", newest, err)
+		return
+	}
 
 	// Recorded only after the pass completes. A run that dies half way leaves
 	// the index unrecorded, so the next tick picks it up again rather than
