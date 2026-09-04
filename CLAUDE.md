@@ -207,3 +207,33 @@ exist only via AutoMigrate.
 
 `SESSION_JOB_MAP_HANDOFF.md` — every bug, alternatives evaluated and rejected,
 and why. `PROGRESS.md` — dated changelog.
+
+## How a feature starts here
+
+There is no PM, no designer and no second reviewer. So the thinking happens in
+writing, before the code, or it does not happen at all. Every feature request
+gets five lines first:
+
+1. **PROBLEM** — the user's actual difficulty, stated without naming a feature.
+2. **SCOPE** — what v1 contains, and an explicit list of what it does *not*.
+3. **FLOW** — screen → action → result.
+4. **SCREEN** — the layout, with exactly one primary button. Everything else
+   is secondary.
+5. **RISK** — where the user gets confused, and what this can break.
+
+Then the code. If the scope grows while building, stop and say so — do not
+build it and mention it afterwards. If the request is ambiguous, ask; a guess
+that ships is more expensive than a question.
+
+**Design comes from the tokens, not from the page.** `frontend/src/index.css`
+holds the whole system: warm off-white ground (`--color-paper`), serif
+headings, generous spacing, minimal borders, one accent (`--color-accent`).
+Use `bg-paper`, `bg-surface`, `text-ink`, `border-line`. Raw Tailwind defaults
+(`bg-gray-50`, `bg-slate-900`, `text-blue-600`) are how a product ends up
+looking like a template, and 20 files already drifted that way once.
+
+**When work lands, update `docs/state.md` and `docs/decisions.md`.**
+`state.md` is overwritten to match what is true today and stays short.
+`decisions.md` is appended to, never edited, and always records the option
+that was rejected — that is the one that comes back next month under a new
+name.
