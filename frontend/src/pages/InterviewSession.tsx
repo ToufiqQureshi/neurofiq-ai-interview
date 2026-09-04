@@ -2,11 +2,15 @@ import { useState, useEffect, useRef } from 'react';
 import { Mic, SkipForward, VolumeX, Send, Loader2, Volume2, MicOff, FileCode2 } from 'lucide-react';
 import { useSearchParams, useParams, useNavigate } from 'react-router-dom';
 import { CameraPreview } from '../components/CameraPreview';
+import { readTarget, targetApiParams } from '../lib/interviewTarget';
 
 export function InterviewSession() {
   const { repoId } = useParams();
   const [searchParams] = useSearchParams();
   const isVoiceMode = searchParams.get('mode') === 'voice';
+  // The Job Map role or company this interview is practice for, carried here
+  // from the directory. Ids only — the backend resolves them.
+  const targetParams = targetApiParams(readTarget(searchParams.toString()));
   const navigate = useNavigate();
 
   const [questions, setQuestions] = useState<any[]>([]);
@@ -22,13 +26,19 @@ export function InterviewSession() {
   const recognitionRef = useRef<any>(null);
 
   // Generating questions is a paid LLM call, so it must happen exactly once
-  // per repo. React's StrictMode double-mounts effects in development, and
-  // without this guard every dev page load billed us twice.
+  // per repo AND target. React's StrictMode double-mounts effects in
+  // development, and without this guard every dev page load billed us twice.
+  //
+  // The target belongs in the key as well as the repo. Keyed on the repo
+  // alone, opening a second role on a repo already interviewed kept the first
+  // role's questions on screen: the effect never reran, so the page showed a
+  // set framed for an opening the candidate had left.
   const requestedRepo = useRef<string | null>(null);
 
   useEffect(() => {
-    if (!repoId || requestedRepo.current === repoId) return;
-    requestedRepo.current = repoId;
+    const requestKey = `${repoId}\u0000${targetParams}`;
+    if (!repoId || requestedRepo.current === requestKey) return;
+    requestedRepo.current = requestKey;
 
     // Staleness is decided by the ref, not by an effect-local flag.
     //
@@ -39,7 +49,7 @@ export function InterviewSession() {
     // questions..." forever. The ref survives the remount, so testing against
     // it accepts that response while still dropping one for a repo the user
     // has since navigated away from.
-    fetch(`${import.meta.env.VITE_API_URL}/api/interviews/questions?repo_full_name=${encodeURIComponent(repoId)}`, {
+    fetch(`${import.meta.env.VITE_API_URL}/api/interviews/questions?repo_full_name=${encodeURIComponent(repoId)}${targetParams ? `&${targetParams}` : ''}`, {
       credentials: 'include',
     })
     .then(async res => {
@@ -53,21 +63,29 @@ export function InterviewSession() {
       return data;
     })
     .then(data => {
-      if (requestedRepo.current !== repoId) return; // a different repo is loading now
+      // Against requestKey, not repoId: the ref holds the composite key, and
+      // comparing it with the bare repo never matched — every response was
+      // discarded and the page sat on "Generating tailored questions" forever.
+      if (requestedRepo.current !== requestKey) return; // a different request is loading now
       const list = Array.isArray(data) ? data : data?.questions;
       if (Array.isArray(list) && list.length > 0) {
         setQuestions(list);
         setAnswers(new Array(list.length).fill(''));
+        // Back to the first question. The same repo under a new target is a
+        // different interview: leaving the index where it was let someone on
+        // question four start the new set there and finish it in two answers.
+        setCurrentQuestionIdx(0);
+        setInput('');
       } else {
         setError('No questions came back for this repository.');
       }
     })
     .catch(err => {
-      if (requestedRepo.current !== repoId) return;
+      if (requestedRepo.current !== requestKey) return;
       requestedRepo.current = null; // let a retry through
       setError(err.message);
     });
-  }, [repoId]);
+  }, [repoId, targetParams]);
 
   // AI Speaking (Text-to-Speech) - PONYTAIL: Native Web Speech API, $0 cost
   useEffect(() => {

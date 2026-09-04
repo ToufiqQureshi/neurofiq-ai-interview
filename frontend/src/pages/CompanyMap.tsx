@@ -120,8 +120,11 @@ const TECH_HUBS: TechHub[] = [
   },
 ];
 
-const SECTORS = ['AI', 'Fintech', 'SaaS', 'IT Services', 'Media & Advertising', 'Healthtech', 'Edtech', 'D2C', 'Logistics', 'Deeptech', 'Consumer', 'Gaming', 'Other'];
-const STAGES = ['Bootstrapped', 'Pre-seed', 'Seed', 'Series A', 'Series B', 'Series C+', 'Public', 'Acquired'];
+// Sector and stage options come from /api/companies, which reads them off the
+// directory itself. They used to be two lists typed here, and both had drifted
+// away from the data: they offered Pre-seed, Gaming, Consumer and Other, which
+// no company has, while Series C, Series H and the 145 companies with no
+// recorded stage at all could not be selected from any option shown.
 const PAGE_SIZE = 24;
 const MAP_PAGE_SIZE = 500;
 
@@ -263,6 +266,8 @@ export function CompanyMap() {
   const [hiringOnly, setHiringOnly] = useState(false);
   const [openRoles, setOpenRoles] = useState(0);
   const [facets, setFacets] = useState<{ field: Facet[]; level: Facet[] }>({ field: [], level: [] });
+  const [sectors, setSectors] = useState<string[]>([]);
+  const [stages, setStages] = useState<string[]>([]);
   const [field, setField] = useState('');
   const [level, setLevel] = useState('');
   const [page, setPage] = useState(1);
@@ -299,6 +304,10 @@ export function CompanyMap() {
         setCompanies(prev => (append ? [...prev, ...(d.companies || [])] : d.companies || []));
         setTotal(d.total || 0);
         setOpenRoles(d.open_roles || 0);
+        // Unlike field and level, these two do not follow the current
+        // filters — they are the options available, not the options left.
+        setSectors(Array.isArray(d.facets?.sector) ? d.facets.sector : []);
+        setStages(Array.isArray(d.facets?.stage) ? d.facets.stage : []);
         setFacets({
           field: Array.isArray(d.facets?.field) ? d.facets.field : [],
           level: Array.isArray(d.facets?.level) ? d.facets.level : [],
@@ -456,7 +465,7 @@ export function CompanyMap() {
             className="appearance-none bg-white/50 backdrop-blur-md border border-white/60 rounded-full py-2 pl-4 pr-10 text-sm text-ink focus:outline-none focus:border-accent focus:ring-2 focus:ring-accent/20 shadow-sm font-medium hover:border-accent/40 transition-colors"
           >
             <option value="">All sectors</option>
-            {SECTORS.map(s => (
+            {sectors.map(s => (
               <option key={s} value={s}>{s}</option>
             ))}
           </select>
@@ -470,7 +479,7 @@ export function CompanyMap() {
             className="appearance-none bg-white/50 backdrop-blur-md border border-white/60 rounded-full py-2 pl-4 pr-10 text-sm text-ink focus:outline-none focus:border-accent focus:ring-2 focus:ring-accent/20 shadow-sm font-medium hover:border-accent/40 transition-colors"
           >
             <option value="">All stages</option>
-            {STAGES.map(s => (
+            {stages.map(s => (
               <option key={s} value={s}>{s}</option>
             ))}
           </select>

@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"strings"
 
 	"github.com/ToufiqQureshi/neurofiq-ai-interview/backend-go/config"
 	"github.com/ToufiqQureshi/neurofiq-ai-interview/backend-go/models"
@@ -15,6 +16,13 @@ type GenerateQuestionsPayload struct {
 	RepoFullName   string `json:"repo_full_name"`
 	AnalysisData   string `json:"analysis_data"`
 	HistorySummary string `json:"history_summary"`
+
+	// TargetRole is the opening the candidate pressed "Practice" on, as
+	// "<title> at <company>". Empty for an ordinary interview, and the worker
+	// treats it as optional framing — the questions stay grounded in the
+	// candidate's own code either way, because that is the only thing we can
+	// ask about with authority.
+	TargetRole string `json:"target_role,omitempty"`
 }
 
 // questionsPerInterview is how many questions one interview runs on. It is
@@ -27,10 +35,18 @@ const questionsPerInterview = 5
 // The cache matters more than it looks: without it every page load of the
 // interview screen — including a refresh, and including React's development
 // double-mount — is a fresh LLM call and five more rows in questions_bank.
-func GetOrGenerateQuestions(userID string, repoFullName string) ([]models.Question, error) {
+//
+// jobID and companyID are optional: what the candidate pressed "Practice" on
+// in the Job Map, a specific opening or a whole company. They only ever frame
+// the questions — the analysis is still what they are asked about — and an id
+// that names nothing is ignored rather than refused, because a role filled
+// overnight must not be able to block an interview.
+func GetOrGenerateQuestions(userID, repoFullName, jobID, companyID string) ([]models.Question, error) {
 	if !ValidRepoFullName(repoFullName) {
 		return nil, fmt.Errorf("invalid repository name")
 	}
+
+	targetRole := interviewTarget(jobID, companyID)
 
 	// 1. The analysis has to exist, belong to this user, and be finished.
 	var profile models.GithubProfile
@@ -44,7 +60,15 @@ func GetOrGenerateQuestions(userID string, repoFullName string) ([]models.Questi
 		return nil, fmt.Errorf("analysis is not ready — retry analyzing this repository")
 	}
 
-	fingerprint := analysisFingerprint(profile.AnalysisJSON)
+	// The role is part of the cache key, not just the prompt. A set generated
+	// for "Backend Engineer at Razorpay" answers a different question from the
+	// plain set, and keying both on the analysis alone would serve whichever
+	// was generated first to everyone — the role would appear to work once and
+	// then silently stop.
+	//
+	// An unframed interview keys on the analysis alone, exactly as before this
+	// parameter existed — see questionCacheKey.
+	fingerprint := analysisFingerprint(questionCacheKey(profile.AnalysisJSON, targetRole))
 
 	// 2. Reuse the questions generated from *this* analysis if we have them.
 	var cached []models.Question
@@ -74,6 +98,7 @@ func GetOrGenerateQuestions(userID string, repoFullName string) ([]models.Questi
 		RepoFullName:   repoFullName,
 		AnalysisData:   profile.AnalysisJSON,
 		HistorySummary: historySummaryFromAnalysis(profile.AnalysisJSON),
+		TargetRole:     targetRole,
 	}
 
 	newQuestions, err := callPythonQuestionGenerator(payload)
@@ -148,6 +173,78 @@ func GetOrGenerateQuestions(userID string, repoFullName string) ([]models.Questi
 	}
 
 	return newQuestions, nil
+}
+
+// questionCacheKey combines an analysis with the role it is being practised
+// for, into the string the fingerprint is taken of.
+//
+// An empty role returns the analysis untouched. Appending the separator
+// unconditionally would have changed every fingerprint already stored, so the
+// first load of every cached repository would have missed and paid the worker
+// for a set it already held.
+//
+// A non-empty role is separated by a NUL, which cannot occur in either half.
+// Plain concatenation would let one analysis-and-role pair collide with a
+// different pair that happens to split the same characters elsewhere.
+func questionCacheKey(analysisJSON, targetRole string) string {
+	if targetRole == "" {
+		return analysisJSON
+	}
+	return analysisJSON + "\x00" + targetRole
+}
+
+// interviewTarget turns what the candidate pressed "Practice" on into the one
+// line the question generator needs — "<title> at <company>" from a role, or
+// just the company when they started from a company rather than a listing.
+//
+// Both ids are resolved against the database rather than the label being
+// posted from the browser. The Job Map's whole claim is that its roles are
+// real ones it found, and an interview framed by a title a client typed would
+// quietly break it: the transcript would name a company that never posted the
+// role. This way only something the pipeline actually stored can frame an
+// interview.
+//
+// Every failure returns "" and the interview runs unframed. A missing job is
+// the ordinary case, not an error — listings are pruned when a board drops
+// them, so a bookmarked link outlives the opening — and losing the framing is
+// a far smaller harm than refusing to interview.
+func interviewTarget(jobID, companyID string) string {
+	if config.DB == nil {
+		return ""
+	}
+
+	if id := strings.TrimSpace(jobID); id != "" {
+		var job models.Job
+		if err := config.DB.Where("id = ?", id).First(&job).Error; err == nil {
+			if title := strings.TrimSpace(job.Title); title != "" {
+				if name := companyName(job.CompanyID); name != "" {
+					return title + " at " + name
+				}
+				// The role outlived its company, which sweepOrphanJobs exists
+				// to clean up. Still usable framing on its own.
+				return title
+			}
+		}
+		// A job id that names nothing falls through to the company, if one
+		// was sent: a stale listing should not also lose the company context
+		// the candidate could still practise against.
+	}
+
+	if name := companyName(strings.TrimSpace(companyID)); name != "" {
+		return "an opening at " + name
+	}
+	return ""
+}
+
+func companyName(companyID string) string {
+	if companyID == "" || config.DB == nil {
+		return ""
+	}
+	var company models.Company
+	if err := config.DB.Where("id = ?", companyID).First(&company).Error; err != nil {
+		return ""
+	}
+	return strings.TrimSpace(company.Name)
 }
 
 // analysisFingerprint is a short, stable id for one analysis result.

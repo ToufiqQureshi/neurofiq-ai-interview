@@ -75,6 +75,124 @@ type CompanyWithJobCount struct {
 	JobCount int64 `json:"job_count"`
 }
 
+// UnknownFacetValue is the option that reaches the companies the pipeline
+// never filled in.
+//
+// Board discovery stores no sector or stage — it learns a company from its
+// job board, which does not publish either — so 145 of 275 companies have an
+// empty stage and 127 an empty sector. Every one of them vanished the moment
+// a visitor touched a filter, which reads as "the directory has nothing" on
+// what is actually its majority. It also matches the literal "Unknown" a
+// couple of rows carry, because to someone filtering, an unrecorded stage and
+// one recorded as unknown are the same thing.
+const UnknownFacetValue = "Unknown"
+
+// applyFacetFilter filters on an exact-match company column, and is the only
+// place that knows how. ListCompanies, TotalOpenRoles and JobFacets each had
+// their own copy of these two clauses, which is three chances for a filter to
+// mean something different from the count printed beside it.
+func applyFacetFilter(db *gorm.DB, column, value, prefix string) *gorm.DB {
+	if value == "" {
+		return db
+	}
+	condition, args := facetClause(column, value, prefix)
+	return db.Where(condition, args...)
+}
+
+// facetClause is the condition itself, kept separate from the query so it can
+// be read without a database.
+func facetClause(column, value, prefix string) (string, []interface{}) {
+	col := column
+	if prefix != "" {
+		// Unqualified, "stage = ?" is ambiguous on a query that joins
+		// companies to jobs, and Postgres rejects the statement rather than
+		// guessing — the filter would not narrow, it would 500.
+		col = prefix + "." + column
+	}
+	if value == UnknownFacetValue {
+		// Parenthesised deliberately. This clause is ANDed with the other
+		// filters, and a bare OR chain would bind looser than the AND: one
+		// unparenthesised OR turns "hiring in Pune AND stage unknown" into
+		// "hiring in Pune, or anything at all with a blank stage", which
+		// returns more rows the more the visitor filters.
+		return "(" + col + " IS NULL OR " + col + " = '' OR " + col + " = ?)",
+			[]interface{}{UnknownFacetValue}
+	}
+	return col + " = ?", []interface{}{value}
+}
+
+// CompanyFacets lists the sector and stage values the directory actually
+// holds, so the filter dropdowns describe this table rather than a list
+// someone typed into the frontend.
+//
+// The hardcoded lists they replace had drifted both ways: they offered
+// Pre-seed, Gaming, Consumer and Other, which no company has, while Series C,
+// Series H and Unknown existed in the data with no way to select them. Every
+// option here is one that returns something, and every value in the data has
+// an option.
+//
+// Deliberately not filtered by the visitor's current selection. These are the
+// choices available, not the choices remaining — narrowing them as filters are
+// applied is how a dropdown ends up with one entry and no way back.
+func CompanyFacets() (sectors, stages []string, err error) {
+	if sectors, err = distinctCompanyValues("sector"); err != nil {
+		return nil, nil, err
+	}
+	if stages, err = distinctCompanyValues("stage"); err != nil {
+		return nil, nil, err
+	}
+	return sectors, stages, nil
+}
+
+// distinctCompanyValues reads one column's options, sorted, with a single
+// Unknown entry standing for every row the pipeline left blank.
+func distinctCompanyValues(column string) ([]string, error) {
+	// COALESCE because the column is nullable and Pluck scans into a plain
+	// string: one NULL row fails the whole scan, and the caller renders a
+	// filter with no options at all. Every blank collapses into Unknown
+	// immediately below, so a null and an empty string are already the same
+	// answer here.
+	// Ordered by the same expression it selects. Postgres rejects a SELECT
+	// DISTINCT whose ORDER BY names something outside the select list
+	// (SQLSTATE 42P10), so ordering by the bare column while plucking the
+	// COALESCE failed every call — and HandleGetCompanies drops the error,
+	// which would have rendered the filter with no options at all.
+	selected := "COALESCE(" + column + ", '')"
+
+	var raw []string
+	if err := config.DB.Model(&models.Company{}).
+		Distinct().
+		Order(selected).
+		Pluck(selected, &raw).Error; err != nil {
+		return nil, err
+	}
+
+	return collapseFacetValues(raw), nil
+}
+
+// collapseFacetValues turns stored column values into filter options.
+//
+// Blank and the literal "Unknown" become the single Unknown option — the same
+// collapse facetClause makes when that option is chosen, so every option
+// offered returns rows and every row is reachable from some option. Unknown
+// sorts last because it is the absence of an answer, not one of them.
+func collapseFacetValues(raw []string) []string {
+	out := make([]string, 0, len(raw)+1)
+	unknown := false
+	for _, v := range raw {
+		v = strings.TrimSpace(v)
+		if v == "" || v == UnknownFacetValue {
+			unknown = true
+			continue
+		}
+		out = append(out, v)
+	}
+	if unknown {
+		out = append(out, UnknownFacetValue)
+	}
+	return out
+}
+
 // applyAreaFilter matches tech hubs and aliases across the area column.
 func applyAreaFilter(db *gorm.DB, area string, prefix string) *gorm.DB {
 	if area == "" {
@@ -415,12 +533,8 @@ func ListCompanies(sector, stage, area, q string, hiringOnly bool, page, pageSiz
 
 	applyFilters := func() *gorm.DB {
 		dbQuery := config.DB.Model(&models.Company{})
-		if sector != "" {
-			dbQuery = dbQuery.Where("sector = ?", sector)
-		}
-		if stage != "" {
-			dbQuery = dbQuery.Where("stage = ?", stage)
-		}
+		dbQuery = applyFacetFilter(dbQuery, "sector", sector, "")
+		dbQuery = applyFacetFilter(dbQuery, "stage", stage, "")
 		dbQuery = applyAreaFilter(dbQuery, area, "")
 		if q != "" {
 			dbQuery = dbQuery.Where("name ILIKE ? OR description ILIKE ?", "%"+q+"%", "%"+q+"%")
@@ -472,12 +586,8 @@ func ListCompanies(sector, stage, area, q string, hiringOnly bool, page, pageSiz
 func TotalOpenRoles(sector, stage, area, q string) (int64, error) {
 	dbQuery := config.DB.Model(&models.Job{}).
 		Joins("JOIN companies ON companies.id = jobs.company_id")
-	if sector != "" {
-		dbQuery = dbQuery.Where("companies.sector = ?", sector)
-	}
-	if stage != "" {
-		dbQuery = dbQuery.Where("companies.stage = ?", stage)
-	}
+	dbQuery = applyFacetFilter(dbQuery, "sector", sector, "companies")
+	dbQuery = applyFacetFilter(dbQuery, "stage", stage, "companies")
 	dbQuery = applyAreaFilter(dbQuery, area, "companies")
 	if q != "" {
 		dbQuery = dbQuery.Where("companies.name ILIKE ? OR companies.description ILIKE ?", "%"+q+"%", "%"+q+"%")

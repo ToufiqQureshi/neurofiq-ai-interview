@@ -1,10 +1,15 @@
 import { useEffect, useState } from 'react';
 import { Loader2, Code2, Server, Database, ArrowRight, AlertTriangle } from 'lucide-react';
-import { Link, useParams, useNavigate } from 'react-router-dom';
+import { Link, useLocation, useParams, useNavigate } from 'react-router-dom';
+import { readTarget, targetQuery } from '../lib/interviewTarget';
 
 export function AnalysisProgress() {
   const { repoId } = useParams();
   const navigate = useNavigate();
+  const location = useLocation();
+  // The Job Map role this analysis was started for, kept on the interview
+  // links so it survives the last hop.
+  const targetSuffix = targetQuery(readTarget(location.search)).replace('?', '&');
   const [step, setStep] = useState(0);
   const [analysis, setAnalysis] = useState<any>(null);
   const [error, setError] = useState<string | null>(null);
@@ -157,10 +162,10 @@ export function AnalysisProgress() {
               </div>
             </div>
             <div className="pt-4 flex gap-3">
-              <Link to={`/interview/${encodeURIComponent(repoId || '')}?mode=text`} className="flex-1 bg-surface border border-line-strong hover:bg-paper text-ink py-3 rounded-full font-semibold transition-colors text-center">
+              <Link to={`/interview/${encodeURIComponent(repoId || '')}?mode=text${targetSuffix}`} className="flex-1 bg-surface border border-line-strong hover:bg-paper text-ink py-3 rounded-full font-semibold transition-colors text-center">
                 Start Text Interview
               </Link>
-              <Link to={`/interview/${encodeURIComponent(repoId || '')}?mode=voice`} className="flex-1 bg-ink hover:bg-black text-white py-3 rounded-full font-semibold transition-colors flex items-center justify-center gap-2">
+              <Link to={`/interview/${encodeURIComponent(repoId || '')}?mode=voice${targetSuffix}`} className="flex-1 bg-ink hover:bg-black text-white py-3 rounded-full font-semibold transition-colors flex items-center justify-center gap-2">
                 Start Voice Interview <ArrowRight className="w-4 h-4" />
               </Link>
             </div>

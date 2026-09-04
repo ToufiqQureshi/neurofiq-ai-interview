@@ -26,11 +26,23 @@ func HandleGetCompanies(c *gin.Context) {
 	openRoles, _ := services.TotalOpenRoles(sector, stage, area, q)
 	fields, levels, _ := services.JobFacets(sector, stage, area, q)
 
+	// Sector and stage ride along here rather than on an endpoint of their
+	// own: the directory calls this on every load already, and a second
+	// request would only add a way for the options and the results to be one
+	// render out of step. Unlike field and level they ignore the current
+	// filters — see CompanyFacets.
+	sectors, stages, _ := services.CompanyFacets()
+
 	c.JSON(http.StatusOK, gin.H{
 		"companies":  companies,
 		"total":      total,
 		"open_roles": openRoles,
-		"facets":     gin.H{"field": fields, "level": levels},
+		"facets": gin.H{
+			"field":  fields,
+			"level":  levels,
+			"sector": sectors,
+			"stage":  stages,
+		},
 	})
 }
 

@@ -3,6 +3,8 @@ package services
 import (
 	"log"
 
+	"gorm.io/gorm"
+
 	"github.com/ToufiqQureshi/neurofiq-ai-interview/backend-go/config"
 	"github.com/ToufiqQureshi/neurofiq-ai-interview/backend-go/models"
 )
@@ -33,6 +35,10 @@ func ReapplyGuards() (jobsRemoved, companiesRemoved int) {
 	jobsRemoved += sweepJunkTitles()
 
 	removed, jobs := sweepAggregatorCompanies()
+	companiesRemoved += removed
+	jobsRemoved += jobs
+
+	removed, jobs = sweepMisnamedBoardCompanies()
 	companiesRemoved += removed
 	jobsRemoved += jobs
 
@@ -135,6 +141,67 @@ func sweepAggregatorCompanies() (companies, jobs int) {
 			c.Name, c.ATSType, c.ATSSlug, res.RowsAffected)
 		companies++
 		jobs += int(res.RowsAffected)
+	}
+	return companies, jobs
+}
+
+// sweepMisnamedBoardCompanies removes board companies that today's discovery
+// would refuse to store: a name it could not have produced for that slug, or
+// a slug that never belonged to an employer.
+//
+// Both rules were written after the rows they describe. companyNameFromBoard
+// now returns only a slug-corroborated title or the slug itself, but the rows
+// found before it kept the posting headline they were discovered under —
+// "Job Application for Senior DevOps Engineer at Bottomline" is a company in
+// this table. And the bad name does not sit still: resolveCompanyWebsite
+// searches it, which is how a Workday board belonging to Genpact came to be
+// stored against devopscompany.nl, with 32 of Genpact's roles filed under a
+// Dutch firm's domain. A company wearing another company's roles is the one
+// failure this directory cannot ship, so it is worth deleting for.
+//
+// Only board-search rows are judged, because boardRowIsAdmissible is
+// discovery's own admission rule and no other source has ever been held to
+// it. An agent-discovered company's name owes its slug nothing: Razorpay is
+// stored against "razorpaysoftwareprivatelimited" and would fail a test it
+// was never sat.
+func sweepMisnamedBoardCompanies() (companies, jobs int) {
+	var stored []models.Company
+	if err := config.DB.Where("source = ?", boardSearchSource).Find(&stored).Error; err != nil {
+		log.Printf("guard backfill: could not load board companies: %v", err)
+		return 0, 0
+	}
+
+	for _, c := range stored {
+		if boardRowIsAdmissible(c.Name, c.ATSSlug) {
+			continue
+		}
+
+		// Both deletes or neither. Separately, a failure on the second leaves
+		// the rejected company in the table with its roles already gone — it
+		// stops being a lie about whose roles they are and starts being a lie
+		// about a company that is hiring, and the next sweep sees a row it
+		// still wants to delete but no longer has anything to report.
+		var removed int64
+		err := config.DB.Transaction(func(tx *gorm.DB) error {
+			res := tx.Where("company_id = ?", c.ID).Delete(&models.Job{})
+			if res.Error != nil {
+				return res.Error
+			}
+			if err := tx.Delete(&models.Company{}, "id = ?", c.ID).Error; err != nil {
+				return err
+			}
+			removed = res.RowsAffected
+			return nil
+		})
+		if err != nil {
+			log.Printf("guard backfill: could not remove %q: %v", c.Name, err)
+			continue
+		}
+
+		log.Printf("guard backfill: removed %q (%s/%s) and its %d roles — discovery would not store this name for this slug",
+			c.Name, c.ATSType, c.ATSSlug, removed)
+		companies++
+		jobs += int(removed)
 	}
 	return companies, jobs
 }

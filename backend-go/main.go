@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"errors"
+	"flag"
 	"log"
 	"net/http"
 	"os"
@@ -106,9 +107,18 @@ func main() {
 		&models.User{}, &models.GithubProfile{}, &models.Question{},
 		&models.InterviewSession{},
 		&models.Company{}, &models.Job{}, &models.ScrapeUsage{},
-		&models.CronLease{},
+		&models.CronLease{}, &models.HarvestState{},
 	); err != nil {
 		log.Fatalf("Migration failed: %v", err)
+	}
+
+	// A harvest is a one-time backfill, not a scheduled job, and it exits
+	// instead of serving. It reads thousands of boards in a run, which is the
+	// wrong shape for a cron tick and the right shape for an operator who has
+	// decided to spend an afternoon on it. Nothing here starts a server, so it
+	// cannot collide with the instance already running.
+	if runHarvest() {
+		return
 	}
 
 	// Any analysis still marked "pending" is one this process (or a previous
@@ -227,7 +237,7 @@ func main() {
 	r.GET("/auth/me", auth.HandleAuthMe)
 	r.POST("/auth/logout", auth.HandleLogout)
 
-	// Public company directory ("Job Map") — no auth required.
+	// Public company directory & job discovery ("Job Map" & "Find Jobs") — no auth required.
 	r.GET("/api/companies", controllers.HandleGetCompanies)
 	r.GET("/api/companies/stats", controllers.HandleGetDirectoryStats)
 	r.GET("/api/companies/:id", controllers.HandleGetCompanyByID)
@@ -338,6 +348,20 @@ func main() {
 	}); err != nil {
 		log.Fatalf("Failed to schedule enrichment: %v", err)
 	}
+	// The slug harvest reads boards out of Common Crawl's URL index, which
+	// costs no metered search at all — the constraint discovery lives under.
+	//
+	// Three-hourly against a source that publishes monthly looks wrong and is
+	// not: RunScheduledHarvest compares the newest published index against the
+	// one it last read and returns after a single request when they match. The
+	// cadence therefore decides how promptly a new index is noticed, not how
+	// often ten thousand boards are re-read. Anything rarer would leave a
+	// month's worth of new companies waiting on the next tick.
+	if _, err := scheduler.AddFunc("@every 3h", func() {
+		safely("slug harvest", services.RunScheduledHarvest)
+	}); err != nil {
+		log.Fatalf("Failed to schedule the slug harvest: %v", err)
+	}
 	// Housekeeping: reclaim abandoned analyses and forget idle rate-limit
 	// buckets. Cheap, and it keeps a long-running process from drifting.
 	if _, err := scheduler.AddFunc("@every 15m", func() {
@@ -403,6 +427,7 @@ func main() {
 	<-scheduler.Stop().Done()
 	services.ReleaseCronLease(services.DiscoveryLeaseName)
 	services.ReleaseCronLease(services.JobSyncLeaseName)
+	services.ReleaseCronLease(services.SlugHarvestLeaseName)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
@@ -514,4 +539,47 @@ func trustedProxies() []string {
 		}
 	}
 	return proxies
+}
+
+// runHarvest performs a one-time slug backfill when asked, and reports whether
+// it did — in which case main returns instead of serving.
+//
+// Two sources, deliberately separate flags, because they cost very different
+// things. -harvest-crawl reads Common Crawl's URL index: about twenty requests
+// for roughly 13,500 board slugs, then one free board API call per slug.
+// -harvest-register walks the startup register's accelerator portfolios at a
+// second a page, which is slower and yields far fewer boards, but the ones it
+// finds arrive with a sector, a funding stage and measured coordinates.
+//
+// Neither spends a metered search. That is the whole point: discovery's 800
+// monthly calls bought 145 companies in September, and a harvest of this size
+// through that path would drain the year.
+//
+//	go run . -harvest-crawl               # newest index, no store cap
+//	go run . -harvest-crawl -indexes 4    # last four indexes
+//	go run . -harvest-register -limit 200 # 200 register pages, then stop
+func runHarvest() bool {
+	var (
+		crawl    = flag.Bool("harvest-crawl", false, "backfill board slugs from the Common Crawl URL index")
+		register = flag.Bool("harvest-register", false, "backfill companies from the startup register's accelerator portfolios")
+		indexes  = flag.Int("indexes", 1, "how many recent Common Crawl indexes to read")
+		limit    = flag.Int("limit", 0, "cap companies stored (0 = no cap); for -harvest-register, also caps pages read")
+	)
+	flag.Parse()
+
+	if !*crawl && !*register {
+		return false
+	}
+
+	stats, err := services.RunHarvest(services.HarvestOptions{
+		CommonCrawl:     *crawl,
+		StartupRegister: *register,
+		Indexes:         *indexes,
+		Limit:           *limit,
+	})
+	if err != nil {
+		log.Fatalf("harvest: %v", err)
+	}
+	log.Printf("harvest finished: %s", stats)
+	return true
 }

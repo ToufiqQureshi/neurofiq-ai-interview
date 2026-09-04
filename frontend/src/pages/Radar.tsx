@@ -4,7 +4,10 @@ import { Link } from 'react-router-dom';
 
 export function Radar() {
   const [url, setUrl] = useState('');
-  const [scanState, setScanState] = useState<'idle' | 'scanning' | 'results'>('idle');
+  // 'failed' is separate from 'idle' so the terminal panel — and the [ERR]
+  // line the catch writes into it — survives a failed scan. Returning to idle
+  // unmounted the panel and threw the only record of what went wrong away.
+  const [scanState, setScanState] = useState<'idle' | 'scanning' | 'results' | 'failed'>('idle');
   const [progress, setProgress] = useState(0);
   const [error, setError] = useState<string | null>(null);
   const [radarData, setRadarData] = useState<any>(null);
@@ -30,20 +33,21 @@ export function Radar() {
     setProgress(0);
     setError(null);
     setRadarData(null);
-    setLogs(['[SYS] Initiating profile extraction...', '[SYS] Connecting to secure endpoint...']);
-    
+    setLogs([`[SYS] Sending ${url.trim()} for analysis...`]);
+
+    // The bar is a waiting indicator, not a measurement: the scan is one
+    // request and the server reports nothing until it answers, so there is no
+    // real progress to show. It creeps and stops at 95 for that reason.
+    //
+    // It used to narrate as well — "Parsing DOM elements", "Running NLP entity
+    // extraction", "[WARN] Missing critical tech tags" — all on a 500ms timer,
+    // none of it anything the backend had said or done. The warning was the
+    // worst of them: it announced a finding before a single byte had come
+    // back, and it appeared whatever the profile turned out to contain. A
+    // progress bar that overstates is a nuisance; invented findings are the
+    // thing this project has a rule against.
     const interval = setInterval(() => {
-      setProgress((prev) => {
-        if (prev >= 95) return 95; 
-        
-        // Add fake logs
-        if (prev === 20) setLogs(l => [...l, '[SYS] Parsing DOM elements...', '[OK] Headline identified.']);
-        if (prev === 40) setLogs(l => [...l, '[SYS] Running NLP entity extraction on Summary...', '[OK] Entities mapped.']);
-        if (prev === 60) setLogs(l => [...l, '[SYS] Cross-referencing ATS keyword database...', '[WARN] Missing critical tech tags.']);
-        if (prev === 80) setLogs(l => [...l, '[SYS] Compiling optimization heuristic report...']);
-        
-        return prev + 5;
-      });
+      setProgress((prev) => (prev >= 95 ? 95 : prev + 5));
     }, 500);
     progressTimer.current = interval;
 
@@ -57,14 +61,18 @@ export function Radar() {
       
       clearInterval(interval);
       progressTimer.current = null;
-      setProgress(100);
-      setLogs(l => [...l, '[OK] Analysis complete. Rendering UI.']);
-      
+
       if (!res.ok) {
         throw new Error('Failed to analyze profile URL.');
       }
-      
+
       const data = await res.json();
+
+      // Logged here, not above: a 500 answers this call too, and announcing
+      // "[OK] Analysis complete" before checking res.ok reported a success the
+      // very next line threw on.
+      setProgress(100);
+      setLogs(l => [...l, '[OK] Analysis complete.']);
       
       setTimeout(() => {
         setRadarData(data);
@@ -74,7 +82,11 @@ export function Radar() {
     } catch (err: any) {
       clearInterval(interval);
       progressTimer.current = null;
-      setScanState('idle');
+      // 'failed', not 'idle'. The terminal panel renders while scanning, so
+      // returning to idle wiped the log the line below had just written — the
+      // failure was recorded where nobody could read it.
+      setScanState('failed');
+      setLogs(l => [...l, '[ERR] Analysis failed.']);
       setError(err.message || 'Something went wrong');
     }
   };
@@ -173,7 +185,7 @@ export function Radar() {
             </form>
 
             {/* Terminal Loading State */}
-            {scanState === 'scanning' && (
+            {(scanState === 'scanning' || scanState === 'failed') && (
               <div className="mt-16 animate-in fade-in slide-in-from-bottom-8 duration-700">
                 <div className="bg-zinc-900/80 backdrop-blur-xl border border-zinc-800 rounded-2xl p-6 font-mono text-sm max-w-2xl mx-auto shadow-2xl">
                   <div className="flex items-center gap-2 mb-4 border-b border-zinc-800 pb-4">
@@ -193,24 +205,38 @@ export function Radar() {
                         <span>{log}</span>
                       </div>
                     ))}
-                    <div className="flex items-start gap-2 text-indigo-400 animate-pulse">
-                      <span className="opacity-50">❯</span>
-                      <span className="w-2 h-4 bg-indigo-400 inline-block" />
-                    </div>
+                    {/* The blinking cursor says "still working", so it stops
+                        when the work has stopped. */}
+                    {scanState === 'scanning' && (
+                      <div className="flex items-start gap-2 text-indigo-400 animate-pulse">
+                        <span className="opacity-50">❯</span>
+                        <span className="w-2 h-4 bg-indigo-400 inline-block" />
+                      </div>
+                    )}
                   </div>
-                  
-                  <div>
-                    <div className="flex justify-between text-xs text-zinc-500 mb-2">
-                      <span>PROCESSING</span>
-                      <span>{progress}%</span>
+
+                  {/* A failed scan keeps its log but drops the progress bar.
+                      Leaving it at "PROCESSING 45%" read as a scan still
+                      running, which is the same overstatement the invented
+                      log lines were removed for. */}
+                  {scanState === 'scanning' ? (
+                    <div>
+                      <div className="flex justify-between text-xs text-zinc-500 mb-2">
+                        <span>PROCESSING</span>
+                        <span>{progress}%</span>
+                      </div>
+                      <div className="w-full h-1 bg-zinc-800 rounded-full overflow-hidden">
+                        <div
+                          className="h-full bg-indigo-500 shadow-[0_0_10px_rgba(99,102,241,0.8)] transition-all duration-300 ease-out"
+                          style={{ width: `${progress}%` }}
+                        />
+                      </div>
                     </div>
-                    <div className="w-full h-1 bg-zinc-800 rounded-full overflow-hidden">
-                      <div 
-                        className="h-full bg-indigo-500 shadow-[0_0_10px_rgba(99,102,241,0.8)] transition-all duration-300 ease-out" 
-                        style={{ width: `${progress}%` }}
-                      />
+                  ) : (
+                    <div className="flex justify-between text-xs text-red-400">
+                      <span>SCAN FAILED</span>
                     </div>
-                  </div>
+                  )}
                 </div>
               </div>
             )}

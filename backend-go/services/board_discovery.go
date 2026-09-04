@@ -227,6 +227,22 @@ var nonSlugSegments = map[string]bool{
 	"www": true, "j": true, "careers": true, "company": true, "companies": true,
 }
 
+// vendorDemoSlugs are the ATS vendors' own demonstration tenants. They are
+// real boards serving real-looking JSON, which is exactly why nothing else
+// here catches them: salesdemo.keka.com answered with 82 postings, several
+// duplicated and one titled "HR Manager (Sumit)", and the directory filed
+// them as a hiring company. A vendor's showroom is not an employer, and the
+// slug is the only place that shows.
+var vendorDemoSlugs = map[string]bool{
+	"demo": true, "salesdemo": true, "democompany": true, "test": true,
+	"testing": true, "sandbox": true, "staging": true, "example": true,
+}
+
+// boardSearchSource labels the companies this file stores. Written out at
+// every use before, which meant a sweep filtering on it could disagree with
+// the writer by a typo and silently judge nothing.
+const boardSearchSource = "board-search"
+
 // aggregatorHosts are never a company's own site. A "website" on one of these
 // is a page *about* the company, and storing it would point the careers-page
 // resolver at a job board's own domain.
@@ -298,6 +314,30 @@ var indiaLocationHints = []string{
 	"trivandrum", "thiruvananthapuram", "bhubaneswar", "nagpur", "surat",
 }
 
+// indiaStateHints are the states and union territories, which boards name far
+// more often than the city list above anticipated.
+//
+// A board writes a location however its HR team typed it, and the two forms
+// this list exists for are ordinary: "Mumbai MH" and "Bengaluru, Karnataka"
+// carry a city the hints already know, but "Kutch - Gujarat" and "Nimbehera -
+// Rajasthan" carry only a state, and were read as not-Indian. The cost of
+// missing them is not a cosmetic gap: a board whose only Indian roles are
+// stated that way returns "" from firstIndianLocation and the whole company is
+// rejected at discovery.
+//
+// Measured against 30,000 real board postings before this was added, the city
+// list alone missed 0.1% of Indian rows — small, and the rows it missed were
+// exactly this shape.
+var indiaStateHints = []string{
+	"andhra pradesh", "arunachal pradesh", "assam", "bihar", "chhattisgarh",
+	"goa", "gujarat", "haryana", "himachal pradesh", "jharkhand", "karnataka",
+	"kerala", "madhya pradesh", "maharashtra", "manipur", "meghalaya", "mizoram",
+	"nagaland", "odisha", "punjab", "rajasthan", "sikkim", "tamil nadu",
+	"tamilnadu", "telangana", "tripura", "uttar pradesh", "uttarakhand",
+	"west bengal", "andaman and nicobar", "dadra and nagar haveli", "daman and diu",
+	"jammu and kashmir", "ladakh", "lakshadweep", "puducherry",
+}
+
 // indiaLocationRe matches the hints as whole words.
 //
 // Substring matching was wrong in a way that took a US company into an India
@@ -306,10 +346,83 @@ var indiaLocationHints = []string{
 // area was stamped "Indianapolis, IN, USA" on a map of Indian startups. A
 // word boundary costs nothing and ends the whole class — "Remote - Indiana,
 // USA" no longer reads as Bengaluru.
-var indiaLocationRe = regexp.MustCompile(`(?i)\b(` + strings.Join(indiaLocationHints, "|") + `)\b`)
+var indiaLocationRe = regexp.MustCompile(`(?i)\b(` +
+	strings.Join(append(append([]string{}, indiaLocationHints...), indiaStateHints...), "|") + `)\b`)
 
+// foreignLocationRe names a country that is not India.
+//
+// It exists for one shape the city list cannot judge on its own: a location
+// that names an Indian city AND a foreign country, where the foreign country
+// is the real one. "Bangalore, Mexico" is in the sample of 30,000 postings
+// this was measured against, and so is "Bengaluru, Karnataka / Romania -
+// Remote". The first is a mislabelled foreign role; the second is a genuine
+// Indian role that also lists Romania.
+//
+// The rule below is what separates them, and it is deliberately conservative:
+// a foreign country only disqualifies a location that names no Indian state or
+// the word India. That keeps every multi-region req whose Indian half is
+// explicit, and drops only the ones where the Indian word is a city name
+// standing alone against a foreign country.
+//
+// Measured cost of the rule: 0.37% of matching postings carry a foreign
+// marker, and most of those name India as well, so they survive.
+var foreignLocationRe = regexp.MustCompile(`(?i)\b(` + strings.Join([]string{
+	"japan", "thailand", "canada", "ontario", "united states", "u\\.s(?:\\.a?)?", "usa",
+	"united kingdom", "england", "scotland", "singapore", "malaysia", "australia",
+	"germany", "france", "netherlands", "ireland", "poland", "brazil", "mexico",
+	"philippines", "vietnam", "indonesia", "china", "hong kong", "taiwan",
+	"south korea", "spain", "italy", "sweden", "norway", "denmark", "finland",
+	"switzerland", "austria", "belgium", "portugal", "romania", "czechia",
+	"hungary", "israel", "turkey", "egypt", "kenya", "nigeria", "south africa",
+	"new zealand", "argentina", "chile", "colombia", "peru", "costa rica",
+	"united arab emirates", "uae", "dubai", "saudi arabia", "qatar", "bahrain",
+	"oman", "bangladesh", "sri lanka", "nepal", "pakistan",
+}, "|") + `)\b`)
+
+// crossBorderStateHints are Indian state names that another country also uses
+// for a province of its own. They still say "somewhere in India" when nothing
+// contradicts them, but they cannot outweigh a named foreign country — see
+// indiaWordRe.
+var crossBorderStateHints = map[string]bool{"punjab": true}
+
+// indiaWordRe is the unambiguous evidence that a location really is in India:
+// the country itself, or one of its states. A bare city name is not enough,
+// because cities collide across countries — there is a Kochi in Japan and a
+// Surat in Thailand.
+//
+// Cross-border state names are left out of THIS list, though they stay in
+// indiaLocationRe. Punjab is a province of Pakistan as well as a state of
+// India, so including it here let "Lahore, Punjab, Pakistan" name a foreign
+// country, be caught by the foreign check, and then be rescued from it — the
+// directory stored a Pakistani city as an Indian company's area. A location
+// that really is in Indian Punjab still passes, either because it names no
+// foreign country at all or because it also says India.
+var indiaWordRe = regexp.MustCompile(`(?i)\b(india|` + strings.Join(unambiguousIndiaStates(), "|") + `)\b`)
+
+func unambiguousIndiaStates() []string {
+	out := make([]string, 0, len(indiaStateHints))
+	for _, state := range indiaStateHints {
+		if !crossBorderStateHints[state] {
+			out = append(out, state)
+		}
+	}
+	return out
+}
+
+// looksIndian reports whether a role's stated location is in India.
+//
+// Two questions, in order: does it name an Indian place at all, and if it also
+// names a foreign country, does it still name India or an Indian state? A
+// location that names Mexico and only the word "Bangalore" fails the second —
+// which is the whole point, because "Bangalore, Mexico" is a real row.
 func looksIndian(location string) bool {
-	return indiaLocationRe.MatchString(location)
+	if !indiaLocationRe.MatchString(location) {
+		return false
+	}
+	if foreignLocationRe.MatchString(location) && !indiaWordRe.MatchString(location) {
+		return false
+	}
+	return true
 }
 
 // boardTitleCleanupRe strips the suffixes boards append to their page titles,
@@ -385,25 +498,64 @@ func nameAgreesWithSlug(name, slug string) bool {
 
 // titleCandidates are the parts of a title that could name the company.
 func titleCandidates(name string) []string {
-	out := []string{name}
+	// Extracted candidates first, the untouched title last. companyNameFromBoard
+	// returns the first candidate nameAgreesWithSlug accepts, and that
+	// tolerance is loose enough — a near-length prefix match — that a raw
+	// title with a short trailing role fragment can pass on its own: "Zeta -
+	// Lead" against slug "zeta" differs by only four characters, the same
+	// tolerance meant for "Sprinto" against "sprintohq". Checked first, that
+	// let the raw title win before titleCompanyHeadRe's own "Zeta" ever got a
+	// turn — two board-search rows shipped exactly that way. The extracted
+	// candidates are always the more specific answer when they exist, so they
+	// go first; the untouched title stays as the fallback for a title that
+	// carries no "at" or "-" separator to extract from at all.
+	var out []string
 	if m := titleCompanyTailRe.FindStringSubmatch(name); m != nil {
 		out = append(out, strings.TrimSpace(m[1]))
 	}
 	if m := titleCompanyHeadRe.FindStringSubmatch(name); m != nil {
 		out = append(out, strings.TrimSpace(m[1]))
 	}
+	out = append(out, name)
 	return out
 }
 
-// slugDisplayName reads a board slug as a name. Workday slugs are stored as
-// "tenant:region:site", and only the tenant names the company — the whole
+// boardSlugLabel is the part of a slug that names the company. Workday slugs
+// are stored as "tenant:region:site", and only the tenant does — the whole
 // triple would have entered the directory as "acme:wd3:careers".
-func slugDisplayName(slug string) string {
+func boardSlugLabel(slug string) string {
 	if tenant, _, found := strings.Cut(slug, ":"); found {
 		slug = tenant
 	}
+	return strings.TrimSpace(slug)
+}
+
+// slugDisplayName reads a board slug as a name.
+func slugDisplayName(slug string) string {
+	slug = boardSlugLabel(slug)
 	slug = strings.ReplaceAll(strings.ReplaceAll(slug, "-", " "), "_", " ")
 	return strings.TrimSpace(whitespaceRe.ReplaceAllString(slug, " "))
+}
+
+// boardSlugIsAdmissible reports whether a slug names an employer at all.
+func boardSlugIsAdmissible(slug string) bool {
+	label := strings.ToLower(boardSlugLabel(slug))
+	return label != "" && !nonSlugSegments[label] && !vendorDemoSlugs[label]
+}
+
+// boardRowIsAdmissible reports whether discoverFromBoards would store this
+// company today: a slug it would accept, under a name companyNameFromBoard
+// could have returned for that slug.
+//
+// companyNameFromBoard has exactly two outcomes — a title the slug
+// corroborates, or the slug read as a name — so those are the only two shapes
+// a legitimately stored name can have. Anything else predates the rule.
+func boardRowIsAdmissible(name, slug string) bool {
+	if !boardSlugIsAdmissible(slug) {
+		return false
+	}
+	name = strings.TrimSpace(name)
+	return nameAgreesWithSlug(name, slug) || strings.EqualFold(name, slugDisplayName(slug))
 }
 
 // companyNameFromBoard turns a board page's title into a company name.
@@ -474,7 +626,7 @@ func boardHitsFor(query string, numResults int) []boardHit {
 		// The same regexes that read a board link out of a careers page read
 		// it out of a search result, because both are just the URL.
 		provider, slug := scan(r.URL)
-		if provider == "" || slug == "" || nonSlugSegments[strings.ToLower(slug)] {
+		if provider == "" || slug == "" || !boardSlugIsAdmissible(slug) {
 			continue
 		}
 		key := provider + ":" + strings.ToLower(slug)
@@ -655,6 +807,132 @@ func pickCompanyLink(links []string, slug string) string {
 // The board tells us a company is hiring but not where it lives, and the
 // companies table is keyed on domain. One search per newly-seen company, and
 // never for one we already have.
+// websiteGuessTLDs are tried, in order, against a board slug before a search
+// is paid for. Of the 145 companies the board search stored in its first two
+// days, 92 sit on their slug under one of these five, and the sixth candidate
+// would add two requests per company for a case that has not come up yet.
+var websiteGuessTLDs = []string{".com", ".ai", ".io", ".in", ".co"}
+
+// guessCompanyWebsite finds a company's own site without spending a search.
+//
+// resolveCompanyWebsite below is the last metered step in discovery — one
+// search per newly-seen company, and 145 of them in two days. Most are paying
+// to be told what the slug already said: sprinto, meesho, tekion and paytm are
+// all their own domain label.
+//
+// But a guess is the thing this file spent a rewrite removing, so it is not
+// trusted on its own. A candidate site is accepted only when its own pages
+// link back to the SAME board the company was found on — DetectATS's evidence
+// rule, run in the other direction. A parked domain, a squatter, or an
+// unrelated firm sitting on the same word cannot produce that link. Nor could
+// devopscompany.nl, which is what a paid search returned for a Genpact board.
+//
+// Every request here is plain HTTP. When nothing corroborates, we fall through
+// and buy the search exactly as before, so the worst case in money is the
+// current cost plus some free fetches.
+//
+// The worst case in time is ten requests per company — five TLDs, two pages
+// each — which at externalClient's 20s ceiling is 200s, and 1000s for a full
+// five-company run. That is inside the three-hour lease the rotation holds,
+// and nowhere near it in practice: a TLD the company does not own fails at
+// DNS in milliseconds, and the loop stops at the first board it can confirm.
+// Worth re-measuring if the TLD list grows.
+func guessCompanyWebsite(provider, slug string) string {
+	label := strings.ToLower(boardSlugLabel(slug))
+	if len(label) < 3 || !boardSlugIsAdmissible(slug) {
+		return ""
+	}
+
+	for _, tld := range websiteGuessTLDs {
+		site := "https://" + label + tld
+
+		body, err := fetchText(site)
+		if err != nil {
+			// Does not resolve, or does not answer. Nothing on this domain
+			// can corroborate anything, so do not spend a second request on
+			// its careers path.
+			continue
+		}
+		if boardLinkMatches(body, provider, slug) {
+			log.Printf("board discovery: %s links its own %s board — website resolved without a search", site, provider)
+			return site
+		}
+
+		// Homepages link "Careers", not the board itself. The page behind
+		// that word is where the board link almost always lives.
+		if careers, err := fetchText(site + "/careers"); err == nil && boardLinkMatches(careers, provider, slug) {
+			log.Printf("board discovery: %s/careers links its own %s board — website resolved without a search", site, provider)
+			return site
+		}
+	}
+	return ""
+}
+
+// boardLinkMatches reports whether a page links the exact board given.
+//
+// Same provider AND same slug. Provider alone would accept any company that
+// happens to use Greenhouse, which is most of them.
+//
+// This looks for the board's own address rather than asking scanForATS what
+// the page links, because scanForATS answers with the FIRST board it
+// recognises, in a fixed provider order. A Lever company whose page also
+// mentions a Greenhouse board anywhere — a partner, an investor's careers
+// link, a "we also hire through" note — would have that Greenhouse hit
+// returned instead, and the corroboration would fail on a page that does link
+// the right board. The cost of that is a search we did not need to buy.
+func boardLinkMatches(page, provider, slug string) bool {
+	target := boardURL(provider, slug)
+	if target == "" {
+		return false
+	}
+
+	// Matched without the scheme: the same board is linked as https, as http,
+	// and protocol-relative, and all three are the same evidence.
+	needle := strings.ToLower(strings.TrimPrefix(strings.TrimPrefix(target, "https://"), "http://"))
+	haystack := strings.ToLower(page)
+
+	for from := 0; from < len(haystack); {
+		at := strings.Index(haystack[from:], needle)
+		if at < 0 {
+			return false
+		}
+		start := from + at
+		end := start + len(needle)
+
+		// Both edges have to be clean, and for different reasons.
+		//
+		// After the slug: without it "jobs.lever.co/cred" matches a link to
+		// jobs.lever.co/creditvidya — the exact confusion this pipeline
+		// removed slug guessing over.
+		//
+		// Before the host: without it "notjobs.lever.co/acme" contains
+		// "jobs.lever.co/acme", so any domain ending in the board's host
+		// would corroborate a guess and file a company under the wrong one.
+		afterIsClean := end >= len(haystack) || !isSlugByte(haystack[end])
+		beforeIsClean := start == 0 || !isHostByte(haystack[start-1])
+		if afterIsClean && beforeIsClean {
+			return true
+		}
+		from += at + 1
+	}
+	return false
+}
+
+// isHostByte reports whether a byte could be part of the hostname to the left
+// of a match — the label separator "." included, since that is what makes
+// "notjobs.lever.co" and "jobs.lever.co" different hosts.
+func isHostByte(b byte) bool {
+	return b == '-' || b == '.' ||
+		(b >= 'a' && b <= 'z') || (b >= 'A' && b <= 'Z') || (b >= '0' && b <= '9')
+}
+
+// isSlugByte reports whether a byte could be part of a board slug, and so
+// whether a match that ends before it is really a match.
+func isSlugByte(b byte) bool {
+	return b == '-' || b == '_' || b == '.' || b == ':' ||
+		(b >= 'a' && b <= 'z') || (b >= 'A' && b <= 'Z') || (b >= '0' && b <= '9')
+}
+
 func resolveCompanyWebsite(name string) string {
 	query := name + " official company website"
 
@@ -770,10 +1048,20 @@ func discoverFromBoards(query string, limit, floor int) ([]models.Company, error
 	if limit <= 0 || limit > maxNewCompaniesPerRun {
 		limit = maxNewCompaniesPerRun
 	}
-	// One search to find boards, then at most one per candidate we look up.
-	// Stopping before the search is cheaper than discovering mid-run that we
-	// cannot afford the lookups.
-	if remaining := SearchBudgetRemaining(); remaining <= limit+floor {
+	// One search to find boards. Everything after it may well be free — a
+	// company whose board page or own domain names its website costs nothing
+	// — so this asks only for the board search, not for the whole lookup
+	// allowance on top of it.
+	//
+	// It used to require limit+floor up front, which was right when every
+	// company cost a search and wrong the moment they stopped: with a handful
+	// of credits left, a run that would have spent one and resolved five
+	// companies for free refused to start at all.
+	//
+	// The lookups keep their own guard. mayStartLookup is checked immediately
+	// before each metered one, which is the only place that can know whether
+	// it is actually needed.
+	if remaining := SearchBudgetRemaining(); remaining <= floor {
 		return nil, fmt.Errorf("search budget nearly spent (%d left, %d reserved) — skipping discovery",
 			remaining, floor)
 	}
@@ -831,20 +1119,27 @@ func discoverFromBoards(query string, limit, floor int) ([]models.Company, error
 			continue
 		}
 
-		// The metered step. Everything above this line is free, so the count
-		// that matters is of lookups started — not of companies stored.
-		if !mayStartLookup(lookups, limit, SearchBudgetRemaining(), floor) {
-			log.Printf("board discovery: stopping after %d website lookups (limit %d, budget %d, reserved %d)",
-				lookups, limit, SearchBudgetRemaining(), floor)
-			break
-		}
-		lookups++
-
-		// The board page first — free, and published by the company itself.
-		// Only when it names nothing does this fall through to the search,
-		// which is the one metered call in this loop.
+		// Two free ways to name the company's site, in the order this pipeline
+		// takes everywhere: the board page the company published, then its own
+		// domain when the slug is also its domain label. Only when neither
+		// answers does this reach the search, the one metered call in the loop.
 		website := websiteFromBoardPage(hit.URL, hit.Slug)
 		if website == "" {
+			website = guessCompanyWebsite(hit.Provider, hit.Slug)
+		}
+		if website == "" {
+			// The metered step. Everything above this line is free, so the
+			// count that matters is of lookups started — not of companies
+			// stored, and not of hits examined. The budget check sits here
+			// rather than at the top of the iteration for the same reason: a
+			// run that has spent its lookups can still store every company it
+			// can name for nothing.
+			if !mayStartLookup(lookups, limit, SearchBudgetRemaining(), floor) {
+				log.Printf("board discovery: stopping after %d website lookups (limit %d, budget %d, reserved %d)",
+					lookups, limit, SearchBudgetRemaining(), floor)
+				break
+			}
+			lookups++
 			website = resolveCompanyWebsite(name)
 		}
 		domain := extractDomain(website)
@@ -872,7 +1167,7 @@ func discoverFromBoards(query string, limit, floor int) ([]models.Company, error
 			CareersURL: hit.URL,
 			ATSType:    hit.Provider,
 			ATSSlug:    hit.Slug,
-			Source:     "board-search",
+			Source:     boardSearchSource,
 		}
 		now := time.Now()
 		company.ATSCheckedAt = &now
@@ -918,19 +1213,46 @@ func discoverFromBoards(query string, limit, floor int) ([]models.Company, error
 // Level AI is on both Lever and Ashby — and overwriting on every rotation made
 // its board flap between them, replacing all of its roles each time. The first
 // board found wins; a second one adds nothing the directory can show.
-func attachBoardTo(dup *models.Company, hit boardHit) {
+// attachBoardTo reports whether it actually attached the board, so a caller
+// that runs many of these concurrently — the slug harvest does, one goroutine
+// per candidate — can tell a real attach from losing a race for the same
+// company.
+//
+// The in-memory guard this replaced (checking dup.ATSSlug before writing) was
+// not enough for that caller: two goroutines can both read the same *Company
+// with an empty slug, both pass the check, and both fire an UPDATE — the
+// second silently overwriting the first's board, and the harvest's own
+// Attached counter double-counting one company. The WHERE clause below is
+// what actually serialises this: only the update that finds the row still
+// unattached does anything, so the loser's RowsAffected is 0.
+func attachBoardTo(dup *models.Company, hit boardHit) bool {
 	if strings.TrimSpace(dup.ATSSlug) != "" {
-		return
+		return false
 	}
-	if err := config.DB.Model(&models.Company{}).Where("id = ?", dup.ID).Updates(map[string]interface{}{
-		"ats_type": hit.Provider, "ats_slug": hit.Slug,
-		"careers_url": hit.URL, "ats_checked_at": time.Now(),
-	}).Error; err != nil {
-		log.Printf("board discovery: failed to attach board %q to %q: %v", hit.Slug, dup.Name, err)
-		return
+	result := config.DB.Model(&models.Company{}).
+		Where("id = ? AND (ats_slug IS NULL OR ats_slug = '')", dup.ID).
+		Updates(map[string]interface{}{
+			"ats_type": hit.Provider, "ats_slug": hit.Slug,
+			"careers_url": hit.URL, "ats_checked_at": time.Now(),
+		})
+	if result.Error != nil {
+		log.Printf("board discovery: failed to attach board %q to %q: %v", hit.Slug, dup.Name, result.Error)
+		return false
 	}
+	if result.RowsAffected == 0 {
+		// Another goroutine attached a board to this company first.
+		return false
+	}
+	// dup.ATSSlug is deliberately left untouched here. The slug harvest calls
+	// this from several goroutines that can hold the very same *Company
+	// pointer (idx.duplicate hands out the one stored in its maps), and every
+	// other reference to the field is a read with no synchronisation of its
+	// own — a write here would race with those reads. The WHERE clause above
+	// is what actually prevents a double attach; this field is just the
+	// in-memory mirror the next full index rebuild will refresh.
 	log.Printf("board discovery: attached %s board %q to existing company %q",
 		hit.Provider, hit.Slug, dup.Name)
+	return true
 }
 
 // firstIndianLocation returns the first Indian location among a board's

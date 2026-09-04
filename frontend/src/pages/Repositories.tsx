@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Search, GitBranch, Check, Loader2, RotateCcw, ArrowRight } from 'lucide-react';
-import { Link, useNavigate } from 'react-router-dom';
+import { Link, useLocation, useNavigate } from 'react-router-dom';
+import { readTarget, targetQuery } from '../lib/interviewTarget';
 
 type Repo = {
   id: number;
@@ -32,6 +33,7 @@ export function Repositories() {
   const [selected, setSelected] = useState<string[]>([]);
   const [starting, setStarting] = useState(false);
   const navigate = useNavigate();
+  const location = useLocation();
 
   useEffect(() => {
     fetch(`${api}/api/repos`, { credentials: 'include' })
@@ -108,7 +110,8 @@ export function Repositories() {
           throw new Error(data?.error || `Could not start the analysis for ${fullName}.`);
         }
       }
-      navigate(`/analyze/${encodeURIComponent(selected[0])}`);
+      // Carries the Job Map role the candidate started from, if any.
+      navigate(`/analyze/${encodeURIComponent(selected[0])}${targetQuery(readTarget(location.search))}`);
     } catch (err: any) {
       setError(err.message);
       setStarting(false);
@@ -200,7 +203,7 @@ export function Repositories() {
                     </span>
                   </div>
                   <Link
-                    to={`/analyze/${encodeURIComponent(repo.full_name)}`}
+                    to={`/analyze/${encodeURIComponent(repo.full_name)}${targetQuery(readTarget(location.search))}`}
                     className="mt-4 block w-full py-2.5 text-center text-xs font-semibold text-white bg-ink hover:bg-black rounded-full transition-colors"
                   >
                     {status === 'pending' ? 'View progress' : 'Continue interview'}
