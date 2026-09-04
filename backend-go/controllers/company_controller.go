@@ -23,7 +23,16 @@ func HandleGetCompanies(c *gin.Context) {
 		return
 	}
 
-	openRoles, _ := services.TotalOpenRoles(sector, stage, area, q)
+	// Without a text search the total is a sum of an indexed column rather
+	// than a join to the jobs table and a count of its rows. The filters are
+	// identical either way, so the two paths cannot disagree; only their cost
+	// differs, and this is the path almost every request takes.
+	var openRoles int64
+	if q == "" {
+		openRoles, _ = services.TotalOpenRolesFast(sector, stage, area)
+	} else {
+		openRoles, _ = services.TotalOpenRoles(sector, stage, area, q)
+	}
 	fields, levels, _ := services.JobFacets(sector, stage, area, q)
 
 	// Sector and stage ride along here rather than on an endpoint of their

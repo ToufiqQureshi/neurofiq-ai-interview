@@ -36,7 +36,38 @@ type Company struct {
 	// between the two states on alternate ticks, so listings survive one
 	// empty read and are cleared on the second. Reset the moment a read finds
 	// anything.
-	EmptyJobReads int       `json:"-"`
-	Source        string    `gorm:"default:'agno-discovery'" json:"source"`
-	CreatedAt     time.Time `gorm:"default:now()" json:"created_at"`
+	EmptyJobReads int    `json:"-"`
+	Source        string `gorm:"default:'agno-discovery'" json:"source"`
+
+	// OpenRoles is how many roles the jobs table currently holds for this
+	// company, maintained by whatever last wrote them.
+	//
+	// It is denormalised on purpose. The directory listing sorts hiring
+	// companies first, which meant every page load ran
+	// `LEFT JOIN jobs ... GROUP BY companies.id ... ORDER BY COUNT(jobs.id)` —
+	// an aggregation over the whole join before the LIMIT could apply, twice
+	// per request because the total is counted the same way. No index can
+	// serve an ORDER BY over an aggregate, so that cost grows with the
+	// directory and there is no version of it that gets faster. At 300
+	// companies it is invisible; the harvest exists to make that number
+	// 25,000.
+	//
+	// The risk of a counter is that it drifts from the rows it counts. Two
+	// things hold it: every write goes through replaceJobsForCompany, which
+	// sets it from the same slice it just stored, and RecountOpenRoles
+	// repairs the whole column from the jobs table on a schedule, so a drift
+	// caused by a crash mid-write is corrected without anyone noticing it.
+	OpenRoles int `gorm:"index;not null;default:0" json:"open_roles"`
+
+	// LastSyncedAt is when this company's roles were last refreshed.
+	//
+	// The hourly sync used to load every company and check them all. That is
+	// a fixed hour's work against a growing directory, and the tick that
+	// stops fitting inside its window does not fail — it overruns, and the
+	// next tick starts on top of it. Ordering by this column and taking a
+	// bounded batch turns the sync into a rotation: every company is reached,
+	// the tick always finishes, and the ones waiting longest go first.
+	LastSyncedAt *time.Time `gorm:"index" json:"last_synced_at"`
+
+	CreatedAt time.Time `gorm:"default:now()" json:"created_at"`
 }

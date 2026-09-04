@@ -1,9 +1,11 @@
 package services
 
 import (
+	"context"
 	"fmt"
 	"log"
 	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -35,6 +37,20 @@ import (
 // must survive boardRowIsAdmissible, and the company must not already be here.
 // The evidence rule this directory rests on is unchanged; only the way
 // candidates arrive is cheaper.
+//
+// Two halves, deliberately separate
+//
+// Collection reads an index and writes candidates to a queue. Admission takes
+// due candidates off that queue and judges them. They run on their own
+// schedules and neither can stall the other, which is the difference between
+// a pipeline that keeps producing and one that produces in lumps.
+//
+// The reason is that they fail differently. Collection is one source being
+// unavailable for an hour; admission is thirteen thousand third-party boards
+// being slow, throttling, or gone. When these were one function, a run that
+// could not finish admission also could not record what it had collected, so
+// the next tick re-read the whole index and made twelve thousand board calls
+// to re-learn what it already knew. See models.BoardCandidate.
 
 // slugCandidate is one board a source believes exists, plus whatever that
 // source happens to know about the company behind it.
@@ -63,59 +79,50 @@ type slugCandidate struct {
 	Source string
 }
 
+// fromQueueRow rebuilds a candidate from its stored row, so admission works on
+// the same value whichever source suggested it.
+func fromQueueRow(r models.BoardCandidate) slugCandidate {
+	return slugCandidate{
+		Provider: r.Provider, Slug: r.Slug, Name: r.Name, Website: r.Website,
+		Sector: r.Sector, Stage: r.Stage, Area: r.Area,
+		Lat: r.Lat, Lng: r.Lng, Source: r.Source,
+	}
+}
+
 // harvestConcurrency bounds the board API calls a harvest makes at once.
 //
-// Same number the job sync uses, and for the same reason: these are other
-// people's public endpoints, and a harvest reads thousands of them in a row
-// where the sync reads a few hundred. Politeness is the constraint here, not
-// our own throughput.
-const harvestConcurrency = 8
+// This is now a bound on our own parallelism only. Politeness towards any one
+// provider is no longer this number's job: every request waits for its host's
+// pacing slot (hostlimit.go), so eight workers against one provider form a
+// queue rather than a burst, and eight workers against ten providers really do
+// run ten-way. That separation is what lets this be raised without becoming
+// rude — the old value had to be small because it was doing both jobs badly.
+const harvestConcurrency = 12
 
-// harvestPoliteness is the pause each worker takes between board calls, so a
-// run of thousands of slugs does not read as a burst to any one provider.
-const harvestPoliteness = 250 * time.Millisecond
-
-// HarvestStats reports what one harvest did, so a run can be judged without
-// reading the log line by line.
+// HarvestStats reports what one admission pass did, so a run can be judged
+// without reading the log line by line.
 type HarvestStats struct {
 	Candidates int
-	Skipped    int // rejected before any network call
+	Skipped    int // structurally not an employer; never retried
 	DeadBoard  int // provider answered, board is empty or gone
 	NotIndian  int // live board, no Indian role
 	Duplicate  int // already in the directory
 	Attached   int // existing company gained a board
 	Stored     int // new company
+	Deferred   int // host would not answer; queued for a retry
 }
 
 func (s HarvestStats) String() string {
 	return strings.Join([]string{
-		"candidates=" + itoa(s.Candidates),
-		"skipped=" + itoa(s.Skipped),
-		"dead=" + itoa(s.DeadBoard),
-		"not-india=" + itoa(s.NotIndian),
-		"duplicate=" + itoa(s.Duplicate),
-		"attached=" + itoa(s.Attached),
-		"stored=" + itoa(s.Stored),
+		"candidates=" + strconv.Itoa(s.Candidates),
+		"skipped=" + strconv.Itoa(s.Skipped),
+		"dead=" + strconv.Itoa(s.DeadBoard),
+		"not-india=" + strconv.Itoa(s.NotIndian),
+		"duplicate=" + strconv.Itoa(s.Duplicate),
+		"attached=" + strconv.Itoa(s.Attached),
+		"stored=" + strconv.Itoa(s.Stored),
+		"deferred=" + strconv.Itoa(s.Deferred),
 	}, " ")
-}
-
-func itoa(n int) string {
-	if n == 0 {
-		return "0"
-	}
-	neg := n < 0
-	if neg {
-		n = -n
-	}
-	var b []byte
-	for n > 0 {
-		b = append([]byte{byte('0' + n%10)}, b...)
-		n /= 10
-	}
-	if neg {
-		return "-" + string(b)
-	}
-	return string(b)
 }
 
 // directoryIndex is the whole companies table in the two shapes a harvest asks
@@ -123,10 +130,10 @@ func itoa(n int) string {
 //
 // findDuplicateCompany answers the same question, and correctly, but it loads
 // every company row on each call. Discovery calls it at most five times a
-// tick, where that is free. A harvest calls it once per candidate: at 13,501
-// candidates against a table of a few thousand rows, the same query runs
-// thirteen thousand times and the run turns into a table scan benchmark. The
-// answer does not change during a harvest, so it is computed once.
+// tick, where that is free. Admission calls it once per candidate: at a
+// thousand candidates a pass against a table of tens of thousands of rows, the
+// same query runs a thousand times and the pass turns into a table scan
+// benchmark. The answer changes rarely, so it is computed once per pass.
 type directoryIndex struct {
 	mu sync.RWMutex
 	// boards is provider+lowercased slug, so a board already stored is
@@ -136,11 +143,20 @@ type directoryIndex struct {
 	names map[string]*models.Company
 	// domains is the unique key the companies table is actually built on.
 	domains map[string]*models.Company
+	// slugs is companies.slug, which carries its own unique constraint.
+	// Without this a name collision reached the INSERT and came back as an
+	// error rather than as a duplicate — see admitCandidate.
+	slugs map[string]bool
 }
 
 func newDirectoryIndex() (*directoryIndex, error) {
+	// Only the columns the index is built from. Selecting whole rows pulled
+	// descriptions and careers URLs across the wire for a table this reads in
+	// full, which is bytes spent to be discarded.
 	var stored []models.Company
-	if err := config.DB.Find(&stored).Error; err != nil {
+	if err := config.DB.
+		Select("id", "name", "slug", "domain", "ats_type", "ats_slug", "careers_url").
+		Find(&stored).Error; err != nil {
 		return nil, err
 	}
 
@@ -148,6 +164,7 @@ func newDirectoryIndex() (*directoryIndex, error) {
 		boards:  make(map[string]bool, len(stored)),
 		names:   make(map[string]*models.Company, len(stored)),
 		domains: make(map[string]*models.Company, len(stored)),
+		slugs:   make(map[string]bool, len(stored)),
 	}
 	for i := range stored {
 		c := &stored[i]
@@ -161,6 +178,9 @@ func newDirectoryIndex() (*directoryIndex, error) {
 		}
 		if c.Domain != "" {
 			idx.domains[strings.ToLower(c.Domain)] = c
+		}
+		if c.Slug != "" {
+			idx.slugs[strings.ToLower(c.Slug)] = true
 		}
 	}
 	return idx, nil
@@ -191,6 +211,38 @@ func (idx *directoryIndex) duplicate(name, domain string) *models.Company {
 	return nil
 }
 
+// freeSlug returns a companies.slug not already taken.
+//
+// companies.slug is unique, and slugify() collides for names the name-level
+// duplicate check lets through — it strips legal suffixes and parentheticals,
+// so "Acme (Beta)" and "Acme Beta" normalize differently but slugify the same.
+// Reaching the INSERT with a taken slug returned an error, not a conflict:
+// OnConflict names the domain column, so Postgres raised the slug violation
+// instead of doing nothing. One such row failed the pass, and a failed pass
+// used to mean the whole index went unrecorded and was re-walked every three
+// hours forever. Suffixing here costs nothing and removes the whole class.
+func (idx *directoryIndex) freeSlug(base string) string {
+	idx.mu.Lock()
+	defer idx.mu.Unlock()
+	if idx.slugs == nil {
+		idx.slugs = map[string]bool{}
+	}
+	if base == "" {
+		base = "company"
+	}
+	candidate := base
+	for n := 2; idx.slugs[strings.ToLower(candidate)]; n++ {
+		candidate = base + "-" + strconv.Itoa(n)
+		if n > 50 {
+			// Fifty companies sharing a slug base is not a naming collision,
+			// it is a bug upstream. Fail the candidate rather than loop.
+			return ""
+		}
+	}
+	idx.slugs[strings.ToLower(candidate)] = true
+	return candidate
+}
+
 // remember records a company the harvest just stored, so two candidates for
 // the same business inside one run cannot both be written.
 func (idx *directoryIndex) remember(c models.Company) {
@@ -206,6 +258,12 @@ func (idx *directoryIndex) remember(c models.Company) {
 	}
 	if c.Domain != "" {
 		idx.domains[strings.ToLower(c.Domain)] = &c
+	}
+	if c.Slug != "" {
+		if idx.slugs == nil {
+			idx.slugs = map[string]bool{}
+		}
+		idx.slugs[strings.ToLower(c.Slug)] = true
 	}
 }
 
@@ -249,22 +307,30 @@ func candidateDetail(c slugCandidate) int {
 	return n
 }
 
-// HarvestSlugs runs candidates through the directory's admission rules and
-// stores the ones that pass.
+// AdmitDueCandidates judges the candidates whose time has come.
 //
-// limit caps how many companies one run will store; zero means no cap, which
-// is what a one-time backfill wants and a scheduled run should never use.
-// HarvestSlugs also reports whether it stopped short of the whole candidate
-// list because limit was reached — capped. RunScheduledHarvest needs this: a
-// capped run has not actually finished reading the index, and recording it as
-// read anyway is what would silently drop everything past the cap for good.
-func HarvestSlugs(candidates []slugCandidate, limit int) (stats HarvestStats, capped bool, err error) {
-	stats = HarvestStats{}
-	candidates = dedupeCandidates(candidates)
-	stats.Candidates = len(candidates)
-	if len(candidates) == 0 {
-		return stats, false, nil
+// Bounded twice on purpose. limit caps how many rows are taken off the queue,
+// and ctx caps how long the pass may run whatever it finds — because the work
+// per candidate is not predictable from its count: a board behind a throttled
+// host can take a hundred times longer than one that answers at once. Without
+// the deadline a pass could still overrun its cron window, and the next tick
+// would start on top of it.
+//
+// Neither bound loses anything. A candidate not reached this pass keeps its
+// due time and is simply first in line next pass, which is the property the
+// queue was introduced for.
+func AdmitDueCandidates(ctx context.Context, limit int) (HarvestStats, error) {
+	stats := HarvestStats{}
+
+	rows, err := DueCandidates(limit)
+	if err != nil {
+		return stats, fmt.Errorf("reading the candidate queue: %w", err)
 	}
+	stats.Candidates = len(rows)
+	if len(rows) == 0 {
+		return stats, nil
+	}
+	rows = interleaveByProvider(rows)
 
 	// A directory we could not read is not an empty directory. Swallowing this
 	// returned zero-of-everything with a nil error, so an automated run
@@ -272,60 +338,44 @@ func HarvestSlugs(candidates []slugCandidate, limit int) (stats HarvestStats, ca
 	// candidate would have looked new to the dedupe that never happened.
 	idx, idxErr := newDirectoryIndex()
 	if idxErr != nil {
-		return stats, false, fmt.Errorf("could not read the directory: %w", idxErr)
+		return stats, fmt.Errorf("could not read the directory: %w", idxErr)
 	}
 
 	var (
-		mu      sync.Mutex
-		wg      sync.WaitGroup
-		sem     = make(chan struct{}, harvestConcurrency)
-		done    bool
-		saveErr error
+		mu  sync.Mutex
+		wg  sync.WaitGroup
+		sem = make(chan struct{}, harvestConcurrency)
 	)
 
-	for _, cand := range candidates {
-		mu.Lock()
-		full := done
-		mu.Unlock()
-		if full {
+	for _, row := range rows {
+		if ctx.Err() != nil {
 			break
 		}
-
 		wg.Add(1)
 		sem <- struct{}{}
-		go func(c slugCandidate) {
+		go func(row models.BoardCandidate) {
 			defer wg.Done()
 			defer func() { <-sem }()
 			// Gin's Recovery() does not cover goroutines spawned here, and one
 			// malformed board payload would otherwise take the process down.
+			// A panicking candidate is deferred rather than left pending, so
+			// it backs off instead of panicking again every pass.
 			defer func() {
 				if r := recover(); r != nil {
-					log.Printf("PANIC harvesting %s/%s: %v", c.Provider, c.Slug, r)
+					log.Printf("PANIC harvesting %s/%s: %v", row.Provider, row.Slug, r)
+					settleCandidate(row, models.CandidateDeferred, "",
+						fmt.Errorf("panic: %v", r))
 				}
 			}()
 
-			outcome, networked, err := admitCandidate(c, idx)
-			// Politeness is owed to the board providers, not to a candidate
-			// that never reached one. Most of a run's candidates are already
-			// stored or fail a free check (idx.hasBoard, an inadmissible
-			// slug), and sleeping there too turned a majority-free pass
-			// through the input into several minutes of pure idle time.
-			if networked {
-				time.Sleep(harvestPoliteness)
+			outcome, companyID, cause := admitCandidate(ctx, fromQueueRow(row), idx)
+
+			if err := settleCandidate(row, statusFor(outcome), companyID, cause); err != nil {
+				log.Printf("slug harvest: could not settle %s/%s: %v", row.Provider, row.Slug, err)
 			}
 
 			mu.Lock()
 			defer mu.Unlock()
-			// A candidate the pipeline rejected on its merits and one this
-			// process simply failed to save are not the same outcome, even
-			// though admitCandidate returns outcomeSkipped for both — the
-			// caller still needs a stats bucket for it. err is what tells
-			// them apart: it is set only for the second case, and it is what
-			// stops RunScheduledHarvest from recording this index as read,
-			// since the candidate was never actually admitted or rejected.
-			if err != nil && saveErr == nil {
-				saveErr = err
-			}
 			switch outcome {
 			case outcomeSkipped:
 				stats.Skipped++
@@ -339,22 +389,23 @@ func HarvestSlugs(candidates []slugCandidate, limit int) (stats HarvestStats, ca
 				stats.Attached++
 			case outcomeStored:
 				stats.Stored++
-				if limit > 0 && stats.Stored >= limit {
-					done = true
-				}
+			case outcomeDeferred:
+				stats.Deferred++
 			}
-		}(cand)
+		}(row)
 	}
 	wg.Wait()
-	// Safe unguarded after wg.Wait(): every goroutine that could still write
-	// done has already called wg.Done(), so nothing races this read.
-	capped = done
 
-	log.Printf("slug harvest: %s capped=%v", stats, capped)
-	if saveErr != nil {
-		return stats, capped, fmt.Errorf("at least one company failed to save: %w", saveErr)
+	log.Printf("slug harvest: %s", stats)
+	// The line that tells a quiet pass from a blocked one. "stored=0" reads
+	// the same either way; a throttled host named here is the difference.
+	if throttled := ThrottledHosts(); len(throttled) > 0 {
+		for _, h := range throttled {
+			log.Printf("slug harvest: %s is pacing us at %s after %d strikes",
+				h.Host, h.Interval, h.Strikes)
+		}
 	}
-	return stats, capped, nil
+	return stats, nil
 }
 
 type harvestOutcome int
@@ -366,24 +417,56 @@ const (
 	outcomeDuplicate
 	outcomeAttached
 	outcomeStored
+	// outcomeDeferred is not a judgement. The host would not answer, so the
+	// pipeline learned nothing and the candidate must come back — the one
+	// outcome that is about us rather than about the board.
+	outcomeDeferred
 )
 
+// statusFor maps an outcome onto the queue status that decides when, or
+// whether, this candidate is looked at again.
+func statusFor(o harvestOutcome) string {
+	switch o {
+	case outcomeStored:
+		return models.CandidateStored
+	case outcomeAttached:
+		return models.CandidateAttached
+	case outcomeDuplicate:
+		// The board is already in the directory under some company. Nothing
+		// about this candidate will change that, and the company's own sync
+		// keeps its roles current.
+		return models.CandidateAttached
+	case outcomeNotIndian:
+		return models.CandidateForeign
+	case outcomeDeadBoard:
+		return models.CandidateDead
+	case outcomeDeferred:
+		return models.CandidateDeferred
+	default:
+		return models.CandidateRejected
+	}
+}
+
 // admitCandidate is the gate. Every rule here is one discovery already
-// applies; the ordering is what keeps a harvest cheap.
+// applies; the ordering is what keeps a pass cheap.
 //
 // Free checks run before the board call, the board call runs before the
 // website work, and the website work runs before anything is written. A
 // candidate rejected at the first step costs nothing at all, which matters
-// when the input is thirteen thousand slugs of which most are already stored,
-// dead, or hiring nowhere near India.
-func admitCandidate(c slugCandidate, idx *directoryIndex) (harvestOutcome, bool, error) {
+// when most of the queue is already stored, dead, or hiring nowhere near
+// India.
+//
+// It returns the outcome, the company the candidate ended up on where there is
+// one, and — for a deferral only — the cause, which is recorded for the
+// operator and never used to decide anything.
+func admitCandidate(ctx context.Context, c slugCandidate, idx *directoryIndex) (harvestOutcome, string, error) {
 	provider := strings.ToLower(strings.TrimSpace(c.Provider))
 	slug := strings.TrimSpace(c.Slug)
 	if provider == "" || slug == "" || !validATSSlug(slug) || !boardSlugIsAdmissible(slug) {
-		return outcomeSkipped, false, nil
+		return outcomeSkipped, "", nil
 	}
 	if idx.hasBoard(provider, slug) {
-		return outcomeDuplicate, false, nil
+		return outcomeDuplicate, "", nil
 	}
 
 	// A harvested slug carries no page title, so the name starts as whatever
@@ -394,11 +477,11 @@ func admitCandidate(c slugCandidate, idx *directoryIndex) (harvestOutcome, bool,
 		name = slugDisplayName(slug)
 	}
 	if !boardRowIsAdmissible(name, slug) {
-		return outcomeSkipped, false, nil
+		return outcomeSkipped, "", nil
 	}
 	if sharedBoardRe.MatchString(name) || sharedBoardRe.MatchString(slug) ||
 		aggregatorBoardRe.MatchString(name) || aggregatorBoardRe.MatchString(slug) {
-		return outcomeSkipped, false, nil
+		return outcomeSkipped, "", nil
 	}
 
 	// A Workday slug arrives from the crawl without its job-site id, which is
@@ -406,51 +489,67 @@ func admitCandidate(c slugCandidate, idx *directoryIndex) (harvestOutcome, bool,
 	// after the free checks above have already discarded the tenants we
 	// recognise, and never during collection.
 	if provider == "workday" {
-		resolved := resolveWorkdaySlug(slug)
+		resolved, err := resolveWorkdaySlug(ctx, slug)
+		if err != nil {
+			return outcomeDeferred, "", err
+		}
 		if resolved == "" {
-			return outcomeDeadBoard, true, nil
+			return outcomeDeadBoard, "", nil
 		}
 		slug = resolved
 		if idx.hasBoard(provider, slug) {
-			return outcomeDuplicate, true, nil
+			return outcomeDuplicate, "", nil
 		}
 	}
 
 	// The board's own API. Free, and it answers both remaining questions at
 	// once: is this a real live board, and does it hire here.
+	//
+	// The error is classified rather than collapsed. A 404 is the board
+	// saying it does not exist; a 429 is the host saying not now, and filing
+	// the second as the first is how a rate-limited pass silently drops real
+	// companies and reports a normal-looking dead count. This codebase
+	// already holds that rule — "silence and zero must not look alike" — and
+	// it is IsTransientFetchError that keeps it here.
 	jobs, err := FetchATSJobs("", provider, slug)
-	if err != nil || len(jobs) == 0 {
-		return outcomeDeadBoard, true, nil
+	if err != nil {
+		if IsTransientFetchError(err) {
+			return outcomeDeferred, "", err
+		}
+		return outcomeDeadBoard, "", nil
+	}
+	if len(jobs) == 0 {
+		return outcomeDeadBoard, "", nil
 	}
 	// A board whose only roles are talent-pool signups is not hiring.
 	jobs = dropTalentPools(jobs)
 	jobs = tidyLocations(jobs)
 	if len(jobs) == 0 {
-		return outcomeDeadBoard, true, nil
+		return outcomeDeadBoard, "", nil
 	}
 	if len(jobs) > maxBoardRoles {
-		return outcomeSkipped, true, nil
+		return outcomeSkipped, "", nil
 	}
 	area := firstIndianLocation(jobs)
 	if area == "" {
-		return outcomeNotIndian, true, nil
+		return outcomeNotIndian, "", nil
 	}
 
 	// Name-level duplicate, before spending anything on the website.
 	if dup := idx.duplicate(name, ""); dup != nil {
 		if attachBoardTo(dup, boardHit{Provider: provider, Slug: slug, URL: boardURL(provider, slug)}) {
-			return outcomeAttached, true, nil
+			return outcomeAttached, dup.ID, nil
 		}
 		// Lost the race, or the company already had a board by the time this
 		// candidate reached it — either way it is a duplicate, not a company
 		// this candidate changed.
-		return outcomeDuplicate, true, nil
+		return outcomeDuplicate, dup.ID, nil
 	}
 
 	// The company's own site. The register hands one over; otherwise the free
 	// guess from its board is tried. Neither costs a search, and a harvest
-	// never falls through to resolveCompanyWebsite — a run of this size would
-	// drain the month in an afternoon.
+	// never falls through to resolveCompanyWebsite — a queue of this size
+	// would drain the month in an afternoon.
 	website := strings.TrimSpace(c.Website)
 	if website != "" && !strings.HasPrefix(website, "http") {
 		website = "https://" + website
@@ -463,18 +562,26 @@ func admitCandidate(c slugCandidate, idx *directoryIndex) (harvestOutcome, bool,
 	}
 	domain := extractDomain(website)
 	if domain == "" {
-		return outcomeSkipped, true, nil
+		// No verifiable site. Not a judgement about the board, so it is left
+		// to the monthly re-check rather than rejected outright: a company
+		// whose homepage was down today may resolve next month.
+		return outcomeDeadBoard, "", nil
 	}
 	if dup := idx.duplicate(name, domain); dup != nil {
 		if attachBoardTo(dup, boardHit{Provider: provider, Slug: slug, URL: boardURL(provider, slug)}) {
-			return outcomeAttached, true, nil
+			return outcomeAttached, dup.ID, nil
 		}
-		return outcomeDuplicate, true, nil
+		return outcomeDuplicate, dup.ID, nil
+	}
+
+	companySlug := idx.freeSlug(slugify(name))
+	if companySlug == "" {
+		return outcomeSkipped, "", nil
 	}
 
 	company := models.Company{
 		Name:       name,
-		Slug:       slugify(name),
+		Slug:       companySlug,
 		Website:    website,
 		Domain:     domain,
 		Sector:     strings.TrimSpace(c.Sector),
@@ -494,29 +601,29 @@ func admitCandidate(c slugCandidate, idx *directoryIndex) (harvestOutcome, bool,
 	// its registered office, frequently a founder's home in another city
 	// entirely: taking those first put a Bengaluru company's pin on a Mumbai
 	// address, and the card and the map then disagreed about where the work
-	// is. They stay as the fallback for the case geocoding cannot answer,
-	// which is still better than fallbackCoordsForArea's hash of a name.
+	// is. They stay as the fallback for the case geocoding cannot answer.
 	if lat, lng, geoErr := geocodeArea(area); geoErr == nil {
 		company.Lat, company.Lng = lat, lng
 	} else if c.Lat != nil && c.Lng != nil {
 		company.Lat, company.Lng = c.Lat, c.Lng
 	}
 
+	// Both unique columns are named, so a collision on either is a no-op
+	// rather than an error. freeSlug makes the slug case unlikely; this makes
+	// it harmless when two workers pick the same free slug at the same moment.
 	result := config.DB.Clauses(clause.OnConflict{
 		Columns:   []clause.Column{{Name: "domain"}},
 		DoNothing: true,
 	}).Create(&company)
 	if result.Error != nil {
-		// Distinct from an ordinary reject: the candidate was never actually
-		// judged, so it must not be allowed to look like one. Reported to the
-		// caller as an error rather than folded into outcomeSkipped, which
-		// otherwise reads identically to a candidate the rules correctly
-		// turned down — see HarvestSlugs.
+		// The candidate was never actually judged, so it must not be recorded
+		// as though it were. Deferring re-tries it on a backoff instead of
+		// burying a database problem as a rejected company.
 		log.Printf("slug harvest: failed to save %q: %v", name, result.Error)
-		return outcomeSkipped, true, fmt.Errorf("saving %q: %w", name, result.Error)
+		return outcomeDeferred, "", fmt.Errorf("saving %q: %w", name, result.Error)
 	}
 	if result.RowsAffected == 0 {
-		return outcomeDuplicate, true, nil
+		return outcomeDuplicate, "", nil
 	}
 	idx.remember(company)
 
@@ -528,60 +635,7 @@ func admitCandidate(c slugCandidate, idx *directoryIndex) (harvestOutcome, bool,
 	} else {
 		log.Printf("slug harvest: %s (%s/%s) -> %d roles", name, provider, slug, n)
 	}
-	return outcomeStored, true, nil
-}
-
-// HarvestOptions is what an operator chose on the command line.
-type HarvestOptions struct {
-	// CommonCrawl reads board slugs out of the published URL index. Cheap and
-	// broad: about twenty requests for thousands of slugs.
-	CommonCrawl bool
-	// StartupRegister walks the accelerator portfolios for companies that
-	// arrive with a sector, a stage and coordinates. Slow and narrow.
-	StartupRegister bool
-	// Indexes is how many recent Common Crawl indexes to read. More is worth
-	// it: a second index added 204 Keka slugs and 745 Greenhouse ones the
-	// first did not have, because boards open and close between crawls.
-	Indexes int
-	// Limit caps companies stored, and for the register also caps pages read.
-	// Zero means no cap, which only a deliberate backfill should use.
-	Limit int
-}
-
-// RunHarvest collects candidates from the chosen sources and admits them.
-//
-// It lives here rather than in main so the candidate type stays unexported:
-// assembling candidates is this package's business, and a caller that could
-// build one by hand could bypass the admission rules that make a board
-// trustworthy.
-func RunHarvest(opts HarvestOptions) (HarvestStats, error) {
-	var candidates []slugCandidate
-
-	if opts.CommonCrawl {
-		n := opts.Indexes
-		if n <= 0 {
-			n = 1
-		}
-		ids, err := LatestCommonCrawlIndexes(n)
-		if err != nil {
-			return HarvestStats{}, err
-		}
-		log.Printf("harvest: reading Common Crawl indexes %v", ids)
-		candidates = append(candidates, HarvestFromCommonCrawl(ids)...)
-	}
-
-	if opts.StartupRegister {
-		log.Printf("harvest: reading the startup register's accelerator portfolios")
-		candidates = append(candidates, HarvestFromStartupRegister(nil, opts.Limit)...)
-	}
-
-	log.Printf("harvest: %d candidates collected", len(candidates))
-	// capped is discarded here: this is the manual CLI backfill, which does
-	// not track a HarvestState to advance or withhold — the operator sees
-	// the "capped" line in the log directly and re-runs with a larger -limit
-	// if they want the rest.
-	stats, _, err := HarvestSlugs(candidates, opts.Limit)
-	return stats, err
+	return outcomeStored, company.ID, nil
 }
 
 // talentPoolRe matches the evergreen "send us your CV" posting most boards
@@ -598,10 +652,6 @@ func RunHarvest(opts HarvestOptions) (HarvestStats, error) {
 // contains them — unlike the single words in ctaTitles, which is why that list
 // stayed exact-match. "Talent Acquisition Specialist" and "Application Security
 // Engineer" both survive this.
-//
-// It lives here rather than in looksLikeRoleTitle because only the harvest has
-// met it so far. If the ordinary sync starts seeing these too, that is the
-// moment to move it into the shared guard rather than before.
 var talentPoolRe = regexp.MustCompile(`(?i)talent (community|pool|network|bench)|general application|future opportunit|speculative application|open application|didn'?t find|don'?t see (a|the) role`)
 
 // dropTalentPools removes the postings above from a board's roles.
@@ -640,89 +690,6 @@ func tidyLocation(raw string) string {
 	return strings.Trim(s, " ,")
 }
 
-// SlugHarvestLeaseName is the cron lease for the scheduled harvest.
-const SlugHarvestLeaseName = "slug-harvest"
-
-// slugHarvestLeaseTTL spans a full tick, so a second instance cannot repeat
-// the tick this one just ran.
-const slugHarvestLeaseTTL = 3 * time.Hour
-
-// scheduledHarvestLimit caps what one scheduled tick will store.
-//
-// A manual backfill passes zero and takes everything; a scheduled run should
-// not, because the tick that follows a newly published index is the one that
-// finds thousands of boards at once and there is no reason for it to hold the
-// lease for hours. What it skips is not lost — the index is recorded only
-// after a completed pass, so the next tick continues where this one stopped.
-const scheduledHarvestLimit = 400
-
-// RunScheduledHarvest is the cron entry point.
-//
-// It is deliberately cheap to call often and expensive only when there is
-// something new. Common Crawl publishes about one index a month; a tick that
-// finds the index it already read logs one line and returns, having spent a
-// single request. That is what makes a three-hourly schedule reasonable for a
-// monthly source — the schedule decides how promptly a new index is noticed,
-// not how often the work is redone.
-func RunScheduledHarvest() {
-	if !AcquireCronLease(SlugHarvestLeaseName, slugHarvestLeaseTTL) {
-		log.Printf("slug harvest: another instance holds the lease, skipping")
-		return
-	}
-
-	indexes, err := LatestCommonCrawlIndexes(1)
-	if err != nil || len(indexes) == 0 {
-		log.Printf("slug harvest: could not read the Common Crawl index list: %v", err)
-		return
-	}
-	newest := indexes[0]
-
-	var state models.HarvestState
-	if err := config.DB.Where("source = ?", SourceCommonCrawl).First(&state).Error; err == nil &&
-		state.LastIndex == newest {
-		log.Printf("slug harvest: %s already read (last run %s, %d stored) — nothing new to collect",
-			newest, state.LastRunAt.Format(time.RFC3339), state.Stored)
-		return
-	}
-
-	log.Printf("slug harvest: %s is new, collecting", newest)
-	stats, capped, err := HarvestSlugs(HarvestFromCommonCrawl([]string{newest}), scheduledHarvestLimit)
-	if err != nil {
-		// Same reasoning as the record below: a pass that could not run must
-		// not mark the index as read, or the next tick skips an index nothing
-		// ever collected.
-		log.Printf("slug harvest: %s not collected: %v", newest, err)
-		return
-	}
-	if capped {
-		// scheduledHarvestLimit stopped this tick before the index was fully
-		// read — most indexes hold far more than 400 new companies. Recording
-		// LastIndex here would tell the next tick this index is done, and
-		// every candidate past the cap would be lost for good: nothing else
-		// ever revisits an index once a newer one is published. Leaving
-		// LastIndex where it was makes the next tick read this same index
-		// again — cheap, since everything already stored is now a free
-		// duplicate check (see admitCandidate's networked guard) and only the
-		// candidates past where this tick stopped cost anything.
-		log.Printf("slug harvest: %s capped at %d — leaving LastIndex unset so the next tick continues it",
-			newest, scheduledHarvestLimit)
-		return
-	}
-
-	// Recorded only after the pass completes without being capped. A run
-	// that dies half way, or stops at the store limit, leaves the index
-	// unrecorded, so the next tick picks it up again rather than skipping
-	// the part it never read.
-	if err := config.DB.Save(&models.HarvestState{
-		Source:    SourceCommonCrawl,
-		LastIndex: newest,
-		LastRunAt: time.Now(),
-		Stored:    stats.Stored,
-	}).Error; err != nil {
-		log.Printf("slug harvest: could not record %s as read: %v", newest, err)
-	}
-}
-
 // resolveWorkdaySlug fills in the job-site id a crawled Workday URL does not
 // carry, returning "" when no candidate site answers with postings.
 //
@@ -731,32 +698,41 @@ func RunScheduledHarvest() {
 // scanForATS already does when it finds a Workday link on a careers page.
 // This is the same probe, reached from the other direction.
 //
-// Worst case is five requests for a tenant that answers to none of the common
-// site ids, and one for a tenant that answers to the first. That is affordable
-// here and would not have been during collection, where it would have run for
-// every one of the 1,166 crawled tenants before anything had been filtered.
+// The error return is the point of the rewrite: a tenant that answered 429 to
+// all five probes used to be indistinguishable from one that answered 404 to
+// all five, and was recorded as dead. Now the caller can tell, and a throttled
+// tenant is retried instead of written off.
 //
 // A slug that already carries a site id is returned untouched, so a candidate
 // from any other source passes through.
-func resolveWorkdaySlug(slug string) string {
+func resolveWorkdaySlug(ctx context.Context, slug string) (string, error) {
 	parts := strings.Split(slug, ":")
 	if len(parts) != 3 {
-		return ""
+		return "", nil
 	}
 	tenant, region, site := parts[0], parts[1], parts[2]
 	if site != "" {
-		return slug
+		return slug, nil
 	}
 	if tenant == "" || region == "" {
-		return ""
+		return "", nil
 	}
 
+	var transient error
 	for _, candidate := range workdaySiteCandidates {
-		full := tenant + ":" + region + ":" + candidate
-		if jobs, err := fetchWorkdayJobs(full); err == nil && len(jobs) > 0 {
-			return full
+		if err := ctx.Err(); err != nil {
+			return "", err
 		}
-		time.Sleep(harvestPoliteness)
+		full := tenant + ":" + region + ":" + candidate
+		jobs, err := fetchWorkdayJobs(full)
+		if err == nil && len(jobs) > 0 {
+			return full, nil
+		}
+		if IsTransientFetchError(err) {
+			transient = err
+		}
 	}
-	return ""
+	// Only after every probe has been tried: one site id answering 404 while
+	// another was throttled is still a tenant we have not properly asked.
+	return "", transient
 }

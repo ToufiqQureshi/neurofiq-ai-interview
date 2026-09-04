@@ -107,7 +107,7 @@ func main() {
 		&models.User{}, &models.GithubProfile{}, &models.Question{},
 		&models.InterviewSession{},
 		&models.Company{}, &models.Job{}, &models.ScrapeUsage{},
-		&models.CronLease{}, &models.HarvestState{},
+		&models.CronLease{}, &models.HarvestState{}, &models.BoardCandidate{},
 	); err != nil {
 		log.Fatalf("Migration failed: %v", err)
 	}
@@ -357,10 +357,39 @@ func main() {
 	// cadence therefore decides how promptly a new index is noticed, not how
 	// often ten thousand boards are re-read. Anything rarer would leave a
 	// month's worth of new companies waiting on the next tick.
-	if _, err := scheduler.AddFunc("@every 3h", func() {
-		safely("slug harvest", services.RunScheduledHarvest)
+	// Collection tops the candidate queue up from a source; admission works
+	// that queue down. Separate schedules because they fail differently and
+	// neither should be able to stall the other — see slug_harvest_schedule.go.
+	//
+	// Six-hourly against a monthly source looks wrong and is not:
+	// RunSlugCollection compares the newest published index against the one it
+	// last read and returns after a single request when they match.
+	if _, err := scheduler.AddFunc("@every 6h", func() {
+		safely("slug collection", services.RunSlugCollection)
 	}); err != nil {
-		log.Fatalf("Failed to schedule the slug harvest: %v", err)
+		log.Fatalf("Failed to schedule slug collection: %v", err)
+	}
+	// Admission is the tick that actually produces companies and roles, so it
+	// is small and frequent: a bounded batch inside a wall-clock budget, which
+	// always finishes and therefore can never be lapped by the next tick.
+	if _, err := scheduler.AddFunc("@every 15m", func() {
+		safely("candidate admission", services.RunCandidateAdmission)
+	}); err != nil {
+		log.Fatalf("Failed to schedule candidate admission: %v", err)
+	}
+	// Repairs the denormalised companies.open_roles from the jobs table. The
+	// counter is written by every path that writes roles; this is what makes a
+	// drift caused by a crash mid-write self-correcting rather than permanent.
+	if _, err := scheduler.AddFunc("@every 6h", func() {
+		safely("open-role recount", func() {
+			if n, err := services.RecountOpenRoles(); err != nil {
+				log.Printf("open-role recount failed: %v", err)
+			} else if n > 0 {
+				log.Printf("open-role recount: corrected %d companies", n)
+			}
+		})
+	}); err != nil {
+		log.Fatalf("Failed to schedule the open-role recount: %v", err)
 	}
 	// Housekeeping: reclaim abandoned analyses and forget idle rate-limit
 	// buckets. Cheap, and it keeps a long-running process from drifting.
@@ -427,7 +456,8 @@ func main() {
 	<-scheduler.Stop().Done()
 	services.ReleaseCronLease(services.DiscoveryLeaseName)
 	services.ReleaseCronLease(services.JobSyncLeaseName)
-	services.ReleaseCronLease(services.SlugHarvestLeaseName)
+	services.ReleaseCronLease(services.SlugCollectionLeaseName)
+	services.ReleaseCronLease(services.CandidateAdmissionLeaseName)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
@@ -564,6 +594,7 @@ func runHarvest() bool {
 		register = flag.Bool("harvest-register", false, "backfill companies from the startup register's accelerator portfolios")
 		indexes  = flag.Int("indexes", 1, "how many recent Common Crawl indexes to read")
 		limit    = flag.Int("limit", 0, "cap companies stored (0 = no cap); for -harvest-register, also caps pages read")
+		admit    = flag.Bool("admit", false, "after collecting, judge queued candidates until the queue is drained")
 	)
 	flag.Parse()
 
@@ -576,6 +607,7 @@ func runHarvest() bool {
 		StartupRegister: *register,
 		Indexes:         *indexes,
 		Limit:           *limit,
+		Admit:           *admit,
 	})
 	if err != nil {
 		log.Fatalf("harvest: %v", err)
