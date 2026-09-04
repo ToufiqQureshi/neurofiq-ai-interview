@@ -301,6 +301,12 @@ func main() {
 	// scraping and without an LLM. Run once immediately so a fresh deploy
 	// doesn't sit empty waiting on the first scheduled tick — the cron lease
 	// inside RunDiscoveryRotation makes sure only one instance does the work.
+	// Blocking, before a single request can be served: the directory listing
+	// filters and sorts on companies.open_roles, and that column is zero for
+	// every row until this runs. A server that comes up first answers
+	// "hiring=1" with an empty directory.
+	services.RunBlockingStartupRepairs()
+
 	// Derived columns first, before anything reads them. companies.open_roles
 	// and jobs.field/level ship with data already behind them, so on the first
 	// boot after this change they are empty — an empty-looking directory until

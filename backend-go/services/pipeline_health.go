@@ -2,6 +2,7 @@ package services
 
 import (
 	"fmt"
+	"gorm.io/gorm"
 	"log"
 	"time"
 
@@ -36,6 +37,23 @@ type PipelineHealth struct {
 	CheckedAt time.Time     `json:"checked_at"`
 	Checks    []HealthCheck `json:"checks"`
 }
+
+// processStartedAt is when this instance came up.
+//
+// Two checks need it, for the same reason: on a fresh deploy the pipeline has
+// not run yet, and "has not run yet" must not read as "is broken". Reporting
+// unhealthy at boot is worse than useless when the endpoint is wired to a
+// platform health check — the deploy is rolled back for failing a test of work
+// it has not had time to do, and the rollback restores a build that fails it
+// the same way.
+var processStartedAt = time.Now()
+
+// startupGrace is how long after boot those checks stay quiet.
+//
+// Longer than the intervals they describe: collection runs six-hourly and the
+// sync rotation is sized to turn the directory over daily, so a verdict before
+// then is a verdict about the clock rather than about the pipeline.
+const startupGrace = 26 * time.Hour
 
 const (
 	// admissionStallWindow is how long the queue may go without a single
@@ -122,6 +140,12 @@ func CheckPipelineHealth() PipelineHealth {
 	add("host pacing", true, "%s", detail)
 
 	// 4. Is the sync rotation keeping up.
+	//
+	// Within the startup grace this reports without judging. The column is
+	// populated by the rotation itself, so on the first boot after it was
+	// introduced every company reads as never-synced — which is a fact about
+	// the column's age, not about the directory going stale.
+	young := time.Since(processStartedAt) < startupGrace
 	var stale int64
 	config.DB.Model(&models.Company{}).
 		Where("last_synced_at IS NULL OR last_synced_at < ?", time.Now().Add(-syncStaleWindow)).
@@ -130,13 +154,20 @@ func CheckPipelineHealth() PipelineHealth {
 	// synced at the moment they were stored. The threshold is a share of the
 	// directory rather than a count, so it means the same thing at any size.
 	tolerance := companies / 4
-	add("sync rotation", stale <= tolerance,
-		"%d of %d companies not synced in %s", stale, companies, syncStaleWindow)
+	if young {
+		add("sync rotation", true,
+			"%d of %d companies awaiting their first turn (within %s of startup)",
+			stale, companies, startupGrace)
+	} else {
+		add("sync rotation", stale <= tolerance,
+			"%d of %d companies not synced in %s", stale, companies, syncStaleWindow)
+	}
 
 	// 5. Has collection ever run.
 	var state models.HarvestState
 	if err := config.DB.Where("source = ?", SourceCommonCrawl).First(&state).Error; err != nil {
-		add("collection", false, "no Common Crawl index has been read yet")
+		add("collection", young, "no Common Crawl index has been read yet%s",
+			map[bool]string{true: " (within startup grace)", false: ""}[young])
 	} else {
 		add("collection", true, "last read %s at %s",
 			state.LastIndex, state.LastRunAt.Format(time.RFC3339))
@@ -194,17 +225,57 @@ func LogPipelineHealth() {
 //
 // Cheap and idempotent on every later boot: the recount touches only rows that
 // disagree, and the backfill finds nothing once the columns are populated.
-func RunStartupRepairs() {
+// RunBlockingStartupRepairs is the part that must complete before the server
+// answers its first request.
+//
+// companies.open_roles is what the directory listing filters, sorts and badges
+// on. Immediately after the migration that adds it, it is zero for every row —
+// so a server that starts serving before the recount finishes answers
+// "hiring=1" with nothing and orders everything else at random. Measured
+// against the live directory: 535 companies, 6,189 roles, every counter zero
+// until this ran, and the repair itself took 204ms. There is no reason to race
+// it, and every reason not to.
+//
+// Idempotent and cheap on every later boot: one UPDATE that touches only the
+// rows that disagree.
+func RunBlockingStartupRepairs() {
 	if n, err := RecountOpenRoles(); err != nil {
 		log.Printf("startup repair: could not recount open roles: %v", err)
 	} else if n > 0 {
 		log.Printf("startup repair: corrected open_roles on %d companies", n)
 	}
 
-	// Bounded so a large jobs table does not delay the server coming up; the
-	// scheduled pass finishes whatever is left.
+	// last_synced_at is written by the rotation, so on the first boot after it
+	// was added every company reads as never-synced and all of them crowd the
+	// front of the queue at once. They are not actually unsynced: the hourly
+	// job sync this replaces was refreshing all of them, it simply had nowhere
+	// to record that. Seeding from created_at keeps the ordering meaningful —
+	// the oldest companies still go first — without claiming a sync happened
+	// at a moment we cannot know.
+	if config.DB.Migrator().HasColumn(&models.Company{}, "last_synced_at") {
+		res := config.DB.Model(&models.Company{}).
+			Where("last_synced_at IS NULL").
+			Update("last_synced_at", gorm.Expr("created_at"))
+		if res.Error != nil {
+			log.Printf("startup repair: could not seed last_synced_at: %v", res.Error)
+		} else if res.RowsAffected > 0 {
+			log.Printf("startup repair: seeded last_synced_at on %d companies", res.RowsAffected)
+		}
+	}
+}
+
+// RunStartupRepairs finishes the work that can happen while the server is
+// already answering.
+//
+// The facet columns degrade rather than break: a job with no stored bucket
+// counts as "Other"/"Unspecified" until it is classified, which is a wrong
+// filter count for a few seconds rather than a missing directory. Time-bounded
+// so a large jobs table cannot hold the boot goroutine indefinitely; the
+// scheduled pass finishes whatever is left.
+func RunStartupRepairs() {
+	deadline := time.Now().Add(2 * time.Minute)
 	total := 0
-	for pass := 0; pass < 10; pass++ {
+	for time.Now().Before(deadline) {
 		n, err := BackfillJobFacets(2000)
 		if err != nil {
 			log.Printf("startup repair: job facet backfill failed: %v", err)

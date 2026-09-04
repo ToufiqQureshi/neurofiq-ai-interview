@@ -6,7 +6,7 @@ import "time"
 // finished judging — the harvest's work queue, kept in the database rather
 // than in a slice that dies with the process.
 //
-// Why this table exists
+// # Why this table exists
 //
 // The harvest used to hold its whole candidate list in memory for one run and
 // remember only which Common Crawl index it had read. That left three holes,
@@ -55,7 +55,14 @@ type BoardCandidate struct {
 	// CompanyID is set once the candidate became, or joined, a company. It is
 	// what lets an operator answer "where did this company come from" without
 	// reading the logs.
-	CompanyID string `gorm:"type:uuid" json:"company_id"`
+	//
+	// Text, not uuid, although it holds one. A candidate has no company for
+	// most of its life, and Postgres rejects the empty string as a uuid — so
+	// typed as uuid this column failed every insert of a new candidate, which
+	// is every insert collection makes. A pointer would be the other answer;
+	// text is the smaller one, and this is a breadcrumb for a person rather
+	// than a foreign key anything joins on.
+	CompanyID string `json:"company_id"`
 
 	// Source names the harvester that suggested this board.
 	Source string `json:"source"`
