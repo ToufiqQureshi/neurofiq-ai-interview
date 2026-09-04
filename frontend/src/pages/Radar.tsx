@@ -25,10 +25,28 @@ export function Radar() {
     if (progressTimer.current) clearInterval(progressTimer.current);
   }, []);
 
+  const isScrapableUrl = (value: string) => {
+    try {
+      const parsed = new URL(value.trim());
+      return parsed.protocol === 'http:' || parsed.protocol === 'https:';
+    } catch {
+      return false;
+    }
+  };
+
   const handleScan = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!url.trim()) return;
-    
+
+    // Every scan here spends a metered scrape on the paid endpoint. Garbage
+    // input still spent one and came back as a full "0/100 — Low Visibility"
+    // result card rather than a validation error — catch it before it
+    // leaves the browser.
+    if (!isScrapableUrl(url)) {
+      setError('Enter a full profile URL, starting with https://');
+      return;
+    }
+
     setScanState('scanning');
     setProgress(0);
     setError(null);
@@ -243,8 +261,30 @@ export function Radar() {
           </div>
         )}
 
+        {/* The worker answers 200 even when it never reached the page — the
+            payload just describes the failure as a zero-score "analysis"
+            (profile_name: "Scraping Failed"). Rendered through the normal
+            dashboard below, that read as a real score: a large red 0/100
+            gauge captioned "Low Visibility". A score is a claim about the
+            profile; this response doesn't have one. */}
+        {scanState === 'results' && radarData && radarData.profile_name === 'Scraping Failed' && (
+          <div className="flex-1 flex flex-col items-center justify-center gap-4 max-w-xl mx-auto w-full text-center py-16">
+            <ShieldAlert className="w-10 h-10 text-amber-400" />
+            <h2 className="text-xl font-display font-bold text-white">Couldn't analyze this profile</h2>
+            <p className="text-sm text-zinc-400">
+              {radarData.general_advice || "We couldn't fetch this page. Double-check the URL is public and try again."}
+            </p>
+            <button
+              onClick={resetRadar}
+              className="mt-2 px-6 py-3 rounded-xl bg-zinc-800 hover:bg-zinc-700 text-white text-sm font-semibold transition-colors"
+            >
+              Try another profile
+            </button>
+          </div>
+        )}
+
         {/* Bento Box Results Dashboard */}
-        {scanState === 'results' && radarData && (
+        {scanState === 'results' && radarData && radarData.profile_name !== 'Scraping Failed' && (
           <div className="flex-1 flex flex-col space-y-6 animate-in fade-in slide-in-from-bottom-12 duration-1000 max-w-7xl mx-auto w-full">
             
             {/* Top Bar - Minimalist Context */}

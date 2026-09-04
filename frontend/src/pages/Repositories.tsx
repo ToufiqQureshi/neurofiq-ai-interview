@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { Search, GitBranch, Check, Loader2, RotateCcw, ArrowRight } from 'lucide-react';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
 import { readTarget, targetQuery } from '../lib/interviewTarget';
+import { useAuth } from '../context/AuthContext';
 
 type Repo = {
   id: number;
@@ -34,6 +35,8 @@ export function Repositories() {
   const [starting, setStarting] = useState(false);
   const navigate = useNavigate();
   const location = useLocation();
+  const { user } = useAuth();
+  const [loadFailed, setLoadFailed] = useState(false);
 
   useEffect(() => {
     fetch(`${api}/api/repos`, { credentials: 'include' })
@@ -52,7 +55,7 @@ export function Repositories() {
         setUsed(d.analyses_used || 0);
         setLimit(d.analyses_limit || 3);
       })
-      .catch(err => setError(err.message))
+      .catch(() => setLoadFailed(true))
       .finally(() => setLoading(false));
   }, [navigate]);
 
@@ -134,15 +137,22 @@ export function Repositories() {
             history, then ask about the decisions you made in it.
           </p>
           <div className="flex items-center gap-2 mt-3">
-            <div className="flex gap-1" aria-hidden="true">
-              {Array.from({ length: limit }).map((_, i) => (
-                <span
-                  key={i}
-                  className={`w-6 h-1.5 rounded-full ${
-                    i < used ? 'bg-ink' : i < used + selected.length ? 'bg-accent' : 'bg-line'
-                  }`}
-                />
-              ))}
+            {/* A pill per slot only reads at single digits — the free tier
+                is 100 slots, which drew a 2,800px row with no wrap and
+                pushed the page into horizontal scroll at every width. One
+                proportional bar scales to any limit. */}
+            <div
+              className="w-32 h-1.5 rounded-full bg-line overflow-hidden flex"
+              aria-hidden="true"
+            >
+              <div
+                className="h-full bg-ink"
+                style={{ width: `${limit > 0 ? Math.min(100, (used / limit) * 100) : 0}%` }}
+              />
+              <div
+                className="h-full bg-accent"
+                style={{ width: `${limit > 0 ? Math.min(100, (selected.length / limit) * 100) : 0}%` }}
+              />
             </div>
             <span className="text-xs font-mono text-ink-faint tabular-nums">
               {used} used · {remaining} left on the free tier
@@ -173,9 +183,23 @@ export function Repositories() {
           <div className="col-span-full text-center py-12 text-sm text-ink-faint bg-surface border border-line rounded-xl">
             Loading repositories...
           </div>
+        ) : loadFailed ? (
+          <div className="col-span-full text-center py-12 text-sm text-ink-faint bg-surface border border-line rounded-xl">
+            Couldn't reach the server. Check your connection and try again.
+          </div>
+        ) : !user?.github_connected ? (
+          <div className="col-span-full flex flex-col items-center gap-3 text-center py-12 text-sm text-ink-faint bg-surface border border-line rounded-xl">
+            <p>Connect your GitHub account to pick a repository to be interviewed on.</p>
+            <a
+              href={`${api}/auth/github/login`}
+              className="px-4 py-2 rounded-full bg-ink hover:bg-black text-white text-xs font-semibold transition-colors"
+            >
+              Connect GitHub
+            </a>
+          </div>
         ) : repos.length === 0 ? (
           <div className="col-span-full text-center py-12 text-sm text-ink-faint bg-surface border border-line rounded-xl">
-            No repositories found. Ensure you have granted GitHub access.
+            No repositories found on this GitHub account.
           </div>
         ) : filteredRepos.length === 0 ? (
           <div className="col-span-full text-center py-12 text-sm text-ink-faint bg-surface border border-line rounded-xl">

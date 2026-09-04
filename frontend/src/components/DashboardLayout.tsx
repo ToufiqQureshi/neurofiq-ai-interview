@@ -51,8 +51,8 @@ export function DashboardLayout() {
   const location = useLocation();
   const { user, logout } = useAuth();
 
-  const displayName = user?.github_username || 'Candidate';
-  const displayEmail = user?.email || 'No email on file';
+  const displayName = user?.full_name || user?.github_username || 'there';
+  const displayEmail = user?.email || '';
   const groups = navGroups;
 
   return (
@@ -135,20 +135,36 @@ export function DashboardLayout() {
         </div>
 
         <div className="p-4 border-t border-line space-y-1">
-          <div className="flex items-center gap-3 px-3 py-2 rounded-lg">
-            <Avatar avatarUrl={user?.avatar_url} name={displayName} className="w-8 h-8 flex-shrink-0" />
-            <div className="flex-1 min-w-0">
-              <p className="font-semibold text-xs text-ink truncate">{displayName}</p>
-              <p className="text-[10px] text-ink-faint truncate">{displayEmail}</p>
-            </div>
-          </div>
-          <button
-            onClick={logout}
-            className="w-full flex items-center gap-3 px-3 py-2 rounded-lg text-sm text-ink-soft hover:bg-paper hover:text-ink transition-colors"
-          >
-            <LogOut className="w-4 h-4 text-ink-faint" />
-            Sign out
-          </button>
+          {user ? (
+            <>
+              <div className="flex items-center gap-3 px-3 py-2 rounded-lg">
+                <Avatar avatarUrl={user.avatar_url} name={displayName} className="w-8 h-8 flex-shrink-0" />
+                <div className="flex-1 min-w-0">
+                  <p className="font-semibold text-xs text-ink truncate">{displayName}</p>
+                  <p className="text-[10px] text-ink-faint truncate">{displayEmail}</p>
+                </div>
+              </div>
+              <button
+                onClick={logout}
+                className="w-full flex items-center gap-3 px-3 py-2 rounded-lg text-sm text-ink-soft hover:bg-paper hover:text-ink transition-colors"
+              >
+                <LogOut className="w-4 h-4 text-ink-faint" />
+                Sign out
+              </button>
+            </>
+          ) : (
+            // This layout also wraps the public /jobs and /directory routes,
+            // where there is no session at all — showing a fake "Candidate"
+            // profile with a working Sign out button here was worse than
+            // showing nothing, since it claimed an identity the visitor
+            // never had.
+            <Link
+              to="/auth"
+              className="w-full flex items-center justify-center gap-2 px-3 py-2.5 rounded-lg text-sm font-semibold bg-ink text-white hover:bg-black transition-colors"
+            >
+              Sign in
+            </Link>
+          )}
         </div>
       </aside>
 

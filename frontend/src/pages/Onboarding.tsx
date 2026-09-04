@@ -361,6 +361,10 @@ export function Onboarding() {
                   setError('Please enter your full name');
                   return;
                 }
+                if (step === 2 && selectedTech.length < 2) {
+                  setError('Select at least 2 technologies — this is what the interviewer tailors questions to.');
+                  return;
+                }
                 setError(null);
                 setStep((s) => (s + 1) as any);
               }}

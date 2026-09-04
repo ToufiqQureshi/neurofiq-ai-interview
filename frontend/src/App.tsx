@@ -13,6 +13,7 @@ import { InviteLanding } from './pages/InviteLanding';
 import { CompanyMap } from './pages/CompanyMap';
 import { JobsPortal } from './pages/JobsPortal';
 import { Radar } from './pages/Radar';
+import { NotFound } from './pages/NotFound';
 import { DashboardLayout } from './components/DashboardLayout';
 import { AuthProvider } from './context/AuthContext';
 import { ProtectedRoute } from './components/ProtectedRoute';
@@ -54,6 +55,8 @@ function App() {
               <Route path="/report/:sessionId" element={<Report />} />
             </Route>
           </Route>
+
+          <Route path="*" element={<NotFound />} />
         </Routes>
       </BrowserRouter>
     </AuthProvider>

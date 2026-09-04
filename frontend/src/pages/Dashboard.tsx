@@ -41,7 +41,7 @@ export function Dashboard() {
     <div className="p-6 md:p-8 max-w-7xl mx-auto space-y-5">
       <div>
         <h1 className="font-display text-2xl font-extrabold text-ink">Dashboard</h1>
-        <p className="text-sm text-ink-faint mt-1">Welcome back, {user?.github_username || 'there'}.</p>
+        <p className="text-sm text-ink-faint mt-1">Welcome back, {user?.full_name || user?.github_username || 'there'}.</p>
       </div>
 
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4">

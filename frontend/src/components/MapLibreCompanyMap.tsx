@@ -5,6 +5,25 @@ import { useNavigate } from 'react-router-dom';
 import { Sparkles, Compass } from 'lucide-react';
 import CompanyDrawer from './CompanyDrawer';
 
+// Every pin and popup below is built with innerHTML for MapLibre's marker
+// API, and every value going into them — company name, description, job
+// title, department — comes from a scraped ATS board or LLM extraction, not
+// from this app. A job title containing a stray `<` is all it takes to break
+// out of the template. Escape on the way in rather than trusting the source.
+function escapeHtml(value: unknown): string {
+  return String(value ?? '').replace(/[&<>"']/g, (ch) => (
+    { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[ch] as string
+  ));
+}
+
+// Scraped URLs are only ever used as href/src here, never executed — but a
+// javascript: or data: URL in an href is a click away from running. Only
+// http(s) is a legitimate destination for a company site or job posting.
+function safeUrl(value: unknown): string {
+  const s = String(value ?? '').trim();
+  return /^https?:\/\//i.test(s) ? s : '';
+}
+
 interface Company {
   id: string;
   name: string;
@@ -142,9 +161,10 @@ export default function MapLibreCompanyMap({ companies, selectedHub }: MapLibreC
       el.className = 'custom-maplibre-pin';
       
       const faviconUrl = c.domain
-        ? `https://www.google.com/s2/favicons?domain=${c.domain}&sz=128`
+        ? `https://www.google.com/s2/favicons?domain=${encodeURIComponent(c.domain)}&sz=128`
         : '';
-      const initial = c.name ? c.name.charAt(0).toUpperCase() : 'C';
+      const safeName = escapeHtml(c.name);
+      const initial = escapeHtml(c.name ? c.name.charAt(0).toUpperCase() : 'C');
       const hasJobs = c.job_count > 0;
 
       el.innerHTML = `
@@ -152,12 +172,12 @@ export default function MapLibreCompanyMap({ companies, selectedHub }: MapLibreC
           <div class="maplibre-pin-avatar">
             ${
               faviconUrl
-                ? `<img src="${faviconUrl}" alt="${c.name}" onerror="this.style.display='none';this.nextElementSibling.style.display='flex';" />
+                ? `<img src="${escapeHtml(faviconUrl)}" alt="${safeName}" onerror="this.style.display='none';this.nextElementSibling.style.display='flex';" />
                    <span class="maplibre-pin-fallback" style="display:none;">${initial}</span>`
                 : `<span class="maplibre-pin-fallback">${initial}</span>`
             }
           </div>
-          ${hasJobs ? `<span class="maplibre-pin-badge">${c.job_count}</span>` : ''}
+          ${hasJobs ? `<span class="maplibre-pin-badge">${escapeHtml(c.job_count)}</span>` : ''}
         </div>
       `;
 
@@ -168,21 +188,21 @@ export default function MapLibreCompanyMap({ companies, selectedHub }: MapLibreC
             <div class="w-8 h-8 rounded-lg bg-slate-100 border border-slate-200 flex items-center justify-center overflow-hidden shrink-0">
               ${
                 faviconUrl
-                  ? `<img src="${faviconUrl}" alt="${c.name}" class="w-6 h-6 object-contain" />`
+                  ? `<img src="${escapeHtml(faviconUrl)}" alt="${safeName}" class="w-6 h-6 object-contain" />`
                   : `<span class="font-bold text-xs text-slate-700">${initial}</span>`
               }
             </div>
             <div class="min-w-0 flex-1">
-              <h4 class="font-bold text-sm text-slate-900 leading-tight truncate">${c.name}</h4>
+              <h4 class="font-bold text-sm text-slate-900 leading-tight truncate">${safeName}</h4>
               <span class="text-[11px] text-slate-500 flex items-center gap-1 font-mono mt-0.5">
-                📍 ${c.area}
+                📍 ${escapeHtml(c.area)}
               </span>
             </div>
           </div>
-          <p class="text-xs text-slate-600 leading-relaxed mb-3 line-clamp-2">${c.description || 'Indian tech startup.'}</p>
+          <p class="text-xs text-slate-600 leading-relaxed mb-3 line-clamp-2">${escapeHtml(c.description) || 'Indian tech startup.'}</p>
           <div class="flex items-center gap-1.5 flex-wrap mb-3">
-            <span class="text-[10px] font-mono px-2 py-0.5 rounded-full bg-slate-100 text-slate-700 font-semibold border border-slate-200">${c.sector || 'Tech'}</span>
-            <span class="text-[10px] font-mono px-2 py-0.5 rounded-full bg-slate-100 text-slate-700 font-semibold border border-slate-200">${c.stage || 'Startup'}</span>
+            <span class="text-[10px] font-mono px-2 py-0.5 rounded-full bg-slate-100 text-slate-700 font-semibold border border-slate-200">${escapeHtml(c.sector) || 'Tech'}</span>
+            <span class="text-[10px] font-mono px-2 py-0.5 rounded-full bg-slate-100 text-slate-700 font-semibold border border-slate-200">${escapeHtml(c.stage) || 'Startup'}</span>
             ${
               hasJobs
                 ? `<button id="map-roles-toggle-${c.id}" class="text-[10px] font-mono px-2.5 py-0.5 rounded-full bg-emerald-50 text-emerald-700 hover:bg-emerald-100 font-semibold border border-emerald-200/80 cursor-pointer transition-colors flex items-center gap-1 shadow-sm">💼 ${c.job_count} open role${c.job_count > 1 ? 's' : ''} ▼</button>`
@@ -196,8 +216,8 @@ export default function MapLibreCompanyMap({ companies, selectedHub }: MapLibreC
 
           <div class="flex items-center justify-between gap-2 pt-2 border-t border-slate-100">
             ${
-              c.website
-                ? `<a href="${c.website}" target="_blank" rel="noreferrer" class="text-xs text-indigo-600 font-semibold hover:underline flex items-center gap-1">Website ↗</a>`
+              safeUrl(c.website)
+                ? `<a href="${escapeHtml(safeUrl(c.website))}" target="_blank" rel="noopener noreferrer" class="text-xs text-indigo-600 font-semibold hover:underline flex items-center gap-1">Website ↗</a>`
                 : '<span></span>'
             }
             <button id="map-practice-btn-${c.id}" class="px-3 py-1.5 rounded-xl bg-slate-900 hover:bg-black text-white text-[11px] font-semibold shadow-md transition-all flex items-center gap-1">
@@ -248,12 +268,12 @@ export default function MapLibreCompanyMap({ companies, selectedHub }: MapLibreC
                       (j: { id: string; title: string; department: string; location: string; url: string }) => `
                       <div class="py-2 px-1 hover:bg-slate-50 transition-colors flex items-start justify-between gap-1.5">
                         <div class="min-w-0 flex-1">
-                          <p class="text-xs font-semibold text-slate-800 truncate leading-tight">${j.title}</p>
-                          <p class="text-[10px] text-slate-400 font-mono truncate mt-0.5">${[j.department, j.location].filter(Boolean).join(' · ')}</p>
+                          <p class="text-xs font-semibold text-slate-800 truncate leading-tight">${escapeHtml(j.title)}</p>
+                          <p class="text-[10px] text-slate-400 font-mono truncate mt-0.5">${escapeHtml([j.department, j.location].filter(Boolean).join(' · '))}</p>
                         </div>
                         <div class="flex items-center gap-1 shrink-0">
                           <button id="job-mock-btn-${j.id}" class="px-2 py-0.5 rounded-md text-[10px] font-semibold bg-indigo-50 text-indigo-700 hover:bg-indigo-600 hover:text-white transition-all shadow-sm">Mock</button>
-                          ${j.url ? `<a href="${j.url}" target="_blank" rel="noreferrer" class="text-slate-400 hover:text-slate-700 p-1 text-xs">↗</a>` : ''}
+                          ${safeUrl(j.url) ? `<a href="${escapeHtml(safeUrl(j.url))}" target="_blank" rel="noopener noreferrer" class="text-slate-400 hover:text-slate-700 p-1 text-xs">↗</a>` : ''}
                         </div>
                       </div>
                     `
