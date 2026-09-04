@@ -10,9 +10,9 @@ import (
 	"os"
 	"time"
 
-	"github.com/gin-gonic/gin"
 	"github.com/ToufiqQureshi/neurofiq-ai-interview/backend-go/config"
 	"github.com/ToufiqQureshi/neurofiq-ai-interview/backend-go/models"
+	"github.com/gin-gonic/gin"
 )
 
 // Send an email via Resend API
@@ -51,7 +51,7 @@ func sendResendEmail(to string, magicLink string, jobTitle string) {
 		return
 	}
 	defer resp.Body.Close()
-	
+
 	if resp.StatusCode >= 400 {
 		fmt.Println("Resend API returned status:", resp.StatusCode)
 	} else {
