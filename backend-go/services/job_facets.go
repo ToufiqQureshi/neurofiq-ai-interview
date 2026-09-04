@@ -89,13 +89,24 @@ type FacetCount struct {
 // JobFacets returns field and level counts across all roles matching the
 // given company filters, for the filter chips in the UI.
 func JobFacets(sector, stage, area, q string) (fields, levels []FacetCount, err error) {
-	dbQuery := config.DB.Model(&models.Job{}).
-		Joins("JOIN companies ON companies.id = jobs.company_id")
-	dbQuery = applyFacetFilter(dbQuery, "sector", sector, "companies")
-	dbQuery = applyFacetFilter(dbQuery, "stage", stage, "companies")
-	dbQuery = applyAreaFilter(dbQuery, area, "companies")
-	if q != "" {
-		dbQuery = dbQuery.Where("companies.name ILIKE ? OR companies.description ILIKE ?", "%"+q+"%", "%"+q+"%")
+	// Built fresh for each of the two counts rather than shared between them.
+	//
+	// A *gorm.DB accumulates clauses, and reusing one across two finished
+	// queries relies on session semantics to decide whether the second sees
+	// the first's SELECT and GROUP BY. That is a subtle thing to be right
+	// about and an ugly thing to be wrong about — the level counts would come
+	// back grouped by field — so the query is simply constructed twice. It is
+	// a few pointer allocations against a database round trip.
+	filtered := func() *gorm.DB {
+		db := config.DB.Model(&models.Job{}).
+			Joins("JOIN companies ON companies.id = jobs.company_id")
+		db = applyFacetFilter(db, "sector", sector, "companies")
+		db = applyFacetFilter(db, "stage", stage, "companies")
+		db = applyAreaFilter(db, area, "companies")
+		if q != "" {
+			db = db.Where("companies.name ILIKE ? OR companies.description ILIKE ?", "%"+q+"%", "%"+q+"%")
+		}
+		return db
 	}
 
 	// Counted in the database from the stored buckets rather than by pulling
@@ -117,7 +128,7 @@ func JobFacets(sector, stage, area, q string) (fields, levels []FacetCount, err 
 			Bucket string
 			N      int
 		}
-		err := dbQuery.Session(&gorm.Session{}).
+		err := filtered().
 			Select("COALESCE(NULLIF(jobs."+column+", ''), ?) AS bucket, COUNT(*) AS n", fallback).
 			Group("bucket").
 			Scan(&rows).Error

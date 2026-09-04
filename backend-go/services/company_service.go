@@ -1,6 +1,7 @@
 package services
 
 import (
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -700,15 +701,16 @@ func TotalOpenRolesFast(sector, stage, area string) (int64, error) {
 	dbQuery = applyFacetFilter(dbQuery, "stage", stage, "")
 	dbQuery = applyAreaFilter(dbQuery, area, "")
 
-	var n *int64
-	if err := dbQuery.Select("SUM(open_roles)").Scan(&n).Error; err != nil {
+	// sql.NullInt64 rather than a *int64, because SUM over no matching rows is
+	// NULL and the destination has to be able to hold that. Scanning into a
+	// **int64 is not a shape the driver accepts, and the header this feeds
+	// would have failed for every filter that matches nothing — which is the
+	// case a visitor reaches by narrowing, not an exotic one.
+	var total sql.NullInt64
+	if err := dbQuery.Select("COALESCE(SUM(open_roles), 0)").Scan(&total).Error; err != nil {
 		return 0, err
 	}
-	if n == nil {
-		// SUM over no rows is NULL, not zero.
-		return 0, nil
-	}
-	return *n, nil
+	return total.Int64, nil
 }
 
 func extractDomain(website string) string {
