@@ -148,6 +148,20 @@ func HandleOnboarding(c *gin.Context) {
 		return
 	}
 
+	// tech_stack is what the interviewer tailors questions to — the form
+	// asks for at least 2, but that was a client-only check an empty value
+	// sailed straight past.
+	techCount := 0
+	for _, t := range strings.Split(req.TechStack, ",") {
+		if strings.TrimSpace(t) != "" {
+			techCount++
+		}
+	}
+	if techCount < 2 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Select at least 2 technologies"})
+		return
+	}
+
 	var user models.User
 	if err := config.DB.Where("id = ?", userID).First(&user).Error; err != nil {
 		c.JSON(http.StatusNotFound, gin.H{"error": "User not found"})

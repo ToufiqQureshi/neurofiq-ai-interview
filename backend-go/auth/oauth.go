@@ -141,20 +141,50 @@ func HandleGithubCallback(c *gin.Context) {
 
 	if result.Error != nil {
 		ghID := githubUser.ID
-		user = models.User{
-			GithubID:        &ghID,
-			GithubUsername:  githubUser.Login,
-			FullName:        githubUser.Login,
-			Email:           githubUser.Email,
-			AvatarURL:       githubUser.AvatarURL,
-			GithubConnected: true,
-			IsOnboarded:     false,
-			LastLoginAt:     time.Now(),
+
+		// No account has this github_id yet. Before creating one, check
+		// whether the verified email GitHub just handed us already belongs
+		// to an account — someone who signed up with a password first and
+		// is now clicking "Continue with GitHub". users.email is unique, so
+		// creating a second row here failed outright with a raw 500 and no
+		// way to recover: the account existed, GitHub proved they owned its
+		// email, and the product still couldn't let them in.
+		linked := false
+		if githubUser.Email != "" {
+			if err := config.DB.Where("email = ?", githubUser.Email).First(&user).Error; err == nil {
+				linked = true
+			}
 		}
-		if err := config.DB.Create(&user).Error; err != nil {
-			log.Println("[oauth] FAIL: create user:", err)
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to create user"})
-			return
+
+		if linked {
+			user.GithubID = &ghID
+			user.GithubUsername = githubUser.Login
+			user.GithubConnected = true
+			if user.AvatarURL == "" {
+				user.AvatarURL = githubUser.AvatarURL
+			}
+			user.LastLoginAt = time.Now()
+			if err := config.DB.Save(&user).Error; err != nil {
+				log.Println("[oauth] FAIL: link github to existing account:", err)
+				c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to link GitHub account"})
+				return
+			}
+		} else {
+			user = models.User{
+				GithubID:        &ghID,
+				GithubUsername:  githubUser.Login,
+				FullName:        githubUser.Login,
+				Email:           githubUser.Email,
+				AvatarURL:       githubUser.AvatarURL,
+				GithubConnected: true,
+				IsOnboarded:     false,
+				LastLoginAt:     time.Now(),
+			}
+			if err := config.DB.Create(&user).Error; err != nil {
+				log.Println("[oauth] FAIL: create user:", err)
+				c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to create user"})
+				return
+			}
 		}
 	} else {
 		user.LastLoginAt = time.Now()

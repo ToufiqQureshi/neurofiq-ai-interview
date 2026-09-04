@@ -6,7 +6,10 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"strings"
+	"time"
 
+	"github.com/gin-contrib/sessions"
 	"github.com/gin-gonic/gin"
 	"github.com/gorilla/websocket"
 	"google.golang.org/grpc"
@@ -17,11 +20,34 @@ import (
 	pb "github.com/ToufiqQureshi/neurofiq-ai-interview/backend-go/proto"
 )
 
+// wsAllowedOrigin mirrors main.go's allowedOrigins() default. It can't import
+// that function directly (package main), so this repeats the same
+// FRONTEND_URL parsing rather than trusting every Origin header.
+func wsAllowedOrigin(origin string) bool {
+	if origin == "" {
+		// No Origin header means no browser sent this request. That is not
+		// itself proof of a legitimate client, which is why the session
+		// check below is what actually gates access — this only blocks the
+		// cross-site browser case.
+		return true
+	}
+	raw := os.Getenv("FRONTEND_URL")
+	if raw == "" {
+		raw = "http://localhost:5173"
+	}
+	for _, o := range strings.Split(raw, ",") {
+		if strings.TrimSpace(strings.TrimRight(o, "/")) == strings.TrimRight(origin, "/") {
+			return true
+		}
+	}
+	return false
+}
+
 var upgrader = websocket.Upgrader{
 	ReadBufferSize:  4096,
 	WriteBufferSize: 4096,
 	CheckOrigin: func(r *http.Request) bool {
-		return true // Allow all for dev
+		return wsAllowedOrigin(r.Header.Get("Origin"))
 	},
 }
 
@@ -37,7 +63,33 @@ type DeepgramResponse struct {
 
 // HandleInterviewWebSocket establishes a WebSocket connection and proxies audio to Deepgram,
 // while communicating with the Python AI worker via gRPC.
+//
+// Two ways in, matching the two ways an interview gets started: a logged-in
+// candidate practising on their own repo carries a session cookie, and an
+// ATS-invited candidate who has no account carries an invite token instead.
+// This route used to accept neither — CheckOrigin returned true unconditionally
+// and nothing checked who was asking, so any client that could reach the host
+// opened a socket and streamed audio this account pays Deepgram to transcribe.
 func HandleInterviewWebSocket(c *gin.Context) {
+	token := c.Query("token")
+
+	var invite *models.InterviewInvite
+	if token != "" {
+		var inv models.InterviewInvite
+		if err := config.DB.Where("token = ?", token).First(&inv).Error; err == nil &&
+			inv.Status == "pending" && inv.ExpiresAt.After(time.Now()) {
+			invite = &inv
+		}
+	}
+
+	if invite == nil {
+		session := sessions.Default(c)
+		if session.Get("user_id") == nil {
+			c.JSON(http.StatusUnauthorized, gin.H{"error": "Unauthorized"})
+			return
+		}
+	}
+
 	clientConn, err := upgrader.Upgrade(c.Writer, c.Request, nil)
 	if err != nil {
 		log.Println("WebSocket Upgrade Error:", err)
@@ -45,21 +97,17 @@ func HandleInterviewWebSocket(c *gin.Context) {
 	}
 	defer clientConn.Close()
 
-	token := c.Query("token")
 	sessionID := c.Query("repoName")
 	if sessionID == "" {
 		sessionID = "unknown_session"
 	}
-	
-	// Fetch Job Description if token exists
+
+	// Fetch Job Description if the invite carries one
 	jobContext := ""
-	if token != "" {
-		var invite models.InterviewInvite
-		if err := config.DB.Where("token = ?", token).First(&invite).Error; err == nil && invite.JobID != nil {
-			var job models.Job
-			if err := config.DB.Where("id = ?", invite.JobID).First(&job).Error; err == nil {
-				jobContext = job.Title + "\n\n" + job.Description
-			}
+	if invite != nil && invite.JobID != nil {
+		var job models.Job
+		if err := config.DB.Where("id = ?", invite.JobID).First(&job).Error; err == nil {
+			jobContext = job.Title + "\n\n" + job.Description
 		}
 	}
 

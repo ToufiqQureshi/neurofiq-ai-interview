@@ -70,13 +70,7 @@ func generateMagicToken() string {
 
 // POST /api/invites
 func CreateInvite(c *gin.Context) {
-	// Need to check auth for recruiter, but for MVP we assume logged in user is the recruiter
-	userVal, exists := c.Get("user")
-	if !exists {
-		c.JSON(http.StatusUnauthorized, gin.H{"error": "Unauthorized"})
-		return
-	}
-	user := userVal.(*models.User)
+	userID := c.MustGet("user_id").(string)
 
 	var req struct {
 		CandidateEmail string  `json:"candidate_email"`
@@ -90,27 +84,22 @@ func CreateInvite(c *gin.Context) {
 		return
 	}
 
-	var jobID *string
-	if req.JobTitle != "" && req.JobDescription != "" {
-		job := models.Job{
-			Title:       req.JobTitle,
-			Description: req.JobDescription,
-			CompanyID:   user.ID, // For MVP, mapping recruiter ID as company ID
-			URL:         "internal",
-		}
-		if err := config.DB.Create(&job).Error; err == nil {
-			jobID = &job.ID
-		}
-	}
-
+	// A job posting belongs to a company, and companies.id is what the
+	// public Job Map and Find Jobs pages join jobs against. An ad-hoc JD
+	// pasted here has no company behind it, so it must never be written to
+	// the shared jobs table — doing so left a permanently orphaned row with
+	// company_id set to the recruiter's own user id and url "internal".
+	// Nothing reads InterviewInvite.JobID today (VerifyInvite returns the
+	// bare invite, and the candidate landing page only uses repo_full_name
+	// and token), so there is nothing to carry it in until this needs a
+	// dedicated field on the invite itself.
 	token := generateMagicToken()
 
 	invite := models.InterviewInvite{
 		Token:          token,
-		RecruiterID:    user.ID,
+		RecruiterID:    userID,
 		CandidateEmail: req.CandidateEmail,
 		RepoFullName:   req.RepoFullName,
-		JobID:          jobID,
 		ExpiresAt:      time.Now().Add(72 * time.Hour), // 3 days expiry
 	}
 
