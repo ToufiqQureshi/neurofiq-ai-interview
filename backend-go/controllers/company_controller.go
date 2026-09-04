@@ -55,6 +55,22 @@ func HandleGetCompanies(c *gin.Context) {
 	})
 }
 
+// HandleGetPipelineHealth reports whether roles are still arriving.
+//
+// Answers in one request what previously took watching the log at the right
+// moment: is the queue draining, is any provider refusing us, is the sync
+// rotation keeping up, does the role counter still match the rows it counts.
+// It returns 503 when unhealthy so an uptime checker can watch it without
+// parsing anything.
+func HandleGetPipelineHealth(c *gin.Context) {
+	health := services.CheckPipelineHealth()
+	status := http.StatusOK
+	if !health.Healthy {
+		status = http.StatusServiceUnavailable
+	}
+	c.JSON(status, health)
+}
+
 // HandleGetDirectoryStats backs the count strip above the Job Map grid.
 // Separate from HandleGetCompanies because those counts follow the visitor's
 // filters, and these describe the whole directory.

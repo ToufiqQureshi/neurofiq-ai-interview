@@ -240,6 +240,11 @@ func main() {
 	// Public company directory & job discovery ("Job Map" & "Find Jobs") — no auth required.
 	r.GET("/api/companies", controllers.HandleGetCompanies)
 	r.GET("/api/companies/stats", controllers.HandleGetDirectoryStats)
+	// Whether the pipeline behind that directory is actually working. Public
+	// and read-only: it reports counts and timings the directory already
+	// exposes, and being able to ask without credentials is the point — a
+	// health check nobody can reach is one nobody checks.
+	r.GET("/api/pipeline/health", controllers.HandleGetPipelineHealth)
 	r.GET("/api/companies/:id", controllers.HandleGetCompanyByID)
 	r.GET("/api/companies/:id/jobs", controllers.HandleGetCompanyJobs)
 
@@ -296,6 +301,19 @@ func main() {
 	// scraping and without an LLM. Run once immediately so a fresh deploy
 	// doesn't sit empty waiting on the first scheduled tick — the cron lease
 	// inside RunDiscoveryRotation makes sure only one instance does the work.
+	// Derived columns first, before anything reads them. companies.open_roles
+	// and jobs.field/level ship with data already behind them, so on the first
+	// boot after this change they are empty — an empty-looking directory until
+	// something fills them in. That something is this, not a command anyone
+	// has to remember: a migration nobody runs is a migration that did not
+	// happen.
+	go safely("startup repairs", func() {
+		services.RunStartupRepairs()
+		// The first health line, so a deploy says whether it came up working
+		// rather than only that it came up.
+		services.LogPipelineHealth()
+	})
+
 	go safely("startup discovery", services.RunDiscoveryRotation)
 	// The backfill follows the sync in the same goroutine rather than racing
 	// it. Run in parallel, the sync held a company list read before the
@@ -376,6 +394,23 @@ func main() {
 		safely("candidate admission", services.RunCandidateAdmission)
 	}); err != nil {
 		log.Fatalf("Failed to schedule candidate admission: %v", err)
+	}
+	// Says, on a schedule, whether roles are still arriving — and says it
+	// loudly when they are not. Every failure this catches is a quiet one: a
+	// throttled provider, a queue that stopped draining, a sync rotation
+	// falling behind. None of them raise an error, and the service reports
+	// itself healthy through all of them while the directory goes stale.
+	if _, err := scheduler.AddFunc("@every 1h", func() {
+		safely("pipeline health", services.LogPipelineHealth)
+	}); err != nil {
+		log.Fatalf("Failed to schedule the pipeline health check: %v", err)
+	}
+	// Finishes any job classification the boot pass did not reach, and
+	// reclassifies everything when the bucket rules change.
+	if _, err := scheduler.AddFunc("@every 12h", func() {
+		safely("job facet backfill", services.RunFacetBackfill)
+	}); err != nil {
+		log.Fatalf("Failed to schedule the job facet backfill: %v", err)
 	}
 	// Repairs the denormalised companies.open_roles from the jobs table. The
 	// counter is written by every path that writes roles; this is what makes a
