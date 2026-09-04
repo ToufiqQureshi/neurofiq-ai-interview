@@ -1,173 +1,152 @@
 import { Link } from 'react-router-dom';
-import { ArrowRight, ShieldCheck, Cpu, Code2, Play } from 'lucide-react';
+import { ArrowRight, GitBranch, Mic } from 'lucide-react';
+import { GithubIcon } from '../components/GithubIcon';
 
 export function LandingPage() {
   return (
-    <div className="min-h-screen bg-[#0A0A0A] text-white overflow-hidden selection:bg-accent/30 selection:text-white">
-      {/* Background Effects */}
-      <div className="fixed inset-0 z-0 pointer-events-none">
-        <div className="absolute top-[-20%] left-[-10%] w-[50%] h-[50%] rounded-full bg-accent/20 blur-[120px] mix-blend-screen" />
-        <div className="absolute bottom-[-20%] right-[-10%] w-[50%] h-[50%] rounded-full bg-indigo-500/10 blur-[120px] mix-blend-screen" />
-        <div className="absolute inset-0 bg-[url('https://grainy-gradients.vercel.app/noise.svg')] opacity-20 mix-blend-overlay" />
-      </div>
-
+    <div className="min-h-screen bg-paper text-ink overflow-hidden">
       {/* Nav */}
-      <header className="relative z-10 flex items-center justify-between px-6 md:px-12 h-24 max-w-7xl mx-auto">
-        <div className="flex items-center gap-3 font-display font-extrabold text-xl tracking-tight">
-          <div className="relative flex items-center justify-center w-8 h-8 rounded-lg bg-gradient-to-br from-accent to-indigo-600 shadow-[0_0_15px_rgba(93,95,239,0.5)]">
-            <span className="text-white text-sm">N</span>
-          </div>
+      <header className="relative z-10 flex items-center justify-between px-6 md:px-10 h-20 max-w-7xl mx-auto">
+        <div className="flex items-center gap-2 font-display font-extrabold text-lg">
+          <span className="w-7 h-7 rounded-md bg-ink text-white flex items-center justify-center text-xs">N</span>
           NeuroFIQ
         </div>
-        <div className="flex items-center gap-6">
-          <Link to="/auth" className="text-sm font-medium text-white/70 hover:text-white transition-colors">Sign In</Link>
-          <Link
-            to="/auth"
-            className="text-sm font-semibold px-5 py-2.5 rounded-full bg-white/10 hover:bg-white/20 border border-white/10 backdrop-blur-md transition-all shadow-[0_0_15px_rgba(255,255,255,0.05)] hover:shadow-[0_0_20px_rgba(255,255,255,0.1)]"
-          >
-            Get Started
-          </Link>
-        </div>
+        <Link
+          to="/auth"
+          className="text-sm font-semibold px-4 py-2 rounded-lg border border-line-strong hover:bg-surface transition-colors"
+        >
+          Sign In
+        </Link>
       </header>
 
       {/* Hero */}
-      <section className="relative z-10 max-w-7xl mx-auto px-6 md:px-12 pt-20 pb-32 text-center md:text-left grid grid-cols-1 lg:grid-cols-2 gap-16 items-center">
-        <div>
-          <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-accent/10 border border-accent/20 text-accent text-xs font-semibold uppercase tracking-wider mb-8">
-            <span className="w-2 h-2 rounded-full bg-accent animate-pulse"></span>
-            Enterprise Grade AI Interviewer
-          </div>
-          <h1 className="font-display font-extrabold text-5xl md:text-6xl lg:text-7xl leading-[1.1] tracking-tight text-transparent bg-clip-text bg-gradient-to-b from-white to-white/70">
-            Hire <span className="text-accent bg-clip-text text-transparent bg-gradient-to-r from-accent to-indigo-400">10x Engineers</span><br />
-            with Uncheatable AI.
-          </h1>
-          <p className="mt-6 text-lg md:text-xl text-white/60 max-w-lg mx-auto md:mx-0 leading-relaxed font-light">
-            Stop relying on generic LeetCode puzzles. NeuroFIQ autonomously evaluates candidates based on their real GitHub repositories and specific Job Descriptions using live, proctored voice interviews.
-          </p>
-          <div className="mt-10 flex flex-wrap items-center justify-center md:justify-start gap-4">
-            <Link
-              to="/auth"
-              className="inline-flex items-center gap-2 bg-white text-black hover:bg-white/90 px-8 py-4 rounded-full font-bold transition-all hover:scale-105 shadow-[0_0_30px_rgba(255,255,255,0.15)]"
-            >
-              Start Free Trial <ArrowRight className="w-5 h-5" />
-            </Link>
-            <a href="#demo" className="inline-flex items-center gap-2 px-8 py-4 rounded-full font-bold text-white bg-white/5 border border-white/10 hover:bg-white/10 backdrop-blur-md transition-all">
-              <Play className="w-5 h-5" /> View Demo
-            </a>
-          </div>
-        </div>
+      <section className="relative">
+        {/* Diagonal background shape */}
+        <div
+          aria-hidden="true"
+          className="absolute inset-0 -z-10 opacity-70"
+          style={{
+            background: 'linear-gradient(115deg, transparent 0%, transparent 42%, #f0f1ee 42%, #f0f1ee 100%)',
+          }}
+        />
 
-        {/* Right: Premium Dashboard Mockup */}
-        <div className="relative group perspective">
-          <div className="relative rounded-2xl bg-[#111] border border-white/10 shadow-[0_20px_50px_rgba(0,0,0,0.5)] overflow-hidden transform transition-transform duration-700 group-hover:-rotate-y-2 group-hover:rotate-x-2">
-            <div className="flex items-center gap-2 px-4 py-3 bg-[#1A1A1A] border-b border-white/5">
-              <span className="w-3 h-3 rounded-full bg-[#ff5f57]"></span>
-              <span className="w-3 h-3 rounded-full bg-[#febc2e]"></span>
-              <span className="w-3 h-3 rounded-full bg-[#28c840]"></span>
-              <span className="ml-2 font-mono text-xs text-white/30">NeuroFIQ Proctoring Engine</span>
-            </div>
-            <div className="p-6">
-              <div className="flex justify-between items-start mb-6">
-                <div>
-                  <div className="text-white/50 text-xs font-mono mb-1">CANDIDATE SESSION</div>
-                  <div className="text-white font-semibold flex items-center gap-2">
-                    John Doe <span className="px-2 py-0.5 rounded text-[10px] bg-green-500/20 text-green-400 border border-green-500/30">VERIFIED</span>
-                  </div>
-                </div>
-                <div className="text-right">
-                  <div className="text-accent text-xs font-mono mb-1 flex items-center justify-end gap-1"><span className="w-1.5 h-1.5 rounded-full bg-accent animate-ping"></span> AI SPEAKING</div>
-                  <div className="text-white/80 text-sm">"Can you explain the O(n) complexity in your sorting algorithm?"</div>
-                </div>
-              </div>
-              
-              <div className="grid grid-cols-2 gap-4">
-                <div className="bg-black/50 border border-white/5 rounded-xl p-4">
-                  <div className="flex items-center gap-2 text-white/50 text-xs font-mono mb-3">
-                    <ShieldCheck className="w-4 h-4 text-accent" /> TRUST SCORE
-                  </div>
-                  <div className="text-3xl font-display font-bold text-white">99%</div>
-                  <div className="text-[10px] text-green-400 mt-1">Screen Share Active</div>
-                </div>
-                <div className="bg-black/50 border border-white/5 rounded-xl p-4">
-                  <div className="flex items-center gap-2 text-white/50 text-xs font-mono mb-3">
-                    <Cpu className="w-4 h-4 text-indigo-400" /> TECH SCORE
-                  </div>
-                  <div className="text-3xl font-display font-bold text-white">8.5<span className="text-lg text-white/30">/10</span></div>
-                  <div className="text-[10px] text-indigo-400 mt-1">Senior Level</div>
-                </div>
-              </div>
+        <div className="relative max-w-7xl mx-auto px-6 md:px-10 pt-10 pb-24 grid grid-cols-1 lg:grid-cols-2 gap-14 items-center">
+          {/* Left: copy */}
+          <div>
+            <h1 className="font-display font-extrabold text-5xl md:text-6xl leading-[1.05] tracking-tight">
+              Interview prep,
+              <br />
+              built from <span className="text-accent">your own code.</span>
+            </h1>
+            <p className="mt-6 text-lg text-ink-soft max-w-lg leading-relaxed">
+              Connect a GitHub repo and NeuroFIQ reads it — architecture, patterns, the decisions you actually made — then interviews you on it. No generic LeetCode. Your codebase is the question bank.
+            </p>
+            <div className="mt-8 flex flex-wrap items-center gap-4">
+              <Link
+                to="/auth"
+                className="inline-flex items-center gap-2 bg-ink hover:bg-black text-white px-6 py-3.5 rounded-lg font-semibold transition-colors shadow-sm"
+              >
+                <GithubIcon className="w-5 h-5" />
+                Connect GitHub &amp; Start
+              </Link>
+              <a href="#how-it-works" className="inline-flex items-center gap-1.5 text-sm font-semibold text-ink-soft hover:text-ink transition-colors">
+                See how it works <ArrowRight className="w-4 h-4" />
+              </a>
             </div>
           </div>
-          
-          {/* Decorative floating elements */}
-          <div className="absolute -bottom-6 -left-6 bg-[#1A1A1A] border border-white/10 rounded-2xl p-4 shadow-2xl backdrop-blur-xl animate-bounce-slow">
-            <div className="flex items-center gap-3">
-              <div className="w-10 h-10 rounded-full bg-accent/20 flex items-center justify-center border border-accent/30">
-                <Code2 className="w-5 h-5 text-accent" />
+
+          {/* Right: product mockup panel */}
+          <div className="relative">
+            <div className="rounded-2xl bg-[#0c0d10] border border-black/10 shadow-2xl overflow-hidden">
+              <div className="flex items-center gap-1.5 px-4 py-3 border-b border-white/10">
+                <span className="w-2.5 h-2.5 rounded-full bg-[#ff5f57]"></span>
+                <span className="w-2.5 h-2.5 rounded-full bg-[#febc2e]"></span>
+                <span className="w-2.5 h-2.5 rounded-full bg-[#28c840]"></span>
+                <span className="ml-3 font-mono text-[11px] text-white/40">interview_report.json</span>
               </div>
+              <div className="p-5 font-mono text-[12.5px] leading-relaxed">
+                <div className="text-white/40">// AgentKit &middot; Question 3 of 5</div>
+                <div className="mt-3 text-white/90">
+                  "Your <span className="text-accent">safe-page-fetch</span> function implements DNS pinning.
+                  How does that protect against rebinding attacks?"
+                </div>
+                <div className="mt-4 flex items-center gap-2">
+                  <span className="w-1.5 h-1.5 rounded-full bg-accent"></span>
+                  <span className="text-white/50">scoring answer&hellip;</span>
+                </div>
+                <div className="mt-4 rounded-lg bg-white/5 border border-white/10 p-3 space-y-1.5">
+                  <div className="flex justify-between"><span className="text-white/50">strengths</span><span className="text-accent">2 found</span></div>
+                  <div className="flex justify-between"><span className="text-white/50">gaps</span><span className="text-[#ff9b6b]">1 found</span></div>
+                  <div className="flex justify-between"><span className="text-white/50">score</span><span className="text-white font-bold">7 / 10</span></div>
+                </div>
+              </div>
+            </div>
+            <div className="absolute -bottom-5 left-2 sm:-left-5 bg-surface border border-line rounded-xl px-4 py-3 shadow-lg flex items-center gap-3">
+              <Mic className="w-4 h-4 text-accent" />
               <div>
-                <div className="text-xs font-bold text-white">Context-Aware AI</div>
-                <div className="text-[10px] text-white/50">Evaluates against your Job Description</div>
+                <div className="text-xs font-bold">Voice mode</div>
+                <div className="text-[10px] text-ink-faint font-mono">speak your answer</div>
               </div>
             </div>
           </div>
         </div>
       </section>
 
-      {/* Features */}
-      <section className="relative z-10 bg-[#0F0F0F] border-t border-white/5 py-24">
-        <div className="max-w-7xl mx-auto px-6 md:px-12">
-          <div className="text-center max-w-2xl mx-auto mb-16">
-            <h2 className="font-display font-extrabold text-3xl md:text-4xl text-white">The Engineering Hiring Standard</h2>
-            <p className="mt-4 text-white/50 text-lg">Replace expensive engineering hours with an AI that conducts technical deep-dives with zero bias and infinite scale.</p>
+      {/* How it works */}
+      <section id="how-it-works" className="max-w-7xl mx-auto px-6 md:px-10 py-20 border-t border-line">
+        <h2 className="font-display font-extrabold text-3xl md:text-4xl">How it works</h2>
+        <p className="mt-2 text-ink-soft">From repo to interview in three steps.</p>
+
+        <div className="mt-10 grid grid-cols-1 md:grid-cols-3 gap-6">
+          <div>
+            <h3 className="font-display font-bold text-lg mb-2">Connect a repo</h3>
+            <p className="text-sm text-ink-soft leading-relaxed">Sign in with GitHub and pick a repository. We read the structure, the stack, and how it's actually built.</p>
+            <div className="mt-5 bg-[#f0f1ee] border border-line rounded-xl p-5 h-40 flex items-center justify-center">
+              <div className="flex items-center gap-2">
+                <div className="w-9 h-9 rounded-lg bg-surface border border-line-strong flex items-center justify-center">
+                  <GitBranch className="w-4 h-4 text-ink-soft" />
+                </div>
+                <ArrowRight className="w-4 h-4 text-ink-faint" />
+                <div className="w-9 h-9 rounded-lg bg-ink text-white flex items-center justify-center font-mono text-[10px] font-bold">N</div>
+              </div>
+            </div>
           </div>
 
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-            {[
-              {
-                title: "Job Context Awareness",
-                desc: "Paste your Job Description. The AI will strictly evaluate the candidate's skills against your exact requirements.",
-                icon: <Cpu className="w-6 h-6 text-accent" />
-              },
-              {
-                title: "Bulletproof Anti-Cheat",
-                desc: "Mandatory screen-sharing, tab-switch detection, prompt poisoning, and copy-paste blocking ensures absolute integrity.",
-                icon: <ShieldCheck className="w-6 h-6 text-indigo-400" />
-              },
-              {
-                title: "Deep GitHub Analysis",
-                desc: "The AI reads their actual codebase architecture and challenges them on the decisions they made, not generic riddles.",
-                icon: <Code2 className="w-6 h-6 text-emerald-400" />
-              }
-            ].map((feature, i) => (
-              <div key={i} className="p-8 rounded-2xl bg-white/[0.02] border border-white/5 hover:bg-white/[0.04] transition-colors group">
-                <div className="w-12 h-12 rounded-xl bg-white/5 flex items-center justify-center mb-6 border border-white/10 group-hover:scale-110 transition-transform">
-                  {feature.icon}
-                </div>
-                <h3 className="text-xl font-bold text-white mb-3">{feature.title}</h3>
-                <p className="text-white/50 leading-relaxed text-sm">{feature.desc}</p>
+          <div>
+            <h3 className="font-display font-bold text-lg mb-2">AI reads the code</h3>
+            <p className="text-sm text-ink-soft leading-relaxed">Architecture patterns, complexity, strengths, and the spots worth probing — surfaced before the interview starts.</p>
+            <div className="mt-5 bg-[#f0f1ee] border border-line rounded-xl p-5 h-40 flex flex-col justify-center gap-2">
+              <span className="self-start text-[11px] font-mono px-2 py-1 rounded-full bg-surface border border-line-strong">layered architecture</span>
+              <span className="self-start text-[11px] font-mono px-2 py-1 rounded-full bg-surface border border-line-strong ml-4">rate limiting</span>
+              <span className="self-start text-[11px] font-mono px-2 py-1 rounded-full bg-surface border border-line-strong ml-2">ssrf protection</span>
+            </div>
+          </div>
+
+          <div>
+            <h3 className="font-display font-bold text-lg mb-2">Interview, then a report</h3>
+            <p className="text-sm text-ink-soft leading-relaxed">Answer by text or voice. Get a scored report with per-question feedback and what an ideal answer looks like.</p>
+            <div className="mt-5 bg-[#f0f1ee] border border-line rounded-xl p-5 h-40 flex items-center justify-center">
+              <div className="text-center">
+                <div className="font-mono text-3xl font-extrabold text-accent">8.5<span className="text-base text-ink-faint">/10</span></div>
+                <div className="text-[10px] font-mono uppercase tracking-wide text-ink-faint mt-1">overall score</div>
               </div>
-            ))}
+            </div>
           </div>
         </div>
       </section>
 
       {/* Closing CTA */}
-      <section className="relative z-10 max-w-7xl mx-auto px-6 md:px-12 py-32">
-        <div className="relative rounded-3xl bg-gradient-to-br from-accent/20 to-indigo-600/20 border border-white/10 p-12 md:p-20 text-center overflow-hidden">
-          <div className="absolute inset-0 bg-[url('https://grainy-gradients.vercel.app/noise.svg')] opacity-30 mix-blend-overlay" />
-          <div className="relative z-10">
-            <h2 className="font-display font-extrabold text-4xl md:text-5xl text-white tracking-tight">Scale your engineering<br />hiring today.</h2>
-            <p className="mt-6 text-white/70 max-w-md mx-auto text-lg">Send magic link invites to your candidates and get scored radar reports in minutes.</p>
-            <div className="mt-10">
-              <Link
-                to="/auth"
-                className="inline-flex items-center gap-2 bg-white text-black px-8 py-4 rounded-full font-bold hover:scale-105 transition-transform shadow-[0_0_30px_rgba(255,255,255,0.2)]"
-              >
-                Create Recruiter Account
-              </Link>
-            </div>
-          </div>
+      <section className="max-w-7xl mx-auto px-6 md:px-10 pb-24">
+        <div className="rounded-2xl bg-ink px-8 py-12 md:py-16 text-center">
+          <h2 className="font-display font-extrabold text-3xl md:text-4xl text-white">Ready to be interviewed on your own work?</h2>
+          <p className="mt-3 text-white/60 max-w-md mx-auto">Free to start. Connect a repo and get your first tailored interview in minutes.</p>
+          <Link
+            to="/auth"
+            className="mt-7 inline-flex items-center gap-2 bg-white text-ink px-6 py-3.5 rounded-lg font-semibold hover:bg-white/90 transition-colors"
+          >
+            <GithubIcon className="w-5 h-5" />
+            Connect GitHub &amp; Start
+          </Link>
         </div>
       </section>
     </div>

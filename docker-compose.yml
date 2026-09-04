@@ -31,7 +31,7 @@ services:
     ports:
       - "50051:50051"
     environment:
-      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - GROQ_API_KEY=${GROQ_API_KEY}
       - GEMINI_API_KEY=${GEMINI_API_KEY}
     
   frontend:
