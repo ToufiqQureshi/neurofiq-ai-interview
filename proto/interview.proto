@@ -1,0 +1,27 @@
+syntax = "proto3";
+
+package interview;
+
+option go_package = "./proto;interview_v1";
+
+service InterviewService {
+  // Bi-directional stream for live interview sessions.
+  rpc StreamInterview (stream CandidateMessage) returns (stream AiResponse);
+}
+
+// Sent from Go -> Python
+message CandidateMessage {
+  string session_id = 1;
+  string text_transcript = 2; // Real-time STT transcript from Deepgram
+  string code_snapshot = 3;   // Current state of the Monaco editor
+  bool is_final_answer = 4;   // True if the candidate clicked "Submit Response"
+  string job_context = 5;     // Optional JD to condition the AI Interviewer
+}
+
+// Sent from Python -> Go
+message AiResponse {
+  string session_id = 1;
+  string text_chunk = 2; // Streaming LLM text chunk
+  bytes audio_chunk = 3; // Optional TTS audio chunk (Aura or ElevenLabs)
+  bool is_complete = 4;  // True when the AI is done speaking for this turn
+}

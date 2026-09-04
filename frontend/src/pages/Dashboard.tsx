@@ -107,10 +107,80 @@ export function Dashboard() {
         <div>
           <p className="text-[10px] font-mono font-semibold text-white/40 uppercase tracking-wider mb-1">Action Needed</p>
           <p className="text-white font-semibold">{freeRemaining} free repo analysis slot{freeRemaining === 1 ? '' : 's'} remaining</p>
+
         </div>
         <Link to="/repositories" className="bg-accent hover:bg-accent-dark text-white font-semibold text-sm px-5 py-2.5 rounded-full transition-colors">
           Start New Interview
         </Link>
+      </div>
+
+      {/* ATS Invite Section (For Recruiters) */}
+      <div className="bg-surface border border-line rounded-xl overflow-hidden mt-6">
+        <div className="p-5 border-b border-line flex flex-col">
+          <h3 className="font-display font-bold text-ink text-base">ATS Tools: Invite Candidate</h3>
+          <p className="text-xs text-ink-faint mt-1">Generate a magic link to invite a candidate for a specific Job Role.</p>
+        </div>
+        <div className="p-5 bg-paper/50 flex flex-col gap-4">
+           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+             <input 
+               type="email" 
+               id="invite-email"
+               placeholder="candidate@example.com"
+               className="bg-surface border border-line rounded-lg px-4 py-2 text-sm text-ink placeholder:text-ink-faint focus:outline-none focus:ring-1 focus:ring-accent"
+             />
+             <input 
+               type="text" 
+               id="invite-job-title"
+               placeholder="Job Title (e.g. Senior Frontend Engineer)"
+               className="bg-surface border border-line rounded-lg px-4 py-2 text-sm text-ink placeholder:text-ink-faint focus:outline-none focus:ring-1 focus:ring-accent"
+             />
+           </div>
+           <textarea
+             id="invite-job-desc"
+             rows={3}
+             placeholder="Paste the Job Description here... (The AI will use this to evaluate the candidate)"
+             className="bg-surface border border-line rounded-lg px-4 py-2 text-sm text-ink placeholder:text-ink-faint focus:outline-none focus:ring-1 focus:ring-accent resize-y"
+           ></textarea>
+           
+           <div className="flex justify-end">
+             <button 
+               onClick={async () => {
+                 const emailInput = document.getElementById('invite-email') as HTMLInputElement;
+                 const titleInput = document.getElementById('invite-job-title') as HTMLInputElement;
+                 const descInput = document.getElementById('invite-job-desc') as HTMLTextAreaElement;
+                 
+                 if (!emailInput.value) return alert('Enter an email');
+                 
+                 try {
+                   const res = await fetch(`${import.meta.env.VITE_API_URL}/api/invites`, {
+                     method: 'POST',
+                     headers: { 'Content-Type': 'application/json' },
+                     credentials: 'include',
+                     body: JSON.stringify({ 
+                       candidate_email: emailInput.value,
+                       job_title: titleInput.value,
+                       job_description: descInput.value
+                     })
+                   });
+                   const data = await res.json();
+                   if (data.magic_link) {
+                     prompt("Magic Link Generated! Copy this and send it to the candidate:", data.magic_link);
+                     emailInput.value = '';
+                     titleInput.value = '';
+                     descInput.value = '';
+                   } else {
+                     alert(data.error || 'Failed to generate link');
+                   }
+                 } catch (err) {
+                   alert('Error generating invite');
+                 }
+               }}
+               className="px-6 py-2 bg-accent hover:bg-accent-hover text-white text-sm font-semibold rounded-lg transition-colors"
+             >
+               Generate Magic Link
+             </button>
+           </div>
+        </div>
       </div>
     </div>
   );

@@ -1,3 +1,4 @@
+
 # Job Map — Session Handoff
 
 **Sessions:** 2026-08-27 → 2026-08-29
@@ -68,13 +69,13 @@ The insight the whole feature rests on:
 
 ### The tiers (`services/job_service.go`)
 
-| Tier | What | Cost |
-|---|---|---|
+| Tier        | What                                                                                                                                                                                 | Cost           |
+| ----------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | -------------- |
 | **0** | `ResolveCareersURL` — if the agent gave no careers URL (or gave the homepage), probe `/careers`, `/jobs`, `/careers/jobs`… and verify the page contains careers vocabulary | **Free** |
-| **1** | Plain HTTP fetch → regex for an embedded ATS board link | **Free** |
-| **2** | Hosted render (Firecrawl → Jina fallback) → same regex | 1 credit |
-| **3** | Slugify the company name, verify against each provider's real API | **Free** |
-| **4** | **No ATS at all** → Firecrawl LLM extraction straight off the careers page | 1 credit |
+| **1** | Plain HTTP fetch → regex for an embedded ATS board link                                                                                                                             | **Free** |
+| **2** | Hosted render (Firecrawl → Jina fallback) → same regex                                                                                                                             | 1 credit       |
+| **3** | Slugify the company name, verify against each provider's real API                                                                                                                    | **Free** |
+| **4** | **No ATS at all** → Firecrawl LLM extraction straight off the careers page                                                                                                    | 1 credit       |
 
 Result is cached on the company row (`ats_type`, `ats_slug`), so detection is
 **once per company**, not per sync.
@@ -88,15 +89,15 @@ custom portal, not a supported ATS. Without tier 4 they'd all show zero.
 
 ### Supported ATS platforms (7)
 
-| Platform | Endpoint | Notes |
-|---|---|---|
-| Greenhouse | `boards-api.greenhouse.io/v1/boards/<slug>/jobs` | Regex allows regional boards (`job-boards.eu.greenhouse.io`) |
-| Lever | `api.lever.co/v0/postings/<slug>?mode=json` | |
-| SmartRecruiters | `api.smartrecruiters.com/v1/companies/<slug>/postings?limit=100` | **`limit=100` required** — without it you silently get 10 |
-| Ashby | `api.ashbyhq.com/posting-api/job-board/<slug>` | Has `jobUrl` directly |
-| Keka | `<slug>.keka.com/careers/api/jobs/default/active` | See below |
-| Workday | `<tenant>.<region>.myworkdayjobs.com/wday/cxs/<tenant>/<site>/jobs` (POST) | Slug stored as `tenant:region:site`; site id is probed |
-| Workable | `apply.workable.com/api/v1/widget/accounts/<slug>?details=true` | ⚠️ unverified — see §7 |
+| Platform        | Endpoint                                                                     | Notes                                                              |
+| --------------- | ---------------------------------------------------------------------------- | ------------------------------------------------------------------ |
+| Greenhouse      | `boards-api.greenhouse.io/v1/boards/<slug>/jobs`                           | Regex allows regional boards (`job-boards.eu.greenhouse.io`)     |
+| Lever           | `api.lever.co/v0/postings/<slug>?mode=json`                                |                                                                    |
+| SmartRecruiters | `api.smartrecruiters.com/v1/companies/<slug>/postings?limit=100`           | **`limit=100` required** — without it you silently get 10 |
+| Ashby           | `api.ashbyhq.com/posting-api/job-board/<slug>`                             | Has`jobUrl` directly                                             |
+| Keka            | `<slug>.keka.com/careers/api/jobs/default/active`                          | See below                                                          |
+| Workday         | `<tenant>.<region>.myworkdayjobs.com/wday/cxs/<tenant>/<site>/jobs` (POST) | Slug stored as`tenant:region:site`; site id is probed            |
+| Workable        | `apply.workable.com/api/v1/widget/accounts/<slug>?details=true`            | ⚠️ unverified — see §7                                         |
 
 **The Keka find:** Keka's official developer API is partner-gated. But every
 Keka-hosted careers portal exposes the endpoint above publicly with no auth —
@@ -113,10 +114,10 @@ detection probes `External`, `External_Careers`, `careers`, etc.
 `services/scrape_service.go`. We do **not** run headless Chrome ourselves —
 both providers render on their own infrastructure, so no RAM/hosting cost here.
 
-| Provider | Cost | Role |
-|---|---|---|
-| **Firecrawl** | 1,000 pages/month free | Primary. Better extraction, and does LLM job extraction (tier 4). |
-| **Jina Reader** (`r.jina.ai`) | Free, **no API key** | Fallback. Absorbs overflow. |
+| Provider                              | Cost                      | Role                                                              |
+| ------------------------------------- | ------------------------- | ----------------------------------------------------------------- |
+| **Firecrawl**                   | 1,000 pages/month free    | Primary. Better extraction, and does LLM job extraction (tier 4). |
+| **Jina Reader** (`r.jina.ai`) | Free,**no API key** | Fallback. Absorbs overflow.                                       |
 
 ### Credit protection (four guards)
 
@@ -188,12 +189,12 @@ insufficient.
 
 Matches the reference site's pattern, verified against it directly:
 
-| | bangalorestartupmap | Ours |
-|---|---|---|
-| Header | "991 open roles across 95 companies" | "213 open roles across 19 companies" |
-| Hiring filter | `?hiring=1` button | **"Hiring only" toggle, default ON** |
-| Role facets | FIELD + LEVEL chips with counts | **same** — see below |
-| Hiring ratio | 95/1045 = **9%** | 19/67 = **28%** |
+|               | bangalorestartupmap                  | Ours                                       |
+| ------------- | ------------------------------------ | ------------------------------------------ |
+| Header        | "991 open roles across 95 companies" | "213 open roles across 19 companies"       |
+| Hiring filter | `?hiring=1` button                 | **"Hiring only" toggle, default ON** |
+| Role facets   | FIELD + LEVEL chips with counts      | **same** — see below                |
+| Hiring ratio  | 95/1045 =**9%**                | 19/67 =**28%**                       |
 
 **"Hiring only" defaults to ON.** Most companies aren't hiring at any moment,
 so a directory full of empty cards is useless — browsing everything is opt-out,
@@ -259,38 +260,42 @@ doesn't collapse every job into one row.
 **Almost all were "silently does nothing" bugs.** Code looked correct, logs
 looked fine, feature quietly did nothing.
 
-| # | File | Issue → Fix |
-|---|---|---|
-| 6.1 | `job_service.go` | Greenhouse regex missed regional boards (`job-boards.**eu**.greenhouse.io`). Added optional region segment. |
-| 6.2 | `job_service.go` | Periodic sync queried only `WHERE ats_type != ''`, so adding new ATS providers would have had **zero effect on existing companies**. Renamed to `SyncAllCompanyJobs`, now re-detects. |
-| 6.3 | `company_service.go` | `RunDiscoveryRotation` did `return` on discovery error → `SyncAllCompanyJobs` never ran. One flaky search meant zero job refresh for the whole tick. Now independent. |
-| 6.4 | `ai-worker/main.py` | `'str' object has no attribute 'model_dump'` — with tools enabled, Agno doesn't always return a parsed model. Raw JSON and markdown-fenced JSON are both normalised now. |
-| 6.5 | `job_service.go` | `config.DB.Find()` error ignored → a failed query produced an empty slice and logged `"0 companies checked"` as if normal. |
-| 6.6 | `company_service.go` | No timeout on the ai-worker call. A stuck worker held the startup sync for **~3 hours**. Now a 3-minute client timeout. |
-| 6.7 | `repo_controller.go` | A pending-placeholder row wrote `""` into a `jsonb` column. Postgres rejects that — **every** analyze request would have failed. Fixed to `"null"`. |
-| 6.8 | `CompanyMap.tsx` | Google's favicon endpoint returns a 16×16 globe **with a 404 status but a valid PNG body**, so `onError` never fired. Now also checks `naturalWidth < 32`. |
-| 6.9 | `CompanyMap.tsx` | Map showed one pin — per-city geocoding gave every Delhi company identical coordinates. Fixed with clustering + auto-fit bounds. |
-| 6.10 | `company_service.go` | Nominatim had **no rate limit** (their policy is 1 req/sec) — real IP-ban risk. Now a mutex-based 1.1s throttle. |
-| 6.11 | `company_service.go` | Compound areas like `"Noida/Gurugram, Delhi NCR"` failed to geocode → no map pin. Now falls back to simpler forms. |
+| #    | File                   | Issue → Fix                                                                                                                                                                                   |
+| ---- | ---------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 6.1  | `job_service.go`     | Greenhouse regex missed regional boards (`job-boards.**eu**.greenhouse.io`). Added optional region segment.                                                                                  |
+| 6.2  | `job_service.go`     | Periodic sync queried only`WHERE ats_type != ''`, so adding new ATS providers would have had **zero effect on existing companies**. Renamed to `SyncAllCompanyJobs`, now re-detects. |
+| 6.3  | `company_service.go` | `RunDiscoveryRotation` did `return` on discovery error → `SyncAllCompanyJobs` never ran. One flaky search meant zero job refresh for the whole tick. Now independent.                   |
+| 6.4  | `ai-worker/main.py`  | `'str' object has no attribute 'model_dump'` — with tools enabled, Agno doesn't always return a parsed model. Raw JSON and markdown-fenced JSON are both normalised now.                    |
+| 6.5  | `job_service.go`     | `config.DB.Find()` error ignored → a failed query produced an empty slice and logged `"0 companies checked"` as if normal.                                                                |
+| 6.6  | `company_service.go` | No timeout on the ai-worker call. A stuck worker held the startup sync for**~3 hours**. Now a 3-minute client timeout.                                                                   |
+| 6.7  | `repo_controller.go` | A pending-placeholder row wrote`""` into a `jsonb` column. Postgres rejects that — **every** analyze request would have failed. Fixed to `"null"`.                                |
+| 6.8  | `CompanyMap.tsx`     | Google's favicon endpoint returns a 16×16 globe**with a 404 status but a valid PNG body**, so `onError` never fired. Now also checks `naturalWidth < 32`.                           |
+| 6.9  | `CompanyMap.tsx`     | Map showed one pin — per-city geocoding gave every Delhi company identical coordinates. Fixed with clustering + auto-fit bounds.                                                              |
+| 6.10 | `company_service.go` | Nominatim had**no rate limit** (their policy is 1 req/sec) — real IP-ban risk. Now a mutex-based 1.1s throttle.                                                                         |
+| 6.11 | `company_service.go` | Compound areas like`"Noida/Gurugram, Delhi NCR"` failed to geocode → no map pin. Now falls back to simpler forms.                                                                           |
 
 ---
 
 ## 7. Verified vs unverified
 
 ### Verified against live boards
+
 Swiggy 75 (SmartRecruiters) · Freshworks 100 (SmartRecruiters) · Ramp 138
 (Ashby) · Meesho 48 (Lever) · Groww 5 (Greenhouse) · BrowserStack 32 (Workday)
 · Keka multi-location parsing · Doceree 19 (careers-page LLM extraction).
 Re-sync idempotent on all — no duplicate rows.
 
 ### Verified in the live directory
+
 ```
 job sync: 46 companies checked, 3 newly detected, 125 open roles
 scrape usage this month: map[firecrawl:90 jina:31]
 ```
+
 Zypp Electric's Keka board was found **only by Firecrawl** — plain HTTP missed it.
 
 ### ⚠️ NOT verified
+
 - **Workable.** Endpoint responds 200 and returns a well-formed *empty* array;
   the v3 POST endpoint returns `{"total":0,"results":[]}`. None of ~20 sampled
   slugs had active postings, so the parse path has never seen real data.
@@ -305,15 +310,15 @@ Zypp Electric's Keka board was found **only by Firecrawl** — plain HTTP missed
 
 Documented so nobody re-researches these:
 
-| Option | Verdict |
-|---|---|
-| **webclaw** (Rust, 2.3k★, Go SDK) | ❌ README: *"Set WEBCLAW_API_KEY to handle bot-protected and JavaScript-rendered pages"* — the self-hosted version doesn't render JS, which is exactly our need. |
-| **Lightpanda** (Zig browser, 34k★) | ❌ Tested in Docker: **3MB idle RAM** (vs Chrome ~300MB) — impressive. But on our real test page it returned 28KB and **missed the Keka link that Firecrawl found in 87KB**. Incomplete web-API coverage. Releases still "nightly". Re-check in ~6 months. |
-| **Crawl4AI** (78k★) | ❌ Runs on Playwright — same Chrome, same RAM. "Free" but expensive to host. |
-| **TheirStack** | ❌ Free tier = **200 jobs/month**. Razorpay alone is 21. |
-| **Darwinbox / Keka admin APIs** | ❌ Partner/customer-gated. (Keka's *public careers* endpoint works though — see §2.) |
-| **Google Maps (Agno `GoogleMapTools`)** | ⏸️ Good for verification + exact lat/lng, but gives **no careers URL** — which is the actual bottleneck. Needs a card. Revisit later. |
-| **Indeed / LinkedIn / Naukri APIs** | ❌ Indeed's Publisher API shut down 2023; LinkedIn is partner-gated; Naukri has no public API. |
+| Option                                          | Verdict                                                                                                                                                                                                                                                                |
+| ----------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **webclaw** (Rust, 2.3k★, Go SDK)        | ❌ README:*"Set WEBCLAW_API_KEY to handle bot-protected and JavaScript-rendered pages"* — the self-hosted version doesn't render JS, which is exactly our need.                                                                                                     |
+| **Lightpanda** (Zig browser, 34k★)       | ❌ Tested in Docker:**3MB idle RAM** (vs Chrome ~300MB) — impressive. But on our real test page it returned 28KB and **missed the Keka link that Firecrawl found in 87KB**. Incomplete web-API coverage. Releases still "nightly". Re-check in ~6 months. |
+| **Crawl4AI** (78k★)                      | ❌ Runs on Playwright — same Chrome, same RAM. "Free" but expensive to host.                                                                                                                                                                                          |
+| **TheirStack**                            | ❌ Free tier =**200 jobs/month**. Razorpay alone is 21.                                                                                                                                                                                                          |
+| **Darwinbox / Keka admin APIs**           | ❌ Partner/customer-gated. (Keka's*public careers* endpoint works though — see §2.)                                                                                                                                                                                |
+| **Google Maps (Agno `GoogleMapTools`)** | ⏸️ Good for verification + exact lat/lng, but gives**no careers URL** — which is the actual bottleneck. Needs a card. Revisit later.                                                                                                                          |
+| **Indeed / LinkedIn / Naukri APIs**       | ❌ Indeed's Publisher API shut down 2023; LinkedIn is partner-gated; Naukri has no public API.                                                                                                                                                                         |
 
 **Checked what bangalorestartupmap actually uses:** ClickPost → Keka,
 Ctruh → Keka, Bureau → Ashby. **Same ATS public APIs we use.** No Naukri, no
@@ -348,6 +353,7 @@ Wellfound, no Cutshort. Our approach is right; the gap is scale, not method.
    without a Google Cloud card.
 
 ### Known gaps (not blocking)
+
 - Companies are never re-enriched after first discovery — stage/description
   stay frozen at first-seen values. Jobs *are* re-synced.
 - Filters are exact-match against a fixed dropdown; the agent occasionally
@@ -370,12 +376,12 @@ Wellfound, no Cutshort. Our approach is right; the gap is scale, not method.
 **Modified:** `main.go` (AutoMigrate + routes + cron), `ai-worker/main.py`,
 `frontend/src/App.tsx`, `frontend/src/components/DashboardLayout.tsx`
 
-| Method | Path | Auth | Notes |
-|---|---|---|---|
-| GET | `/api/companies` | public | filters `sector`/`stage`/`area`/`q`/**`hiring=1`**; returns `job_count` per company, `open_roles` total, and `facets` |
-| GET | `/api/companies/:id` | public | |
-| GET | `/api/companies/:id/jobs` | public | optional `field` / `level` facet filters |
-| POST | `/api/companies/discover` | authenticated | manual trigger |
+| Method | Path                        | Auth          | Notes                                                                                                                                      |
+| ------ | --------------------------- | ------------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
+| GET    | `/api/companies`          | public        | filters`sector`/`stage`/`area`/`q`/**`hiring=1`**; returns `job_count` per company, `open_roles` total, and `facets` |
+| GET    | `/api/companies/:id`      | public        |                                                                                                                                            |
+| GET    | `/api/companies/:id/jobs` | public        | optional`field` / `level` facet filters                                                                                                |
+| POST   | `/api/companies/discover` | authenticated | manual trigger                                                                                                                             |
 
 **Deps:** Go `robfig/cron/v3`; frontend `leaflet`, `react-leaflet`,
 `react-leaflet-cluster`, `@types/leaflet`; Python `duckduckgo-search`, `exa-py`.

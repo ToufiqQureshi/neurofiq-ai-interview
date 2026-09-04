@@ -1673,3 +1673,81 @@ func touchSynced(companyID string) {
 		Where("id = ?", companyID).
 		Update("last_synced_at", time.Now())
 }
+
+// JobWithCompany joins a single Job with the parent Company metadata for global search and discovery feeds.
+type JobWithCompany struct {
+	models.Job
+	CompanyName   string `json:"company_name"`
+	CompanyDomain string `json:"company_domain"`
+	CompanyLogo   string `json:"company_logo"`
+	CompanySector string `json:"company_sector"`
+	CompanyStage  string `json:"company_stage"`
+	CompanyArea   string `json:"company_area"`
+	ATSType       string `json:"ats_provider"`
+	Field         string `json:"field"`
+	Level         string `json:"level"`
+}
+
+// ListGlobalJobs searches across all active jobs in the system with keyword, location, role field, and level filters.
+func ListGlobalJobs(q, location, field, level string, page, pageSize int) ([]JobWithCompany, int64, error) {
+	if page < 1 {
+		page = 1
+	}
+	if pageSize <= 0 || pageSize > 100 {
+		pageSize = 30
+	}
+
+	db := config.DB.Table("jobs").
+		Select("jobs.*, companies.name as company_name, companies.domain as company_domain, companies.sector as company_sector, companies.stage as company_stage, companies.area as company_area, companies.ats_type as ats_type").
+		Joins("JOIN companies ON companies.id = jobs.company_id")
+
+	if q != "" {
+		trimmedQ := strings.TrimSpace(q)
+		lowerQ := strings.ToLower(trimmedQ)
+		switch lowerQ {
+		case "golang", "go":
+			db = db.Where("jobs.title ILIKE ? OR jobs.title ILIKE ? OR jobs.title ILIKE ?", "%golang%", "%backend%", "%engineer%")
+		case "ai / ml", "ai", "ml":
+			db = db.Where("jobs.title ILIKE ? OR jobs.title ILIKE ? OR jobs.title ILIKE ? OR jobs.department ILIKE ?", "%ai%", "%ml%", "%machine learning%", "%data%")
+		default:
+			db = db.Where("jobs.title ILIKE ? OR companies.name ILIKE ? OR jobs.department ILIKE ?", "%"+trimmedQ+"%", "%"+trimmedQ+"%", "%"+trimmedQ+"%")
+		}
+	}
+	if location != "" {
+		db = db.Where("jobs.location ILIKE ? OR companies.area ILIKE ?", "%"+location+"%", "%"+location+"%")
+	}
+	if field != "" && field != "All Tech Roles" {
+		fieldTerm := strings.ToLower(field)
+		if strings.Contains(fieldTerm, "ai") || strings.Contains(fieldTerm, "data") {
+			db = db.Where("jobs.title ILIKE ? OR jobs.title ILIKE ? OR jobs.title ILIKE ? OR jobs.department ILIKE ?", "%data%", "%ai%", "%machine learning%", "%analytics%")
+		} else if strings.Contains(fieldTerm, "backend") {
+			db = db.Where("jobs.title ILIKE ? OR jobs.department ILIKE ?", "%backend%", "%backend%")
+		} else if strings.Contains(fieldTerm, "frontend") || strings.Contains(fieldTerm, "fullstack") {
+			db = db.Where("jobs.title ILIKE ? OR jobs.title ILIKE ? OR jobs.department ILIKE ?", "%frontend%", "%fullstack%", "%web%")
+		} else if strings.Contains(fieldTerm, "devops") {
+			db = db.Where("jobs.title ILIKE ? OR jobs.title ILIKE ? OR jobs.department ILIKE ?", "%devops%", "%sre%", "%infrastructure%")
+		} else if strings.Contains(fieldTerm, "mobile") {
+			db = db.Where("jobs.title ILIKE ? OR jobs.title ILIKE ? OR jobs.department ILIKE ?", "%mobile%", "%android%", "%ios%")
+		} else {
+			db = db.Where("jobs.title ILIKE ? OR jobs.department ILIKE ?", "%"+field+"%", "%"+field+"%")
+		}
+	}
+
+	var total int64
+	if err := db.Count(&total).Error; err != nil {
+		return nil, 0, err
+	}
+
+	var results []JobWithCompany
+	offset := (page - 1) * pageSize
+	if err := db.Order("jobs.created_at DESC").Limit(pageSize).Offset(offset).Scan(&results).Error; err != nil {
+		return nil, 0, err
+	}
+
+	for i := range results {
+		results[i].Field = ClassifyField(results[i].Title, results[i].Department)
+		results[i].Level = ClassifyLevel(results[i].Title)
+	}
+
+	return results, total, nil
+}

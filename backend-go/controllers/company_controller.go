@@ -102,6 +102,32 @@ func HandleGetCompanyJobs(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"jobs": jobs, "total": len(jobs)})
 }
 
+// HandleGetGlobalJobs provides paginated, filtered discovery across all company job postings.
+func HandleGetGlobalJobs(c *gin.Context) {
+	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
+	pageSize, _ := strconv.Atoi(c.DefaultQuery("page_size", "30"))
+	q := c.Query("q")
+	location := c.Query("location")
+	if location == "" {
+		location = c.Query("hub")
+	}
+	field := c.Query("field")
+	level := c.Query("level")
+
+	jobs, total, err := services.ListGlobalJobs(q, location, field, level, page, pageSize)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to fetch jobs"})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"jobs":      jobs,
+		"total":     total,
+		"page":      page,
+		"page_size": pageSize,
+	})
+}
+
 type triggerDiscoveryRequest struct {
 	Query string `json:"query" binding:"required"`
 	Limit int    `json:"limit"`

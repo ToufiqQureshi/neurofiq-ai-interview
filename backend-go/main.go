@@ -105,7 +105,7 @@ func main() {
 	// AutoMigrate the schema models.
 	if err := config.DB.AutoMigrate(
 		&models.User{}, &models.GithubProfile{}, &models.Question{},
-		&models.InterviewSession{},
+		&models.InterviewSession{}, &models.InterviewInvite{},
 		&models.Company{}, &models.Job{}, &models.ScrapeUsage{},
 		&models.CronLease{}, &models.HarvestState{}, &models.BoardCandidate{},
 	); err != nil {
@@ -252,6 +252,13 @@ func main() {
 	// unguessable URL, so it sits outside the session middleware on purpose.
 	r.GET("/api/public/reports/:slug", controllers.HandleGetPublicReport)
 
+	// WebSocket Gateway for live interview audio/text streaming.
+	// This sits outside auth for now to allow testing, but should be secured in production.
+	r.GET("/ws/interview", controllers.HandleInterviewWebSocket)
+
+	// Public ATS Invites (Verification)
+	r.GET("/api/invites/:token", controllers.VerifyInvite)
+
 	// 7. Authenticated API routes.
 	api := r.Group("/api")
 	api.Use(auth.AuthMiddleware())
@@ -262,6 +269,9 @@ func main() {
 		api.GET("/reports", controllers.HandleGetReports)
 		api.GET("/reports/:id", controllers.HandleGetReportByID)
 		api.GET("/repos/analyze/status", controllers.HandleCheckAnalysisStatus)
+
+		// ATS Invites
+		api.POST("/invites", controllers.CreateInvite)
 
 		// Everything below spends money — an LLM call, a scraper credit, or
 		// a repository download. The per-IP limiter above does not cover

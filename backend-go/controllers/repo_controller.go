@@ -15,7 +15,7 @@ import (
 
 // freeTierAnalyses is how many repositories a free account may analyze. The
 // user picks which ones — the repo list itself is never truncated.
-const freeTierAnalyses = 3
+const freeTierAnalyses = 100
 
 // HandleGetRepos fetches the user's GitHub repositories, annotated with what
 // we've already analyzed so the picker can show "retry" or "continue" rather

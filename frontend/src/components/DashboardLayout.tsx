@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { Outlet, Link, useLocation } from 'react-router-dom';
-import { LayoutDashboard, FolderKanban, FileText, Menu, X, FileUser, FilePenLine, Map, LogOut, Target } from 'lucide-react';
+import { LayoutDashboard, FolderKanban, FileText, Menu, X, FileUser, FilePenLine, Map, LogOut, Target, Briefcase } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 
 function Avatar({ avatarUrl, name, className }: { avatarUrl?: string; name: string; className?: string }) {
@@ -40,6 +40,7 @@ const navGroups: { label: string; items: NavItem[] }[] = [
   {
     label: 'Discover',
     items: [
+      { name: 'Find Jobs', icon: Briefcase, href: '/jobs' },
       { name: 'Job Map', icon: Map, href: '/directory' },
     ],
   },

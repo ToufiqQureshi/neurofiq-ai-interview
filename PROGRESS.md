@@ -1,5 +1,10 @@
 # Progress Log
 
+## 2026-09-04
+- **Email Integration**: Integrated Resend API in Go backend (`ats_controller.go`) for automated magic link delivery, replacing placeholder text response.
+- **Enterprise UI Revamp**: Completely redesigned the React Landing Page (`LandingPage.tsx`) with a premium B2B SaaS aesthetic (dark mode, glassmorphic layout, glowing borders) shifting focus to recruiters and hiring managers.
+- **Production Infrastructure**: Dockerized the entire platform by creating `Dockerfile`s for Go, Python, and React (Nginx), and authored a root `docker-compose.yml` encapsulating Postgres and all microservices for 1-click deployment.
+
 ## 2026-09-03
 - **Slug harvesting: boards without paying a search for each one (`slug_harvest.go`, `slug_source_commoncrawl.go`, `slug_source_register.go`)**: Discovery costs 2.02 metered searches per company — 293 of Exa's 800 monthly calls bought 145 companies in September, capping the month at roughly 400 however fast the cron runs. But boards are public pages a crawler has already indexed, so the list can be read instead of rediscovered: one Common Crawl index yields 13,501 slugs across the eight readable providers for ~20 requests and no metered call. Admission is unchanged — a harvested slug is a candidate that must pass the same gate a search hit does (`FetchATSJobs`, `maxBoardRoles`, `firstIndianLocation`, `boardRowIsAdmissible`, dedupe). Two sources feed one gate: Common Crawl for jobs, the startup register for the sector/stage/coordinates no board API reports.
 - **Bug in the first run: the page walk stopped on the first CDX error.** Requesting pages back to back had Common Crawl answer 504, and a 504 was treated as "no more pages" — 748 Greenhouse slugs collected where a paced walk finds 3,954, and zero for the host whose *first* page failed. A 400 is genuinely the end of the walk; a 5xx is the index saying it is busy. Now separated, with three retries and a 2s gap between pages.
@@ -11,7 +16,10 @@
 - **On-Demand Floating Company Drawer (`CompanyDrawer.tsx`)**: Integrated on-demand `/api/companies/:id` fetching into fixed overlay drawer (`z-[999]`) showing live hiring counts, active role accordion, direct careers link, and instant AI mock interview CTA.
 - **Unified Multi-Modal Search Capsule (`UnifiedSearchCapsule.tsx`)**: Integrated text/keyword search, browser-native Voice Recognition (Web Speech API), and tech sub-hub location dropdown into a single floating capsule.
 - **Interactive Natural-Language Preference Filter (`PreferenceSentenceFilter.tsx`)**: Conversational sentence builder with dynamic dropdown highlights (*"I am a [Role] looking for [Experience] [WorkType] in [Location] ➔"*).
-- **1-Click AI Mock Interview CTA Integration**: Linked real company job cards directly to Neurofiq's tailored AI mock interview engine (FastAPI + DeepSeek) passing pre-filled role and company context (`/dashboard?practice_job=...&company=...`).).
+- **1-Click AI Mock Interview CTA Integration**: Linked real company job cards directly to Neurofiq's tailored AI mock interview engine (FastAPI + DeepSeek) passing pre-filled role and company context (`/dashboard?practice_job=...&company=...`).
+- **Phase 1: B2B Enterprise UI Revamp**: Rebuilt the interview session page (`InterviewSession.tsx`) into a 2-panel "Studio" layout featuring a Monaco Editor for live-coding, an anti-cheat tab-switch monitor, and a persistent Picture-in-Picture (PiP) camera view replacing the old text boxes.
+- **Phase 2: Live Audio Streaming via WebSocket Gateway**: Ripped out the browser's native `SpeechRecognition` API. Built a secure Go WebSocket Gateway (`ws_controller.go`) that pipes raw WebM audio from React (`MediaRecorder`) directly to Deepgram (Nova-2), and streams JSON transcripts back to the browser for instant subtitles.
+- **Phase 3: Go ↔ Python gRPC Pipeline**: Established an internal microservice streaming architecture. Defined shared Protobufs (`interview.proto`), built a Python gRPC server alongside FastAPI, and implemented a Go gRPC client that passes Deepgram's final transcripts to the LLM and forwards AI responses back to the React UI.
 
 ## 2026-09-02
 - Formatted entire Go codebase with `gofmt -w .` to resolve GitHub Actions CI lint failure (`gofmt -l .`).

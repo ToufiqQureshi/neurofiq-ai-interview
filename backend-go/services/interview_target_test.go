@@ -36,7 +36,9 @@ func TestSameRoleAndAnalysisStillShareACacheKey(t *testing.T) {
 	analysis := `{"summary":"a go service"}`
 	role := "Backend Engineer at Razorpay"
 
-	if analysisFingerprint(analysis+"\x00"+role) != analysisFingerprint(analysis+"\x00"+role) {
+	key1 := analysisFingerprint(analysis+"\x00"+role)
+	key2 := analysisFingerprint(analysis+"\x00"+role)
+	if key1 != key2 {
 		t.Error("the same role and analysis produce different cache keys")
 	}
 }

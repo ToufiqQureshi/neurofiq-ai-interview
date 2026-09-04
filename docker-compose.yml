@@ -1,49 +1,46 @@
 version: '3.8'
 
 services:
-  go-backend:
-    build:
+  db:
+    image: postgres:15-alpine
+    environment:
+      POSTGRES_USER: neurofiq
+      POSTGRES_PASSWORD: password123
+      POSTGRES_DB: neurofiq_db
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+
+  backend:
+    build: 
       context: ./backend-go
-      dockerfile: Dockerfile
     ports:
       - "8080:8080"
     environment:
-      - PYTHON_WORKER_URL=http://ai-worker:8000
-      - INTERNAL_SECRET=${INTERNAL_SECRET}
-      - DATABASE_URL=${DATABASE_URL}
-      - SESSION_SECRET=${SESSION_SECRET}
-      - APP_ENV=${APP_ENV:-development}
-      - FRONTEND_URL=${FRONTEND_URL:-http://localhost:5173}
-      - OAUTH_REDIRECT_URL=${OAUTH_REDIRECT_URL:-http://localhost:8080/auth/github/callback}
-      - TRUSTED_PROXIES=${TRUSTED_PROXIES:-}
-      - DB_MAX_OPEN_CONNS=${DB_MAX_OPEN_CONNS:-25}
-      - SUPABASE_URL=${SUPABASE_URL}
-      - SUPABASE_SERVICE_ROLE_KEY=${SUPABASE_SERVICE_ROLE_KEY}
-      - GITHUB_CLIENT_ID=${GITHUB_CLIENT_ID}
-      - GITHUB_CLIENT_SECRET=${GITHUB_CLIENT_SECRET}
-      - RAZORPAY_KEY_ID=${RAZORPAY_KEY_ID}
-      - RAZORPAY_KEY_SECRET=${RAZORPAY_KEY_SECRET}
-      - DEEPGRAM_API_KEY=${DEEPGRAM_API_KEY}
-      - ELEVENLABS_API_KEY=${ELEVENLABS_API_KEY}
-      # Job Map scraping runs inside the Go service, so its keys belong here.
-      - FIRECRAWL_API_KEY=${FIRECRAWL_API_KEY}
-      - FIRECRAWL_MONTHLY_BUDGET=${FIRECRAWL_MONTHLY_BUDGET:-800}
-      - JINA_API_KEY=${JINA_API_KEY}
-      - PORT=8080
-    volumes:
-      - ./backend-go:/app
+      - DATABASE_URL=host=db user=neurofiq password=password123 dbname=neurofiq_db port=5432 sslmode=disable
+      - FRONTEND_URL=http://localhost:5173
+      - AI_GRPC_SERVER=ai-worker:50051
+      # Add RESEND_API_KEY, GITHUB_CLIENT_ID, etc in actual prod environment
     depends_on:
-      - ai-worker
+      - db
 
   ai-worker:
     build:
       context: ./ai-worker
-      dockerfile: Dockerfile
     ports:
-      - "8000:8000"
+      - "50051:50051"
     environment:
-      - INTERNAL_SECRET=${INTERNAL_SECRET}
-      - DEEPSEEK_API_KEY=${DEEPSEEK_API_KEY}
-      - EXA_API_KEY=${EXA_API_KEY}
-    volumes:
-      - ./ai-worker:/app
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - GEMINI_API_KEY=${GEMINI_API_KEY}
+    
+  frontend:
+    build:
+      context: ./frontend
+    ports:
+      - "5173:80" # Nginx serves on 80 in the container, mapping to 5173 to match local dev port expectations
+    depends_on:
+      - backend
+
+volumes:
+  postgres_data:

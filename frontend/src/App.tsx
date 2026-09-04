@@ -9,7 +9,9 @@ import { AnalysisProgress } from './pages/AnalysisProgress';
 import { InterviewSession } from './pages/InterviewSession';
 import { Report } from './pages/Report';
 import { PublicReport } from './pages/PublicReport';
+import { InviteLanding } from './pages/InviteLanding';
 import { CompanyMap } from './pages/CompanyMap';
+import { JobsPortal } from './pages/JobsPortal';
 import { Radar } from './pages/Radar';
 import { DashboardLayout } from './components/DashboardLayout';
 import { AuthProvider } from './context/AuthContext';
@@ -27,9 +29,13 @@ function App() {
               sit outside the login on purpose — a shared report has to open
               for a hiring manager who has never heard of us. */}
           <Route path="/r/:slug" element={<PublicReport />} />
+          
+          {/* Candidate Magic Link Landing */}
+          <Route path="/invite/:slug" element={<InviteLanding />} />
 
-          {/* Public Directory Route with Sidebar */}
+          {/* Public Directory & Job Discovery Routes with Sidebar */}
           <Route element={<DashboardLayout />}>
+            <Route path="/jobs" element={<JobsPortal />} />
             <Route path="/directory" element={<CompanyMap />} />
           </Route>
 

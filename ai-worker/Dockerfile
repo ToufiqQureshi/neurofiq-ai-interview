@@ -7,5 +7,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY . .
 
-EXPOSE 8000
-CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]
+# We run the gRPC server and the FastAPI server.
+# The user might want to run them separately, but for now we'll run the grpc server.
+# A proper entrypoint script could run both if needed, but the plan was grpc_server.py.
+CMD ["python", "grpc_server.py"]

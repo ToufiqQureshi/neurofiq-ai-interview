@@ -32,7 +32,7 @@ export default function CompanyDrawer({ company, onClose }: CompanyDrawerProps) 
     : '';
 
   return (
-    <div className="absolute top-4 right-4 z-[500] w-84 sm:w-96 max-h-[calc(100%-2rem)] bg-white/95 backdrop-blur-xl border border-slate-200/90 rounded-2xl shadow-2xl flex flex-col overflow-hidden animate-fade-in transition-all">
+    <div className="fixed top-20 right-4 sm:right-6 z-[999] w-84 sm:w-96 max-h-[calc(100vh-6rem)] bg-paper/95 dark:bg-zinc-900/95 backdrop-blur-xl border border-line rounded-2xl shadow-2xl flex flex-col overflow-hidden animate-fade-in transition-all">
       {/* Drawer Header */}
       <div className="p-4 border-b border-slate-100 flex items-start justify-between gap-3 bg-gradient-to-b from-slate-50/80 to-transparent">
         <div className="flex items-center gap-3 min-w-0">

@@ -326,7 +326,7 @@ func processZip(zipData []byte) ([]CodeSnippet, string, []string, error) {
 			languageBytes[lang] += int(f.UncompressedSize64)
 		}
 
-		score := scoreFile(name, ext, isSource, int64(f.UncompressedSize64))
+		score := scoreFile(name, isSource, int64(f.UncompressedSize64))
 		if score <= 0 {
 			continue
 		}
@@ -422,7 +422,7 @@ func processZip(zipData []byte) ([]CodeSnippet, string, []string, error) {
 
 // scoreFile rates how much a file tells us about the author's design
 // decisions. Zero means "do not send it to the model".
-func scoreFile(name, ext string, isSource bool, size int64) int {
+func scoreFile(name string, isSource bool, size int64) int {
 	base := path.Base(name)
 	lower := strings.ToLower(base)
 
