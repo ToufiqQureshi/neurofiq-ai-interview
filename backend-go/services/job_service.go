@@ -2,6 +2,7 @@ package services
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"html"
@@ -347,8 +348,8 @@ func fetchGreenhouseJobs(slug string) ([]greenhouseJob, error) {
 		return nil, err
 	}
 	defer resp.Body.Close()
-	if resp.StatusCode != 200 {
-		return nil, fmt.Errorf("greenhouse status %d", resp.StatusCode)
+	if resp.StatusCode != http.StatusOK {
+		return nil, &HTTPStatusError{Status: resp.StatusCode, URL: "greenhouse/" + slug}
 	}
 	var parsed greenhouseResponse
 	if err := json.NewDecoder(resp.Body).Decode(&parsed); err != nil {
@@ -366,8 +367,8 @@ func fetchLeverJobs(slug string) ([]leverJob, error) {
 		return nil, err
 	}
 	defer resp.Body.Close()
-	if resp.StatusCode != 200 {
-		return nil, fmt.Errorf("lever status %d", resp.StatusCode)
+	if resp.StatusCode != http.StatusOK {
+		return nil, &HTTPStatusError{Status: resp.StatusCode, URL: "lever/" + slug}
 	}
 	var parsed []leverJob
 	if err := json.NewDecoder(resp.Body).Decode(&parsed); err != nil {
@@ -385,8 +386,8 @@ func fetchAshbyJobs(slug string) ([]ashbyJob, error) {
 		return nil, err
 	}
 	defer resp.Body.Close()
-	if resp.StatusCode != 200 {
-		return nil, fmt.Errorf("ashby status %d", resp.StatusCode)
+	if resp.StatusCode != http.StatusOK {
+		return nil, &HTTPStatusError{Status: resp.StatusCode, URL: "ashby/" + slug}
 	}
 	var parsed ashbyResponse
 	if err := json.NewDecoder(resp.Body).Decode(&parsed); err != nil {
@@ -406,8 +407,8 @@ func fetchSmartRecruitersJobs(slug string) ([]smartRecruitersJob, error) {
 		return nil, err
 	}
 	defer resp.Body.Close()
-	if resp.StatusCode != 200 {
-		return nil, fmt.Errorf("smartrecruiters status %d", resp.StatusCode)
+	if resp.StatusCode != http.StatusOK {
+		return nil, &HTTPStatusError{Status: resp.StatusCode, URL: "smartrecruiters/" + slug}
 	}
 	var parsed smartRecruitersResponse
 	if err := json.NewDecoder(resp.Body).Decode(&parsed); err != nil {
@@ -468,13 +469,13 @@ func fetchDarwinboxJobs(slug string) ([]darwinboxJob, error) {
 	req.Header.Set("Referer", base+"/ms/candidatev2/main/careers/allJobs")
 	req.Header.Set("Accept-Language", "en-US,en;q=0.9")
 
-	resp, err := externalClient.Do(req)
+	resp, err := SafeExternalDo(context.Background(), req)
 	if err != nil {
 		return nil, err
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("darwinbox status %d", resp.StatusCode)
+		return nil, &HTTPStatusError{Status: resp.StatusCode, URL: "darwinbox/" + slug}
 	}
 
 	var parsed darwinboxResponse
@@ -501,8 +502,8 @@ func fetchKekaJobs(slug string) ([]kekaJob, error) {
 		return nil, err
 	}
 	defer resp.Body.Close()
-	if resp.StatusCode != 200 {
-		return nil, fmt.Errorf("keka status %d", resp.StatusCode)
+	if resp.StatusCode != http.StatusOK {
+		return nil, &HTTPStatusError{Status: resp.StatusCode, URL: "keka/" + slug}
 	}
 	var parsed []kekaJob
 	if err := json.NewDecoder(resp.Body).Decode(&parsed); err != nil {
@@ -520,8 +521,8 @@ func fetchWorkableJobs(slug string) ([]workableJob, error) {
 		return nil, err
 	}
 	defer resp.Body.Close()
-	if resp.StatusCode != 200 {
-		return nil, fmt.Errorf("workable status %d", resp.StatusCode)
+	if resp.StatusCode != http.StatusOK {
+		return nil, &HTTPStatusError{Status: resp.StatusCode, URL: "workable/" + slug}
 	}
 	var parsed workableResponse
 	if err := json.NewDecoder(resp.Body).Decode(&parsed); err != nil {
@@ -563,13 +564,13 @@ func fetchWorkdayJobs(slug string) ([]workdayJob, error) {
 		req.Header.Set("Accept", "application/json")
 		req.Header.Set("User-Agent", "Mozilla/5.0 (compatible; NeuroFIQ-JobMap/1.0)")
 
-		resp, err := externalClient.Do(req)
+		resp, err := SafeExternalDo(context.Background(), req)
 		if err != nil {
 			return nil, err
 		}
-		if resp.StatusCode != 200 {
+		if resp.StatusCode != http.StatusOK {
 			resp.Body.Close()
-			return nil, fmt.Errorf("workday status %d", resp.StatusCode)
+			return nil, &HTTPStatusError{Status: resp.StatusCode, URL: "workday/" + slug}
 		}
 		var parsed workdayResponse
 		decErr := json.NewDecoder(resp.Body).Decode(&parsed)
@@ -983,8 +984,15 @@ func replaceJobsForCompany(companyID string, rows []models.Job) (int, error) {
 		// No open roles right now (or the board came back empty) — clear
 		// any stale listings we previously had for this company.
 		config.DB.Where("company_id = ?", companyID).Delete(&models.Job{})
+		setOpenRoles(companyID, 0)
 		return 0, nil
 	}
+
+	// The facet buckets are stamped here, from the same slice being written,
+	// so a stored row and the classifier can never disagree. Doing it at the
+	// choke point rather than in each producer is what stops a new caller
+	// from writing rows the filters cannot see.
+	classifyJobs(rows)
 
 	currentURLs := make([]string, len(rows))
 	for i, r := range rows {
@@ -995,11 +1003,12 @@ func replaceJobsForCompany(companyID string, rows []models.Job) (int, error) {
 
 	if err := config.DB.Clauses(clause.OnConflict{
 		Columns:   []clause.Column{{Name: "company_id"}, {Name: "url"}},
-		DoUpdates: clause.AssignmentColumns([]string{"title", "department", "location"}),
+		DoUpdates: clause.AssignmentColumns([]string{"title", "department", "location", "field", "level"}),
 	}).Create(&rows).Error; err != nil {
 		return 0, err
 	}
 
+	setOpenRoles(companyID, len(rows))
 	return len(rows), nil
 }
 
@@ -1538,8 +1547,39 @@ func ListJobsForCompany(companyID string) ([]models.Job, error) {
 //     otherwise the new provider only ever applies to newly-discovered
 //     companies.
 func SyncAllCompanyJobs() {
+	SyncCompanyJobsBatch(context.Background(), jobSyncBatchSize)
+}
+
+// jobSyncBatchSize caps how many companies one sync tick refreshes.
+//
+// The sync used to load the whole directory and check all of it. That is a
+// fixed hour of work against a growing table, and the tick that stops fitting
+// inside its window does not fail — it overruns, and cron starts the next tick
+// on top of it. A bounded batch ordered by staleness turns the same work into
+// a rotation: every company is reached, the oldest first, and the tick always
+// ends. At this size the directory turns over roughly daily however large it
+// gets, which is what the listings actually need.
+const jobSyncBatchSize = 1200
+
+// jobSyncBudget is the wall clock one tick may spend, comfortably inside the
+// hourly schedule. The batch size bounds the work; this bounds the time, and
+// they are not the same thing — a batch full of throttled hosts takes far
+// longer per company than one that answers.
+const jobSyncBudget = 45 * time.Minute
+
+// SyncCompanyJobsBatch refreshes the companies whose roles are stalest.
+func SyncCompanyJobsBatch(ctx context.Context, batch int) {
+	ctx, cancel := context.WithTimeout(ctx, jobSyncBudget)
+	defer cancel()
+
 	var companies []models.Company
-	if err := config.DB.Find(&companies).Error; err != nil {
+	// NULLS FIRST so a company that has never been synced — one the harvest
+	// stored a minute ago — is refreshed before one that was synced an hour
+	// ago, rather than last.
+	if err := config.DB.
+		Order("last_synced_at ASC NULLS FIRST").
+		Limit(batch).
+		Find(&companies).Error; err != nil {
 		// Without this check a failed query looks identical to "no companies
 		// exist" — the sync would silently do nothing and log success.
 		log.Printf("job sync: failed to load companies: %v", err)
@@ -1567,6 +1607,12 @@ func SyncAllCompanyJobs() {
 	)
 
 	for _, c := range companies {
+		if ctx.Err() != nil {
+			// Out of budget. The companies not reached keep their old
+			// last_synced_at, so they are first in line next tick — the
+			// rotation continues rather than restarting.
+			break
+		}
 		wg.Add(1)
 		sem <- struct{}{}
 		go func(c models.Company) {
@@ -1584,7 +1630,23 @@ func SyncAllCompanyJobs() {
 			if err != nil {
 				// Non-fatal: one company's board being briefly unreachable
 				// shouldn't stop the rest of the sync.
+				//
+				// A transient failure deliberately does NOT stamp
+				// last_synced_at: leaving it stale is what brings this
+				// company back to the front of the next rotation instead of
+				// sending it to the back of a queue it never got served in.
+				if !IsTransientFetchError(err) {
+					touchSynced(c.ID)
+				}
 				return
+			}
+			if n == 0 {
+				// A clean read that found nothing still counts as reached.
+				// replaceJobsForCompany stamps the column whenever it writes,
+				// but a company skipped by its ATS re-check cooldown never
+				// gets there, and without this it would be permanently first
+				// in line and crowd out everything else.
+				touchSynced(c.ID)
 			}
 			if n > 0 {
 				mu.Lock()
@@ -1599,4 +1661,15 @@ func SyncAllCompanyJobs() {
 	wg.Wait()
 	log.Printf("job sync: %d companies checked, %d newly detected, %d open roles total | scrape usage this month: %v",
 		len(companies), detected, synced, ScrapeUsageSummary())
+	for _, h := range ThrottledHosts() {
+		log.Printf("job sync: %s is pacing us at %s after %d strikes", h.Host, h.Interval, h.Strikes)
+	}
+}
+
+// touchSynced records that a company had its turn in the rotation, without
+// claiming anything about what was found.
+func touchSynced(companyID string) {
+	config.DB.Model(&models.Company{}).
+		Where("id = ?", companyID).
+		Update("last_synced_at", time.Now())
 }

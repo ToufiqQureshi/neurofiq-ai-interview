@@ -23,7 +23,16 @@ func HandleGetCompanies(c *gin.Context) {
 		return
 	}
 
-	openRoles, _ := services.TotalOpenRoles(sector, stage, area, q)
+	// Without a text search the total is a sum of an indexed column rather
+	// than a join to the jobs table and a count of its rows. The filters are
+	// identical either way, so the two paths cannot disagree; only their cost
+	// differs, and this is the path almost every request takes.
+	var openRoles int64
+	if q == "" {
+		openRoles, _ = services.TotalOpenRolesFast(sector, stage, area)
+	} else {
+		openRoles, _ = services.TotalOpenRoles(sector, stage, area, q)
+	}
 	fields, levels, _ := services.JobFacets(sector, stage, area, q)
 
 	// Sector and stage ride along here rather than on an endpoint of their
@@ -44,6 +53,22 @@ func HandleGetCompanies(c *gin.Context) {
 			"stage":  stages,
 		},
 	})
+}
+
+// HandleGetPipelineHealth reports whether roles are still arriving.
+//
+// Answers in one request what previously took watching the log at the right
+// moment: is the queue draining, is any provider refusing us, is the sync
+// rotation keeping up, does the role counter still match the rows it counts.
+// It returns 503 when unhealthy so an uptime checker can watch it without
+// parsing anything.
+func HandleGetPipelineHealth(c *gin.Context) {
+	health := services.CheckPipelineHealth()
+	status := http.StatusOK
+	if !health.Healthy {
+		status = http.StatusServiceUnavailable
+	}
+	c.JSON(status, health)
 }
 
 // HandleGetDirectoryStats backs the count strip above the Job Map grid.

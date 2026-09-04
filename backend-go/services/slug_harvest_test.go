@@ -1,6 +1,7 @@
 package services
 
 import (
+	"context"
 	"strings"
 	"testing"
 
@@ -401,13 +402,26 @@ func TestCCWorkdayPartialSlug(t *testing.T) {
 // resolveWorkdaySlug probes the live API, so only its offline branches are
 // exercised here: a slug that is already complete, and one that cannot be.
 func TestResolveWorkdaySlugOfflineBranches(t *testing.T) {
-	if got := resolveWorkdaySlug("acme:wd5:External"); got != "acme:wd5:External" {
-		t.Errorf("a complete slug must pass through untouched, got %q", got)
+	ctx := context.Background()
+	got, err := resolveWorkdaySlug(ctx, "acme:wd5:External")
+	if err != nil || got != "acme:wd5:External" {
+		t.Errorf("a complete slug must pass through untouched, got %q (err %v)", got, err)
 	}
 	for _, bad := range []string{"acme", "acme:wd5", "acme:wd5:x:y", ":wd5:", "acme::"} {
-		if got := resolveWorkdaySlug(bad); got != "" {
-			t.Errorf("resolveWorkdaySlug(%q) = %q, want empty", bad, got)
+		got, err := resolveWorkdaySlug(ctx, bad)
+		if err != nil || got != "" {
+			t.Errorf("resolveWorkdaySlug(%q) = %q (err %v), want empty and no error", bad, got, err)
 		}
+	}
+}
+
+// A malformed slug is a permanent answer, not a transient one: nothing about
+// "acme:wd5" becomes resolvable by asking again. The nil error above is what
+// tells admitCandidate to record it as dead rather than defer it forever, so
+// the distinction is asserted rather than assumed.
+func TestResolveWorkdaySlugMalformedIsNotTransient(t *testing.T) {
+	if _, err := resolveWorkdaySlug(context.Background(), "acme"); IsTransientFetchError(err) {
+		t.Errorf("a malformed slug must not look like a transient failure")
 	}
 }
 

@@ -2,6 +2,7 @@ package services
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -121,15 +122,87 @@ func AllowedPublicURL(raw string) error {
 // SafeExternalGet fetches a URL we did not author. Use it for anything whose
 // address came from search results, scraped HTML, or an LLM.
 func SafeExternalGet(rawURL string) (*http.Response, error) {
+	return SafeExternalGetCtx(context.Background(), rawURL)
+}
+
+// SafeExternalGetCtx is SafeExternalGet with a caller-supplied deadline.
+//
+// Two things happen here that did not before. The request waits for its host's
+// pacing slot (hostlimit.go), so eight workers on one provider queue instead
+// of bursting; and the response is fed back into that host's gate, so a 429
+// slows every worker rather than only the one that saw it.
+//
+// This is the single place every third-party fetch in the service passes
+// through — the harvest, the hourly sync, ATS detection, careers-page reads
+// and the dead-link prune — which is why the pacing belongs here rather than
+// in each caller. A caller added later gets it without knowing it exists.
+func SafeExternalGetCtx(ctx context.Context, rawURL string) (*http.Response, error) {
 	if err := AllowedPublicURL(rawURL); err != nil {
 		return nil, err
 	}
-	req, err := http.NewRequest("GET", rawURL, nil)
+	parsed, err := url.Parse(strings.TrimSpace(rawURL))
+	if err != nil {
+		return nil, err
+	}
+	host := strings.ToLower(parsed.Hostname())
+
+	if err := awaitHostSlot(ctx, host); err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequestWithContext(ctx, "GET", rawURL, nil)
 	if err != nil {
 		return nil, err
 	}
 	req.Header.Set("User-Agent", "NeuroFIQ-JobMap/1.0 (+https://neurofiq.in)")
-	return externalClient.Do(req)
+	resp, err := externalClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	noteHostResponse(host, resp)
+	return resp, nil
+}
+
+// SafeExternalDo is SafeExternalGetCtx for a request the caller built itself.
+//
+// Two ATS readers have to POST — Darwinbox takes a JSON filter body, Workday
+// pages through one — so they cannot go through the GET helper, and before
+// this they called externalClient.Do directly. That put the two providers most
+// likely to sit behind a bot filter outside the only place that paces requests
+// and notices a 429, which is exactly backwards.
+func SafeExternalDo(ctx context.Context, req *http.Request) (*http.Response, error) {
+	if req.URL == nil {
+		return nil, fmt.Errorf("request has no url")
+	}
+	if err := AllowedPublicURL(req.URL.String()); err != nil {
+		return nil, err
+	}
+	host := strings.ToLower(req.URL.Hostname())
+	if err := awaitHostSlot(ctx, host); err != nil {
+		return nil, err
+	}
+	resp, err := externalClient.Do(req.WithContext(ctx))
+	if err != nil {
+		return nil, err
+	}
+	noteHostResponse(host, resp)
+	return resp, nil
+}
+
+// RequireOK closes and discards a non-2xx response, returning an
+// HTTPStatusError that says which status it was.
+//
+// Every ATS fetcher had its own `if resp.StatusCode != 200 { return
+// fmt.Errorf("... status %d") }`, which is correct and unusable: the string
+// carries the status but no caller can read it, so a 404 and a 429 arrive at
+// the harvest as the same opaque error. Routing them through one helper is
+// what lets admitCandidate ask whether the failure is worth retrying.
+func RequireOK(resp *http.Response, rawURL string) error {
+	if resp.StatusCode >= 200 && resp.StatusCode < 300 {
+		return nil
+	}
+	io.Copy(io.Discard, io.LimitReader(resp.Body, 4<<10))
+	return &HTTPStatusError{Status: resp.StatusCode, URL: rawURL}
 }
 
 // ReadCapped reads at most max bytes and reports an error if the body was

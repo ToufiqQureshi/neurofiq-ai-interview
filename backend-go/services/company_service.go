@@ -1,6 +1,7 @@
 package services
 
 import (
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -135,14 +136,43 @@ func facetClause(column, value, prefix string) (string, []interface{}) {
 // choices available, not the choices remaining — narrowing them as filters are
 // applied is how a dropdown ends up with one entry and no way back.
 func CompanyFacets() (sectors, stages []string, err error) {
+	// Cached, because these are two SELECT DISTINCT scans of the whole
+	// companies table and they ran on every single request to /api/companies.
+	// The values only change when a company is stored or enriched, which is
+	// minutes apart at best, so a short cache costs nothing in freshness and
+	// takes both scans off the hot path entirely.
+	facetCacheMu.RLock()
+	fresh := facetCacheAt.Add(facetCacheTTL).After(time.Now())
+	cachedSectors, cachedStages := facetCacheSectors, facetCacheStages
+	facetCacheMu.RUnlock()
+	if fresh {
+		return cachedSectors, cachedStages, nil
+	}
+
 	if sectors, err = distinctCompanyValues("sector"); err != nil {
 		return nil, nil, err
 	}
 	if stages, err = distinctCompanyValues("stage"); err != nil {
 		return nil, nil, err
 	}
+
+	facetCacheMu.Lock()
+	facetCacheSectors, facetCacheStages, facetCacheAt = sectors, stages, time.Now()
+	facetCacheMu.Unlock()
 	return sectors, stages, nil
 }
+
+// facetCacheTTL is short enough that a newly discovered sector appears on the
+// filter within one refresh, and long enough that a burst of traffic does not
+// scan the table once per visitor.
+const facetCacheTTL = 5 * time.Minute
+
+var (
+	facetCacheMu      sync.RWMutex
+	facetCacheSectors []string
+	facetCacheStages  []string
+	facetCacheAt      time.Time
+)
 
 // distinctCompanyValues reads one column's options, sorted, with a single
 // Unknown entry standing for every row the pipeline left blank.
@@ -415,9 +445,29 @@ func fallbackCoordsForArea(name, area string) (*float64, *float64) {
 
 // PruneDeadJobs checks active job links via fast concurrent HTTP HEAD/GET requests
 // and removes any 404, 410, DNS failure, or expired postings.
+// pruneBatchSize caps how many links one prune tick verifies.
+//
+// The prune used to fetch every job URL in the table on every run. At 4,000
+// roles that is a five-minute job; at the 300,000 this pipeline is built to
+// reach it is 300,000 requests against other people's servers twice a day —
+// unfinishable inside its window, and exactly the traffic shape that gets a
+// crawler blocked. A bounded slice ordered by last_checked_at makes it a
+// rotation instead: every link is still reached, just not all in one tick.
+const pruneBatchSize = 3000
+
 func PruneDeadJobs() (int, error) {
 	var jobs []models.Job
-	if err := config.DB.Find(&jobs).Error; err != nil {
+	// Board-sourced roles are deliberately excluded. replaceJobsForCompany
+	// already makes the jobs table match the board exactly on every sync, so a
+	// closed Greenhouse posting is deleted by the sync that saw it vanish;
+	// re-fetching those links asks a question whose answer we already have.
+	// What is left is careers-page roles, which have no authoritative feed
+	// behind them and are the only ones that can rot without anyone noticing.
+	if err := config.DB.
+		Where("source = ?", careersPageSource).
+		Order("last_checked_at ASC NULLS FIRST").
+		Limit(pruneBatchSize).
+		Find(&jobs).Error; err != nil {
 		return 0, fmt.Errorf("failed to load jobs: %w", err)
 	}
 
@@ -489,10 +539,39 @@ func PruneDeadJobs() (int, error) {
 
 	wg.Wait()
 
+	// Stamped whether or not the link turned out to be dead, so the next tick
+	// moves on to rows this one did not reach. Without it the same oldest
+	// batch would be re-checked every tick and the rotation would never
+	// advance past its first slice.
+	for start := 0; start < len(jobs); start += 1000 {
+		end := start + 1000
+		if end > len(jobs) {
+			end = len(jobs)
+		}
+		ids := make([]string, 0, end-start)
+		for _, j := range jobs[start:end] {
+			ids = append(ids, j.ID)
+		}
+		config.DB.Model(&models.Job{}).Where("id IN ?", ids).
+			Update("last_checked_at", time.Now())
+	}
+
 	if len(deadIDs) > 0 {
 		log.Printf("Pruning %d dead jobs from database...", len(deadIDs))
 		if err := config.DB.Where("id IN ?", deadIDs).Delete(&models.Job{}).Error; err != nil {
 			return 0, fmt.Errorf("failed to delete dead jobs: %w", err)
+		}
+		// The counter has to follow the deletion, or a company keeps a badge
+		// advertising roles that were just removed. Only the companies this
+		// batch actually touched are recounted.
+		affected := map[string]bool{}
+		for _, j := range jobs {
+			affected[j.CompanyID] = true
+		}
+		for id := range affected {
+			var n int64
+			config.DB.Model(&models.Job{}).Where("company_id = ?", id).Count(&n)
+			config.DB.Model(&models.Company{}).Where("id = ?", id).Update("open_roles", n)
 		}
 	}
 
@@ -517,7 +596,7 @@ func PruneDeadJobs() (int, error) {
 // Applied only to the default listing. hiringOnly is a stricter filter that
 // already excludes these, and the stats strip counts them separately so the
 // two never disagree.
-const listableHaving = "COUNT(jobs.id) > 0 OR COALESCE(companies.ats_slug, '') <> ''"
+const listableCondition = "open_roles > 0 OR COALESCE(ats_slug, '') <> ''"
 
 // ListCompanies returns a filtered, paginated slice of the company directory.
 // hiringOnly restricts it to companies with at least one open role — most
@@ -542,39 +621,51 @@ func ListCompanies(sector, stage, area, q string, hiringOnly bool, page, pageSiz
 		return dbQuery
 	}
 
+	// No join, no GROUP BY, no HAVING, and no ORDER BY over an aggregate.
+	//
+	// All four came from counting a company's roles at read time, which meant
+	// aggregating the whole companies-to-jobs join before the LIMIT could
+	// apply — twice per request, since the total was counted the same way.
+	// Nothing can index an ORDER BY COUNT(), so that plan gets slower with
+	// every company the harvest adds and there is no version of it that does
+	// not. companies.open_roles holds the same number, maintained where the
+	// roles are written and repaired on a schedule (directory_counters.go),
+	// so all of it collapses into an indexed scan of one table.
 	base := func() *gorm.DB {
-		q := applyFilters().
-			Select("companies.*, COUNT(jobs.id) AS job_count").
-			Joins("LEFT JOIN jobs ON jobs.company_id = companies.id").
-			Group("companies.id")
+		q := applyFilters()
 		if hiringOnly {
-			q = q.Having("COUNT(jobs.id) > 0")
-		} else {
-			q = q.Having(listableHaving)
+			return q.Where("open_roles > 0")
 		}
-		return q
+		return q.Where(listableCondition)
 	}
 
-	// Count the grouped rows, not the raw join, or companies with many jobs
-	// would be counted once per job.
 	var total int64
-	if err := config.DB.Table("(?) AS grouped", base()).Count(&total).Error; err != nil {
+	if err := base().Count(&total).Error; err != nil {
 		return nil, 0, err
 	}
 
 	var companies []CompanyWithJobCount
 	err := base().
+		Select("companies.*, companies.open_roles AS job_count").
 		// Hiring companies first, then most recently discovered.
-		Order("COUNT(jobs.id) DESC, companies.created_at DESC").
+		Order("companies.open_roles DESC, companies.created_at DESC").
 		Offset((page - 1) * pageSize).
 		Limit(pageSize).
 		Find(&companies).Error
 
 	if err == nil {
 		for i := range companies {
-			lat, lng := fallbackCoordsForArea(companies[i].Name, companies[i].Area)
-			companies[i].Lat = lat
-			companies[i].Lng = lng
+			// Only where the pipeline has no real position for this company.
+			// Overwriting unconditionally discarded the coordinates
+			// geocodeArea measured from the area the board itself stated, so
+			// the grid and the map showed a hash of the company name jittered
+			// around a hub while the detail endpoint showed the truth — the
+			// card and the pin disagreed about which city the work is in.
+			if companies[i].Lat == nil || companies[i].Lng == nil {
+				lat, lng := fallbackCoordsForArea(companies[i].Name, companies[i].Area)
+				companies[i].Lat = lat
+				companies[i].Lng = lng
+			}
 		}
 	}
 
@@ -596,6 +687,30 @@ func TotalOpenRoles(sector, stage, area, q string) (int64, error) {
 	var n int64
 	err := dbQuery.Count(&n).Error
 	return n, err
+}
+
+// TotalOpenRolesFast sums companies.open_roles under the company-level
+// filters, reading one table instead of joining to jobs and counting rows.
+//
+// Used when there is no text search, which is the common case — a text search
+// still has to reach the jobs table because it matches on company name and
+// description, and the exact count there is worth the join.
+func TotalOpenRolesFast(sector, stage, area string) (int64, error) {
+	dbQuery := config.DB.Model(&models.Company{})
+	dbQuery = applyFacetFilter(dbQuery, "sector", sector, "")
+	dbQuery = applyFacetFilter(dbQuery, "stage", stage, "")
+	dbQuery = applyAreaFilter(dbQuery, area, "")
+
+	// sql.NullInt64 rather than a *int64, because SUM over no matching rows is
+	// NULL and the destination has to be able to hold that. Scanning into a
+	// **int64 is not a shape the driver accepts, and the header this feeds
+	// would have failed for every filter that matches nothing — which is the
+	// case a visitor reaches by narrowing, not an exotic one.
+	var total sql.NullInt64
+	if err := dbQuery.Select("COALESCE(SUM(open_roles), 0)").Scan(&total).Error; err != nil {
+		return 0, err
+	}
+	return total.Int64, nil
 }
 
 func extractDomain(website string) string {
@@ -759,12 +874,11 @@ func GetDirectoryStats() (DirectoryStats, error) {
 	var s DirectoryStats
 
 	// Counted the same way the default listing filters, or the strip would
-	// advertise more companies than the grid below it can show.
+	// advertise more companies than the grid below it can show. Sharing the
+	// one condition is what keeps that true — this count and ListCompanies
+	// disagreeing is a bug a visitor sees directly.
 	if err := config.DB.Model(&models.Company{}).
-		Joins("LEFT JOIN jobs ON jobs.company_id = companies.id").
-		Group("companies.id").
-		Having(listableHaving).
-		Distinct("companies.id").Count(&s.Companies).Error; err != nil {
+		Where(listableCondition).Count(&s.Companies).Error; err != nil {
 		return s, err
 	}
 	if err := config.DB.Model(&models.Job{}).Count(&s.Jobs).Error; err != nil {

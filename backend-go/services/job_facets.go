@@ -3,6 +3,8 @@ package services
 import (
 	"strings"
 
+	"gorm.io/gorm"
+
 	"github.com/ToufiqQureshi/neurofiq-ai-interview/backend-go/config"
 	"github.com/ToufiqQureshi/neurofiq-ai-interview/backend-go/models"
 )
@@ -87,29 +89,66 @@ type FacetCount struct {
 // JobFacets returns field and level counts across all roles matching the
 // given company filters, for the filter chips in the UI.
 func JobFacets(sector, stage, area, q string) (fields, levels []FacetCount, err error) {
-	dbQuery := config.DB.Model(&models.Job{}).
-		Select("jobs.title, jobs.department").
-		Joins("JOIN companies ON companies.id = jobs.company_id")
-	dbQuery = applyFacetFilter(dbQuery, "sector", sector, "companies")
-	dbQuery = applyFacetFilter(dbQuery, "stage", stage, "companies")
-	dbQuery = applyAreaFilter(dbQuery, area, "companies")
-	if q != "" {
-		dbQuery = dbQuery.Where("companies.name ILIKE ? OR companies.description ILIKE ?", "%"+q+"%", "%"+q+"%")
+	// Built fresh for each of the two counts rather than shared between them.
+	//
+	// A *gorm.DB accumulates clauses, and reusing one across two finished
+	// queries relies on session semantics to decide whether the second sees
+	// the first's SELECT and GROUP BY. That is a subtle thing to be right
+	// about and an ugly thing to be wrong about — the level counts would come
+	// back grouped by field — so the query is simply constructed twice. It is
+	// a few pointer allocations against a database round trip.
+	filtered := func() *gorm.DB {
+		db := config.DB.Model(&models.Job{}).
+			Joins("JOIN companies ON companies.id = jobs.company_id")
+		db = applyFacetFilter(db, "sector", sector, "companies")
+		db = applyFacetFilter(db, "stage", stage, "companies")
+		db = applyAreaFilter(db, area, "companies")
+		if q != "" {
+			db = db.Where("companies.name ILIKE ? OR companies.description ILIKE ?", "%"+q+"%", "%"+q+"%")
+		}
+		return db
 	}
 
-	var rows []struct {
-		Title      string
-		Department string
+	// Counted in the database from the stored buckets rather than by pulling
+	// every matching title into Go and classifying it again on each request.
+	//
+	// The classification is pure — the same title always gives the same bucket
+	// — so recomputing it per page load was the same work repeated forever,
+	// over a full scan of the filtered jobs table. jobs.field and jobs.level
+	// hold the answer; two GROUP BYs replace the scan. classifyJobs writes
+	// those columns at the choke point every producer passes through, and
+	// BackfillJobFacets rewrites them when the rules change, which is what
+	// stops a stored derivation from drifting away from its classifier.
+	//
+	// COALESCE/NULLIF cover rows written before the columns existed: they read
+	// as the same default bucket the classifier would have given them, so the
+	// counts stay complete while the backfill works through the table.
+	countByBucket := func(column, fallback string) (map[string]int, error) {
+		var rows []struct {
+			Bucket string
+			N      int
+		}
+		err := filtered().
+			Select("COALESCE(NULLIF(jobs."+column+", ''), ?) AS bucket, COUNT(*) AS n", fallback).
+			Group("bucket").
+			Scan(&rows).Error
+		if err != nil {
+			return nil, err
+		}
+		out := make(map[string]int, len(rows))
+		for _, r := range rows {
+			out[r.Bucket] += r.N
+		}
+		return out, nil
 	}
-	if err := dbQuery.Scan(&rows).Error; err != nil {
+
+	fieldCounts, err := countByBucket("field", "Other")
+	if err != nil {
 		return nil, nil, err
 	}
-
-	fieldCounts := map[string]int{}
-	levelCounts := map[string]int{}
-	for _, r := range rows {
-		fieldCounts[ClassifyField(r.Title, r.Department)]++
-		levelCounts[ClassifyLevel(r.Title)]++
+	levelCounts, err := countByBucket("level", "Unspecified")
+	if err != nil {
+		return nil, nil, err
 	}
 
 	// Emit in display order, skipping empty buckets so the UI stays clean.
