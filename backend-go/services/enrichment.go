@@ -1,8 +1,10 @@
 package services
 
 import (
+	"fmt"
 	"html"
 	"log"
+	"net/url"
 	"regexp"
 	"strings"
 	"sync"
@@ -38,10 +40,12 @@ import (
 var (
 	ogSiteNameRe         = regexp.MustCompile(`(?is)<meta[^>]+property\s*=\s*["']og:site_name["'][^>]+content\s*=\s*["']([^"']{2,60})["']`)
 	ogSiteNameAltRe      = regexp.MustCompile(`(?is)<meta[^>]+content\s*=\s*["']([^"']{2,60})["'][^>]+property\s*=\s*["']og:site_name["']`)
-	ogDescriptionRe      = regexp.MustCompile(`(?is)<meta[^>]+property\s*=\s*["']og:description["'][^>]+content\s*=\s*["']([^"']{20,400})["']`)
-	ogDescriptionAltRe   = regexp.MustCompile(`(?is)<meta[^>]+content\s*=\s*["']([^"']{20,400})["'][^>]+property\s*=\s*["']og:description["']`)
-	metaDescriptionRe    = regexp.MustCompile(`(?is)<meta[^>]+name\s*=\s*["']description["'][^>]+content\s*=\s*["']([^"']{20,400})["']`)
-	metaDescriptionAltRe = regexp.MustCompile(`(?is)<meta[^>]+content\s*=\s*["']([^"']{20,400})["'][^>]+name\s*=\s*["']description["']`)
+	ogDescriptionRe      = regexp.MustCompile(`(?is)<meta[^>]+property\s*=\s*["']og:description["'][^>]+content\s*=\s*["']([^"']{15,500})["']`)
+	ogDescriptionAltRe   = regexp.MustCompile(`(?is)<meta[^>]+content\s*=\s*["']([^"']{15,500})["'][^>]+property\s*=\s*["']og:description["']`)
+	metaDescriptionRe    = regexp.MustCompile(`(?is)<meta[^>]+name\s*=\s*["']description["'][^>]+content\s*=\s*["']([^"']{15,500})["']`)
+	metaDescriptionAltRe = regexp.MustCompile(`(?is)<meta[^>]+content\s*=\s*["']([^"']{15,500})["'][^>]+name\s*=\s*["']description["']`)
+	twitterDescRe        = regexp.MustCompile(`(?is)<meta[^>]+(?:name|property)\s*=\s*["']twitter:description["'][^>]+content\s*=\s*["']([^"']{15,500})["']`)
+	twitterDescAltRe     = regexp.MustCompile(`(?is)<meta[^>]+content\s*=\s*["']([^"']{15,500})["'][^>]+(?:name|property)\s*=\s*["']twitter:description["']`)
 )
 
 // maxHomepageBytes caps the read. A meta tag lives in <head>; anything past
@@ -137,14 +141,60 @@ type siteMeta struct {
 	SiteName    string
 }
 
-// fetchSiteMeta reads the company's homepage once and returns the fields it
-// publishes about itself.
-func fetchSiteMeta(website string) siteMeta {
-	var out siteMeta
-	if strings.TrimSpace(website) == "" {
-		return out
+
+// fetchSiteMetaWithFallback attempts the provided website URL first, and if that
+// yields no description or has a subpath, falls back to the clean root domain.
+func fetchSiteMetaWithFallback(website, domain string) siteMeta {
+	var candidates []string
+
+	cleanWeb := strings.TrimSpace(website)
+	if cleanWeb != "" {
+		if !strings.HasPrefix(cleanWeb, "http://") && !strings.HasPrefix(cleanWeb, "https://") {
+			cleanWeb = "https://" + cleanWeb
+		}
+		candidates = append(candidates, cleanWeb)
+		if parsed, err := url.Parse(cleanWeb); err == nil && parsed.Host != "" {
+			root := fmt.Sprintf("%s://%s", parsed.Scheme, parsed.Host)
+			if root != cleanWeb && root != cleanWeb+"/" {
+				candidates = append(candidates, root)
+			}
+		}
 	}
-	resp, err := SafeExternalGet(website)
+
+	cleanDomain := strings.TrimSpace(domain)
+	if cleanDomain != "" {
+		domURL := "https://" + cleanDomain
+		hasDom := false
+		for _, c := range candidates {
+			if strings.EqualFold(c, domURL) || strings.EqualFold(c, domURL+"/") {
+				hasDom = true
+				break
+			}
+		}
+		if !hasDom {
+			candidates = append(candidates, domURL)
+		}
+	}
+
+	var out siteMeta
+	for _, targetURL := range candidates {
+		meta := readPageMeta(targetURL)
+		if meta.Description != "" && out.Description == "" {
+			out.Description = meta.Description
+		}
+		if meta.SiteName != "" && out.SiteName == "" {
+			out.SiteName = meta.SiteName
+		}
+		if out.Description != "" {
+			break
+		}
+	}
+	return out
+}
+
+func readPageMeta(targetURL string) siteMeta {
+	var out siteMeta
+	resp, err := SafeExternalGet(targetURL)
 	if err != nil {
 		return out
 	}
@@ -158,9 +208,8 @@ func fetchSiteMeta(website string) siteMeta {
 	}
 	page := string(body)
 
-	// og:description first — it is written for humans reading a shared link,
-	// where the meta description is often stuffed for search engines.
-	for _, re := range []*regexp.Regexp{ogDescriptionRe, ogDescriptionAltRe, metaDescriptionRe, metaDescriptionAltRe} {
+	// Scan og:description, meta description, and twitter:description
+	for _, re := range []*regexp.Regexp{ogDescriptionRe, ogDescriptionAltRe, metaDescriptionRe, metaDescriptionAltRe, twitterDescRe, twitterDescAltRe} {
 		if m := re.FindStringSubmatch(page); m != nil {
 			if d := cleanDescription(m[1]); d != "" {
 				out.Description = d
@@ -182,11 +231,12 @@ func fetchSiteMeta(website string) siteMeta {
 // rejected.
 func cleanDescription(raw string) string {
 	d := whitespaceRe.ReplaceAllString(strings.TrimSpace(html.UnescapeString(raw)), " ")
-	if len(d) < 20 || len(d) > 300 {
+	if len(d) < 15 {
 		return ""
 	}
-	// A site serving its cookie banner or a JS-required notice as the meta
-	// description would put that sentence on the card.
+	if len(d) > 320 {
+		d = strings.TrimSpace(d[:317]) + "..."
+	}
 	lower := strings.ToLower(d)
 	for _, bad := range []string{"enable javascript", "cookies", "404", "page not found",
 		"lorem ipsum", "under construction", "domain is for sale"} {
@@ -204,15 +254,12 @@ func EnrichCompany(c models.Company) bool {
 	updates := map[string]interface{}{}
 
 	needsDescription := strings.TrimSpace(c.Description) == ""
-	needsSector := strings.TrimSpace(c.Sector) == ""
+	needsSector := strings.TrimSpace(c.Sector) == "" || c.Sector == "Unknown"
 
 	description := c.Description
-	// The homepage is only worth opening for what the row cannot already
-	// answer. A company that has a description needs no fetch to be
-	// classified — the sector comes from words already stored.
 	var meta siteMeta
 	if needsDescription || looksLikeSlugFallback(c.Name) {
-		meta = fetchSiteMeta(c.Website)
+		meta = fetchSiteMetaWithFallback(c.Website, c.Domain)
 	}
 	if needsDescription && meta.Description != "" {
 		description = meta.Description
@@ -224,17 +271,6 @@ func EnrichCompany(c models.Company) bool {
 		}
 	}
 
-	// The company's own name, when the slug agrees it is the same company.
-	//
-	// Board discovery falls back to the slug whenever a page title cannot be
-	// corroborated, which is right but reads badly: the directory shows
-	// "vmlenterprisesolutions" and "gokwik". og:site_name is what the company
-	// calls itself, and it costs nothing extra — the page is already open.
-	//
-	// It goes through the same referee as every other name here. A site whose
-	// og:site_name disagrees with the slug is not this company's site, or is
-	// naming something else, and taking it would put one company's name over
-	// another's roles — the failure this whole path exists to prevent.
 	if meta.SiteName != "" && looksLikeSlugFallback(c.Name) &&
 		nameAgreesWithSlug(meta.SiteName, c.ATSSlug) && meta.SiteName != c.Name {
 		updates["name"] = meta.SiteName
@@ -253,29 +289,19 @@ func EnrichCompany(c models.Company) bool {
 
 // looksLikeSlugFallback reports whether a stored name is the one board
 // discovery derives from a slug when no title could be corroborated.
-//
-// Only those are worth replacing. A name that already reads like a company —
-// "Match Group", "Level AI" — came from a title the slug agreed with, and is
-// better than anything a homepage banner would offer.
 func looksLikeSlugFallback(name string) bool {
 	trimmed := strings.TrimSpace(name)
 	if trimmed == "" {
 		return true
 	}
-	// A slug-derived name has no capitals beyond an accidental first letter
-	// and no punctuation: "gokwik", "vmlenterprisesolutions", "brillio 2".
 	return trimmed == strings.ToLower(trimmed)
 }
 
 // RunEnrichment fills description and sector for companies that have neither.
-//
-// Free throughout — one HTTP GET per company against its own homepage, no
-// metered search and no model — so it runs on its own schedule rather than
-// competing with discovery for a budget.
 func RunEnrichment() {
 	var pending []models.Company
 	if err := config.DB.
-		Where("(coalesce(description, '') = '' OR coalesce(sector, '') = '') AND coalesce(website, '') <> ''").
+		Where("(coalesce(description, '') = '' OR coalesce(sector, '') = '' OR sector = 'Unknown') AND (coalesce(website, '') <> '' OR coalesce(domain, '') <> '')").
 		Limit(enrichBatchSize).
 		Find(&pending).Error; err != nil {
 		log.Printf("enrichment: could not load companies: %v", err)
@@ -295,8 +321,6 @@ func RunEnrichment() {
 		wg.Add(1)
 		go func(company models.Company) {
 			defer wg.Done()
-			// Gin's Recovery() does not cover goroutines spawned here, and one
-			// panic would take the whole process down.
 			defer func() {
 				if r := recover(); r != nil {
 					log.Printf("enrichment: recovered while enriching %q: %v", company.Name, r)
@@ -315,4 +339,51 @@ func RunEnrichment() {
 	wg.Wait()
 
 	log.Printf("enrichment: %d of %d companies gained a description or sector", updated, len(pending))
+}
+
+// EnrichAllPendingCompanies sweeps every company in the directory missing descriptions
+// or sector classification using concurrent workers.
+func EnrichAllPendingCompanies(concurrency int) (int, error) {
+	if concurrency <= 0 {
+		concurrency = 12
+	}
+	var pending []models.Company
+	if err := config.DB.
+		Where("(coalesce(description, '') = '' OR coalesce(sector, '') = '' OR sector = 'Unknown') AND (coalesce(website, '') <> '' OR coalesce(domain, '') <> '')").
+		Find(&pending).Error; err != nil {
+		return 0, err
+	}
+	if len(pending) == 0 {
+		return 0, nil
+	}
+
+	var (
+		mu      sync.Mutex
+		updated int
+		wg      sync.WaitGroup
+		sem     = make(chan struct{}, concurrency)
+	)
+
+	for _, c := range pending {
+		wg.Add(1)
+		go func(company models.Company) {
+			defer wg.Done()
+			defer func() {
+				if r := recover(); r != nil {
+					log.Printf("enrichment: recovered while enriching %q: %v", company.Name, r)
+				}
+			}()
+			sem <- struct{}{}
+			defer func() { <-sem }()
+
+			if EnrichCompany(company) {
+				mu.Lock()
+				updated++
+				mu.Unlock()
+			}
+		}(c)
+	}
+	wg.Wait()
+
+	return updated, nil
 }

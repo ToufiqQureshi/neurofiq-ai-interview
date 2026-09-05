@@ -1320,3 +1320,36 @@ func RunJobSync() {
 	}
 	SyncAllCompanyJobs()
 }
+
+// RunMultiCityDiscovery triggers discovery queries across major Indian tech hub cities
+// (Bengaluru, Mumbai, Gurgaon/Delhi, Hyderabad, Pune, Chennai, Noida).
+// It allows an operator or admin to actively sweep locations on demand while respecting
+// remaining search budget guards.
+func RunMultiCityDiscovery(cities []string, limitPerCity int) (map[string]int, error) {
+	if limitPerCity <= 0 || limitPerCity > maxNewCompaniesPerRun {
+		limitPerCity = maxNewCompaniesPerRun
+	}
+	if len(cities) == 0 {
+		cities = []string{"Bengaluru", "Mumbai", "Gurgaon", "Hyderabad", "Pune", "Chennai", "Noida", "Delhi"}
+	}
+
+	results := make(map[string]int)
+	for _, city := range cities {
+		if SearchBudgetRemaining() <= schedulerReserve() {
+			log.Printf("multi-city discovery: stopping sweep early, search budget floor reached (%d remaining)", SearchBudgetRemaining())
+			break
+		}
+		query := fmt.Sprintf("software engineer jobs in %s, India", city)
+		saved, err := DiscoverFromBoards(query, limitPerCity)
+		if err != nil {
+			log.Printf("multi-city discovery: failed for city %q: %v", city, err)
+			results[city] = 0
+			continue
+		}
+		results[city] = len(saved)
+		log.Printf("multi-city discovery: %s -> %d new companies discovered", city, len(saved))
+		time.Sleep(1 * time.Second)
+	}
+
+	return results, nil
+}

@@ -107,3 +107,50 @@ func classifyJobs(rows []models.Job) {
 		rows[i].Level = ClassifyLevel(rows[i].Title)
 	}
 }
+
+// ReclassifyAllJobs re-runs ClassifyField and ClassifyLevel across every job
+// in the database in bounded batches, updating all stored roles under the
+// latest classification rules.
+func ReclassifyAllJobs(batchSize int) (int, error) {
+	if batchSize <= 0 {
+		batchSize = 2000
+	}
+	var totalUpdated int
+	var lastID string
+
+	for {
+		var rows []models.Job
+		q := config.DB.
+			Select("id", "title", "department").
+			Order("id ASC").
+			Limit(batchSize)
+		if lastID != "" {
+			q = q.Where("id > ?", lastID)
+		}
+		if err := q.Find(&rows).Error; err != nil {
+			return totalUpdated, err
+		}
+		if len(rows) == 0 {
+			break
+		}
+
+		type bucket struct{ field, level string }
+		byBucket := map[bucket][]string{}
+		for _, j := range rows {
+			b := bucket{ClassifyField(j.Title, j.Department), ClassifyLevel(j.Title)}
+			byBucket[b] = append(byBucket[b], j.ID)
+		}
+		for b, ids := range byBucket {
+			if err := config.DB.Model(&models.Job{}).
+				Where("id IN ?", ids).
+				Updates(map[string]interface{}{"field": b.field, "level": b.level}).Error; err != nil {
+				return totalUpdated, err
+			}
+		}
+
+		totalUpdated += len(rows)
+		lastID = rows[len(rows)-1].ID
+	}
+	return totalUpdated, nil
+}
+

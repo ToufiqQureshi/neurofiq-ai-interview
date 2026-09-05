@@ -37,20 +37,20 @@ var levelKeywords = []struct {
 	bucket   string
 	keywords []string
 }{
-	{"Lead", []string{"lead", "head of", "principal", "director", "vp ", "vice president", "chief", "cto", "cfo", "ceo", "founding"}},
-	// "manager" used to sit in Senior, and it put every Account Manager and
-	// Product Manager there: 983 roles carried the word with no seniority
-	// marker at all, which is most of the gap between 2,608 Senior and 19
-	// Mid. Managing people is a kind of job, not a rung — there are junior
-	// managers and senior ones — so it decides the field, not the level.
-	{"Senior", []string{"senior", "sr.", "sr ", "staff", "sde 3", "sde iii", " iii"}},
-	{"Fresher", []string{"intern", "trainee", "fresher", "graduate", "entry level", "entry-level", "apprentice"}},
-	{"Junior", []string{"junior", "jr.", "jr ", "associate", "sde 1", "sde i ", "analyst i"}},
-	// Roman numerals are matched with their leading space, so "ii" finds
-	// "Engineer II" without also firing on any title that merely contains the
-	// letters. Senior is tested first, so "Engineer III" never lands here.
-	{"Mid", []string{"sde 2", "sde ii", "mid-level", " ii"}},
+	// 1. Lead / Executive: Organizational & functional leadership
+	{"Lead", []string{"lead", "head of", "head", "principal", "director", "vp ", "vice president", "chief", "cto", "cfo", "ceo", "founding", "group product manager", "managing partner", "general partner"}},
+	// 2. Senior: Advanced IC roles & enterprise ownership
+	{"Senior", []string{"senior", "sr.", "sr ", "staff", "architect", "enterprise", "sde 3", "sde iii", " iii"}},
+	// 3. Fresher: Explicit early-career & internship programs
+	{"Fresher", []string{"intern", "trainee", "fresher", "graduate", "entry level", "entry-level", "apprentice", "campus"}},
+	// 4. Junior: Entry-level corporate roles & early ICs (1-2 yrs)
+	{"Junior", []string{"junior", "jr.", "jr ", "associate", "assistant", "sde 1", "sde i ", "analyst", "coordinator", "representative", " bdr ", " sdr "}},
+	// 5. Mid: Core professional IC roles (Levels.fyi / Radford IC2 standard, 2-4 yrs)
+	// When a company posts "Software Engineer", "Backend Developer", "Product Manager",
+	// or "UI/UX Designer" without a prefix, by industry taxonomy it is a Mid-level role.
+	{"Mid", []string{"sde 2", "sde ii", "mid-level", " ii", "engineer", "developer", "designer", "product manager", "specialist", "generalist", "consultant"}},
 }
+
 
 // ClassifyField buckets a job by what kind of work it is.
 func ClassifyField(title, department string) string {

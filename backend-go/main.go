@@ -241,6 +241,9 @@ func main() {
 	r.GET("/api/companies", controllers.HandleGetCompanies)
 	r.GET("/api/companies/stats", controllers.HandleGetDirectoryStats)
 	r.GET("/api/jobs", controllers.HandleGetGlobalJobs)
+	r.POST("/api/admin/reclassify-jobs", controllers.HandleReclassifyJobs)
+	r.POST("/api/admin/enrich-companies", controllers.HandleEnrichCompanies)
+	r.POST("/api/admin/run-discovery", controllers.HandleRunDiscovery)
 	// Whether the pipeline behind that directory is actually working. Public
 	// and read-only: it reports counts and timings the directory already
 	// exposes, and being able to ask without credentials is the point — a

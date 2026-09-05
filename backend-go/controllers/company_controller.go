@@ -1,14 +1,47 @@
 package controllers
 
 import (
+	"fmt"
 	"net/http"
 	"strconv"
+	"sync"
+	"time"
 
 	"github.com/ToufiqQureshi/neurofiq-ai-interview/backend-go/config"
 	"github.com/ToufiqQureshi/neurofiq-ai-interview/backend-go/models"
 	"github.com/ToufiqQureshi/neurofiq-ai-interview/backend-go/services"
 	"github.com/gin-gonic/gin"
 )
+
+type cachedDirectoryResponse struct {
+	data      gin.H
+	expiresAt time.Time
+}
+
+var (
+	dirCacheMu sync.RWMutex
+	dirCache   = make(map[string]cachedDirectoryResponse)
+
+	statsCacheMu   sync.RWMutex
+	statsCacheData *services.DirectoryStats
+	statsCacheAt   time.Time
+)
+
+const (
+	dirCacheTTL   = 60 * time.Second
+	statsCacheTTL = 30 * time.Second
+)
+
+// InvalidateDirectoryCache purges the cached company results when new data is written.
+func InvalidateDirectoryCache() {
+	dirCacheMu.Lock()
+	dirCache = make(map[string]cachedDirectoryResponse)
+	dirCacheMu.Unlock()
+
+	statsCacheMu.Lock()
+	statsCacheData = nil
+	statsCacheMu.Unlock()
+}
 
 func HandleGetCompanies(c *gin.Context) {
 	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
@@ -17,16 +50,27 @@ func HandleGetCompanies(c *gin.Context) {
 	sector, stage, area, q := c.Query("sector"), c.Query("stage"), c.Query("area"), c.Query("q")
 	hiringOnly := c.Query("hiring") == "1"
 
+	cacheKey := fmt.Sprintf("%s|%s|%s|%s|%t|%d|%d", sector, stage, area, q, hiringOnly, page, pageSize)
+
+	// Check RAM cache first to avoid hitting database on frequent refreshes
+	dirCacheMu.RLock()
+	cached, ok := dirCache[cacheKey]
+	fresh := ok && time.Now().Before(cached.expiresAt)
+	dirCacheMu.RUnlock()
+
+	if fresh {
+		c.Header("Cache-Control", "public, max-age=60, stale-while-revalidate=120")
+		c.Header("X-Cache", "HIT")
+		c.JSON(http.StatusOK, cached.data)
+		return
+	}
+
 	companies, total, err := services.ListCompanies(sector, stage, area, q, hiringOnly, page, pageSize)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to fetch companies"})
 		return
 	}
 
-	// Without a text search the total is a sum of an indexed column rather
-	// than a join to the jobs table and a count of its rows. The filters are
-	// identical either way, so the two paths cannot disagree; only their cost
-	// differs, and this is the path almost every request takes.
 	var openRoles int64
 	if q == "" {
 		openRoles, _ = services.TotalOpenRolesFast(sector, stage, area)
@@ -34,15 +78,9 @@ func HandleGetCompanies(c *gin.Context) {
 		openRoles, _ = services.TotalOpenRoles(sector, stage, area, q)
 	}
 	fields, levels, _ := services.JobFacets(sector, stage, area, q)
-
-	// Sector and stage ride along here rather than on an endpoint of their
-	// own: the directory calls this on every load already, and a second
-	// request would only add a way for the options and the results to be one
-	// render out of step. Unlike field and level they ignore the current
-	// filters — see CompanyFacets.
 	sectors, stages, _ := services.CompanyFacets()
 
-	c.JSON(http.StatusOK, gin.H{
+	resp := gin.H{
 		"companies":  companies,
 		"total":      total,
 		"open_roles": openRoles,
@@ -52,16 +90,22 @@ func HandleGetCompanies(c *gin.Context) {
 			"sector": sectors,
 			"stage":  stages,
 		},
-	})
+	}
+
+	// Store in RAM cache
+	dirCacheMu.Lock()
+	dirCache[cacheKey] = cachedDirectoryResponse{
+		data:      resp,
+		expiresAt: time.Now().Add(dirCacheTTL),
+	}
+	dirCacheMu.Unlock()
+
+	c.Header("Cache-Control", "public, max-age=60, stale-while-revalidate=120")
+	c.Header("X-Cache", "MISS")
+	c.JSON(http.StatusOK, resp)
 }
 
 // HandleGetPipelineHealth reports whether roles are still arriving.
-//
-// Answers in one request what previously took watching the log at the right
-// moment: is the queue draining, is any provider refusing us, is the sync
-// rotation keeping up, does the role counter still match the rows it counts.
-// It returns 503 when unhealthy so an uptime checker can watch it without
-// parsing anything.
 func HandleGetPipelineHealth(c *gin.Context) {
 	health := services.CheckPipelineHealth()
 	status := http.StatusOK
@@ -72,16 +116,46 @@ func HandleGetPipelineHealth(c *gin.Context) {
 }
 
 // HandleGetDirectoryStats backs the count strip above the Job Map grid.
-// Separate from HandleGetCompanies because those counts follow the visitor's
-// filters, and these describe the whole directory.
 func HandleGetDirectoryStats(c *gin.Context) {
+	statsCacheMu.RLock()
+	cached := statsCacheData
+	fresh := cached != nil && statsCacheAt.Add(statsCacheTTL).After(time.Now())
+	statsCacheMu.RUnlock()
+
+	if fresh {
+		c.Header("Cache-Control", "public, max-age=30")
+		c.Header("X-Cache", "HIT")
+		c.JSON(http.StatusOK, cached)
+		return
+	}
+
 	stats, err := services.GetDirectoryStats()
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to fetch directory stats"})
 		return
 	}
+
+	statsCacheMu.Lock()
+	statsCacheData = &stats
+	statsCacheAt = time.Now()
+	statsCacheMu.Unlock()
+
+	c.Header("Cache-Control", "public, max-age=30")
+	c.Header("X-Cache", "MISS")
 	c.JSON(http.StatusOK, stats)
 }
+
+// HandleReclassifyJobs triggers a full reclassification pass across all existing jobs.
+func HandleReclassifyJobs(c *gin.Context) {
+	n, err := services.ReclassifyAllJobs(2000)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	InvalidateDirectoryCache()
+	c.JSON(http.StatusOK, gin.H{"status": "reclassified", "count": n})
+}
+
 
 func HandleGetCompanyByID(c *gin.Context) {
 	var company models.Company
@@ -163,3 +237,28 @@ func HandleTriggerDiscovery(c *gin.Context) {
 
 	c.JSON(http.StatusOK, gin.H{"saved": len(saved), "companies": saved})
 }
+
+// HandleEnrichCompanies triggers batch metadata and description enrichment across all companies.
+func HandleEnrichCompanies(c *gin.Context) {
+	updated, err := services.EnrichAllPendingCompanies(12)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	InvalidateDirectoryCache()
+	c.JSON(http.StatusOK, gin.H{
+		"status":  "enriched",
+		"updated": updated,
+	})
+}
+
+// HandleRunDiscovery runs Exa board discovery across target tech hub locations.
+func HandleRunDiscovery(c *gin.Context) {
+	go services.RunDiscoveryRotation()
+	c.JSON(http.StatusOK, gin.H{
+		"status":           "discovery_running",
+		"message":          "Exa board discovery rotation triggered in background",
+		"budget_remaining": services.SearchBudgetRemaining(),
+	})
+}
+

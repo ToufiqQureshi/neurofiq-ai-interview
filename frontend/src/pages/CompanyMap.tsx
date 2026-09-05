@@ -3,6 +3,7 @@ import { Search, LayoutGrid, Briefcase, ExternalLink, ChevronDown, Sparkles, Map
 import { useNavigate } from 'react-router-dom';
 import MapLibreCompanyMap from '../components/MapLibreCompanyMap';
 import LeafletCompanyMap from '../components/LeafletCompanyMap';
+import { CustomDropdown } from '../components/CustomDropdown';
 
 interface Company {
   id: string;
@@ -347,13 +348,13 @@ export function CompanyMap() {
 
 
   return (
-    <div className="space-y-6">
+    <div className="p-4 sm:p-6 lg:p-8 max-w-[1600px] mx-auto space-y-6">
       {/* Header & View Toggle */}
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-2 border-b border-line/40">
         <div>
           <h1 className="text-2xl font-bold text-ink tracking-tight flex items-center gap-2">
             <span>Job Map & Tech Hubs</span>
-            <span className="px-2 py-0.5 rounded-full text-xs font-semibold bg-accent-soft text-accent border border-accent/20">
+            <span className="px-2.5 py-0.5 rounded-full text-xs font-semibold bg-accent-soft text-accent border border-accent/20 shadow-2xs">
               Live Verified
             </span>
           </h1>
@@ -362,7 +363,6 @@ export function CompanyMap() {
           </p>
         </div>
         <div className="flex items-center gap-2 self-start sm:self-auto">
-
           <div className="flex items-center gap-1 bg-surface border border-line rounded-full p-1 shadow-sm">
             <button
               onClick={() => setView('grid')}
@@ -418,119 +418,116 @@ export function CompanyMap() {
         </div>
       )}
 
-      {/* Tech Hub City Switcher Pills */}
-      <div className="flex items-center gap-2 overflow-x-auto pb-1 no-scrollbar">
-        <span className="text-xs font-mono font-semibold text-ink-faint uppercase tracking-wider flex items-center gap-1 flex-shrink-0 mr-1">
-          <MapPin className="w-3.5 h-3.5 text-accent" /> Tech Hub:
-        </span>
-        {TECH_HUBS.map(hub => {
-          const active = selectedHub.id === hub.id;
-          return (
-            <button
-              key={hub.id}
-              onClick={() => {
-                setSelectedHub(hub);
-                setArea('');
-              }}
-              className={`px-3.5 py-1.5 rounded-full text-xs font-semibold transition-all flex items-center gap-1.5 flex-shrink-0 border ${
-                active
-                  ? 'bg-ink text-white border-ink shadow-md scale-105'
-                  : 'bg-surface border-line text-ink-soft hover:text-ink hover:border-line-strong hover:bg-paper'
-              }`}
-            >
-              <span>{hub.icon}</span>
-              <span>{hub.name}</span>
-            </button>
-          );
-        })}
-      </div>
-
-      {/* Main Filter Bar */}
-      <div className="flex items-center gap-3 flex-wrap">
-        <div className="relative flex-1 min-w-[200px]">
-          <Search className="w-4 h-4 text-ink-faint absolute left-3 top-1/2 -translate-y-1/2" />
-          <input
-            type="text"
-            value={q}
-            onChange={e => setQ(e.target.value)}
-            placeholder="Search startups, keywords, domains…"
-            className="w-full appearance-none bg-white/50 backdrop-blur-md border border-white/60 rounded-full py-2 pl-10 pr-4 text-sm text-ink focus:outline-none focus:border-accent focus:ring-2 focus:ring-accent/20 shadow-sm font-medium hover:border-accent/40 transition-colors"
-          />
+      {/* Interactive Controls & Filters */}
+      <div className="space-y-4">
+        {/* Tech Hub City Switcher Pills */}
+        <div className="flex items-center gap-2.5 overflow-x-auto pb-1 no-scrollbar">
+          <span className="text-xs font-mono font-semibold text-ink-faint uppercase tracking-wider flex items-center gap-1 flex-shrink-0 mr-1">
+            <MapPin className="w-3.5 h-3.5 text-accent" /> Tech Hub:
+          </span>
+          {TECH_HUBS.map(hub => {
+            const active = selectedHub.id === hub.id;
+            return (
+              <button
+                key={hub.id}
+                onClick={() => {
+                  setSelectedHub(hub);
+                  setArea('');
+                }}
+                className={`px-3.5 py-1.5 rounded-full text-xs font-semibold transition-all flex items-center gap-1.5 flex-shrink-0 border ${
+                  active
+                    ? 'bg-ink text-white border-ink shadow-md scale-102'
+                    : 'bg-surface border-line text-ink-soft hover:text-ink hover:border-line-strong hover:bg-paper'
+                }`}
+              >
+                <span>{hub.icon}</span>
+                <span>{hub.name}</span>
+              </button>
+            );
+          })}
         </div>
 
-        <div className="relative">
-          <select
+        {/* Main Filter Bar */}
+        <div className="flex items-center gap-3 flex-wrap">
+          <div className="relative flex-1 min-w-[220px]">
+            <Search className="w-4 h-4 text-ink-faint absolute left-3.5 top-1/2 -translate-y-1/2" />
+            <input
+              type="text"
+              value={q}
+              onChange={e => setQ(e.target.value)}
+              placeholder="Search startups, keywords, domains…"
+              className="w-full appearance-none bg-surface border border-line rounded-full py-2.5 pl-10 pr-4 text-sm text-ink placeholder:text-ink-faint focus:outline-none focus:border-accent focus:ring-2 focus:ring-accent/20 shadow-2xs font-medium hover:border-line-strong transition-colors"
+            />
+          </div>
+
+          <CustomDropdown
             value={sector}
-            onChange={e => setSector(e.target.value)}
-            className="appearance-none bg-white/50 backdrop-blur-md border border-white/60 rounded-full py-2 pl-4 pr-10 text-sm text-ink focus:outline-none focus:border-accent focus:ring-2 focus:ring-accent/20 shadow-sm font-medium hover:border-accent/40 transition-colors"
-          >
-            <option value="">All sectors</option>
-            {sectors.map(s => (
-              <option key={s} value={s}>{s}</option>
-            ))}
-          </select>
-          <ChevronDown className="w-4 h-4 text-ink-soft absolute right-3 top-1/2 -translate-y-1/2 pointer-events-none" />
-        </div>
+            onChange={setSector}
+            options={[{ label: 'All sectors', value: '' }, ...sectors.map(s => ({ label: s, value: s }))]}
+            placeholder="All sectors"
+          />
 
-        <div className="relative">
-          <select
+          <CustomDropdown
             value={stage}
-            onChange={e => setStage(e.target.value)}
-            className="appearance-none bg-white/50 backdrop-blur-md border border-white/60 rounded-full py-2 pl-4 pr-10 text-sm text-ink focus:outline-none focus:border-accent focus:ring-2 focus:ring-accent/20 shadow-sm font-medium hover:border-accent/40 transition-colors"
+            onChange={setStage}
+            options={[{ label: 'All stages', value: '' }, ...stages.map(s => ({ label: s, value: s }))]}
+            placeholder="All stages"
+          />
+
+          <button
+            onClick={() => setHiringOnly(!hiringOnly)}
+            title={hiringOnly ? 'Showing only companies with open roles' : 'Showing every company in the directory'}
+            className={`px-4 py-2.5 rounded-full text-sm font-bold whitespace-nowrap transition-all flex items-center gap-2 shadow-2xs ${
+              hiringOnly ? 'bg-accent text-white shadow-accent/20 ring-2 ring-accent/30' : 'bg-surface border border-line text-ink-soft hover:text-ink hover:border-line-strong'
+            }`}
           >
-            <option value="">All stages</option>
-            {stages.map(s => (
-              <option key={s} value={s}>{s}</option>
-            ))}
-          </select>
-          <ChevronDown className="w-4 h-4 text-ink-soft absolute right-3 top-1/2 -translate-y-1/2 pointer-events-none" />
+            <Briefcase className="w-3.5 h-3.5" />
+            {hiringOnly ? 'Hiring only' : 'All companies'}
+          </button>
         </div>
 
-        <button
-          onClick={() => setHiringOnly(!hiringOnly)}
-          title={hiringOnly ? 'Showing only companies with open roles' : 'Showing every company in the directory'}
-          className={`px-4 py-2 rounded-full text-sm font-bold whitespace-nowrap transition-all flex items-center gap-2 shadow-sm ${
-            hiringOnly ? 'bg-accent text-white shadow-accent/20 ring-2 ring-accent/30' : 'bg-white/50 backdrop-blur-md border border-white/60 text-ink-soft hover:text-ink hover:border-accent/40'
-          }`}
-        >
-          <Briefcase className="w-3.5 h-3.5" />
-          {hiringOnly ? 'Hiring only' : 'All companies'}
-        </button>
+        {/* Role Facets */}
+        {(((facets?.field?.length ?? 0) > 0) || ((facets?.level?.length ?? 0) > 0)) && (
+          <div className="space-y-3 bg-surface border border-line rounded-2xl p-4 shadow-2xs">
+            {([
+              { label: 'FIELD', items: facets?.field || [], value: field, set: setField },
+              { label: 'LEVEL', items: facets?.level || [], value: level, set: setLevel },
+            ] as const).map(row =>
+              !row.items || row.items.length === 0 ? null : (
+                <div key={row.label} className="flex items-center gap-3 flex-wrap">
+                  <span className="text-[11px] font-mono font-bold text-ink-faint uppercase tracking-wider w-14 flex-shrink-0">
+                    {row.label}
+                  </span>
+                  <div className="flex items-center gap-2 flex-wrap flex-1">
+                    {row.items.map(f => {
+                      const active = row.value === f.name;
+                      return (
+                        <button
+                          key={f.name}
+                          onClick={() => row.set(active ? '' : f.name)}
+                          className={`px-3 py-1.5 rounded-full text-xs font-medium transition-all border flex items-center gap-1.5 shadow-2xs ${
+                            active
+                              ? 'bg-ink text-white border-ink font-semibold shadow-sm'
+                              : 'bg-paper/70 border-line text-ink-soft hover:text-ink hover:border-line-strong hover:bg-paper'
+                          }`}
+                        >
+                          <span>{f.name}</span>
+                          <span className={`text-[10px] px-1.5 py-0.5 rounded-full font-mono font-semibold ${
+                            active ? 'bg-white/20 text-white' : 'bg-line/40 text-ink-soft'
+                          }`}>
+                            {f.count}
+                          </span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              )
+            )}
+          </div>
+        )}
       </div>
 
-      {/* Role Facets */}
-      {(((facets?.field?.length ?? 0) > 0) || ((facets?.level?.length ?? 0) > 0)) && (
-        <div className="space-y-2 bg-paper/60 border border-line rounded-xl p-3">
-          {([
-            { label: 'FIELD', items: facets?.field || [], value: field, set: setField },
-            { label: 'LEVEL', items: facets?.level || [], value: level, set: setLevel },
-          ] as const).map(row =>
-            !row.items || row.items.length === 0 ? null : (
-              <div key={row.label} className="flex items-center gap-2 flex-wrap">
-                <span className="text-[10px] font-mono font-semibold text-ink-faint uppercase tracking-wider w-12 flex-shrink-0">
-                  {row.label}
-                </span>
-                {row.items.map(f => {
-                  const active = row.value === f.name;
-                  return (
-                    <button
-                      key={f.name}
-                      onClick={() => row.set(active ? '' : f.name)}
-                      className={`px-2.5 py-1 rounded-full text-xs transition-all border ${
-                        active
-                          ? 'bg-ink text-white border-ink font-semibold shadow-sm'
-                          : 'bg-surface border-line text-ink-soft hover:text-ink hover:border-line-strong'
-                      }`}
-                    >
-                      {f.name} <span className={active ? 'text-white/70' : 'text-ink-faint font-mono'}>{f.count}</span>
-                    </button>
-                  );
-                })}
-              </div>
-            )
-          )}
-        </div>
-      )}
 
       {/* Map View vs Grid View */}
       {view === 'map3d' ? (
@@ -569,7 +566,9 @@ export function CompanyMap() {
                     <p className="text-xs text-ink-faint truncate mt-0.5">{c.area}</p>
                   </div>
                 </div>
-                <p className="text-xs text-ink-soft line-clamp-3 flex-1 leading-relaxed">{c.description}</p>
+                <p className="text-xs text-ink-soft line-clamp-2 min-h-[34px] flex-1 leading-relaxed">
+                  {c.description || `${c.name} is an active Indian tech company hiring in ${c.area || 'India'} across ${c.sector || 'technology & business'} roles.`}
+                </p>
                 <div className="flex items-center gap-1.5 flex-wrap">
                   {c.sector && (
                     <span className="px-2.5 py-0.5 rounded-full text-[10px] font-semibold bg-accent-soft text-accent">
