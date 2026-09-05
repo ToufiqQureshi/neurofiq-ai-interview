@@ -178,5 +178,3 @@ func shortDate(raw string) string {
 	}
 	return t.Format("2006-01-02")
 }
-
-

@@ -189,7 +189,6 @@ func SafeExternalDo(ctx context.Context, req *http.Request) (*http.Response, err
 	return resp, nil
 }
 
-
 // ReadCapped reads at most max bytes and reports an error if the body was
 // longer, so an oversized response is rejected rather than silently truncated
 // into something that parses but is wrong.

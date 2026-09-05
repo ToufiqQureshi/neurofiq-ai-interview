@@ -298,7 +298,3 @@ func ScrapeUsageSummary() map[string]int {
 	}
 	return out
 }
-
-
-
-

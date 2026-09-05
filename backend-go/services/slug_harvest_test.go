@@ -167,8 +167,6 @@ func TestDirectoryIndexRemembersWithinARun(t *testing.T) {
 	}
 }
 
-
-
 // The register stores legal names in capitals with the suffix attached. A card
 // should not shout, and should not carry "PRIVATE LIMITED".
 func TestRegisterDisplayName(t *testing.T) {
@@ -246,8 +244,6 @@ func TestTidyLocation(t *testing.T) {
 	}
 }
 
-
-
 // scanForATS must read an embedded Greenhouse board as well as a linked one.
 //
 // A company that embeds serves boards.greenhouse.io/embed/job_board?for=X,
@@ -292,8 +288,6 @@ func TestFirstGroup(t *testing.T) {
 	}
 }
 
-
-
 // resolveWorkdaySlug probes the live API, so only its offline branches are
 // exercised here: a slug that is already complete, and one that cannot be.
 func TestResolveWorkdaySlugOfflineBranches(t *testing.T) {
@@ -319,4 +313,3 @@ func TestResolveWorkdaySlugMalformedIsNotTransient(t *testing.T) {
 		t.Errorf("a malformed slug must not look like a transient failure")
 	}
 }
-

@@ -165,7 +165,7 @@ func HandleInterviewWebSocket(c *gin.Context) {
 				log.Printf("React Read Error (or disconnected): %v\n", err)
 				break
 			}
-			
+
 			if messageType == websocket.BinaryMessage {
 				if err := dgConn.WriteMessage(websocket.BinaryMessage, message); err != nil {
 					log.Println("Deepgram Write Error:", err)
@@ -183,7 +183,7 @@ func HandleInterviewWebSocket(c *gin.Context) {
 				log.Println("Deepgram Read Error:", err)
 				break
 			}
-			
+
 			if messageType == websocket.TextMessage {
 				// Parse Deepgram JSON to find is_final transcripts
 				var dgResp DeepgramResponse
@@ -192,7 +192,7 @@ func HandleInterviewWebSocket(c *gin.Context) {
 						transcript := dgResp.Channel.Alternatives[0].Transcript
 						if transcript != "" {
 							log.Println("Final Transcript:", transcript)
-							
+
 							// Send transcript to Python via gRPC
 							err = stream.Send(&pb.CandidateMessage{
 								SessionId:      sessionID,
@@ -223,14 +223,14 @@ func HandleInterviewWebSocket(c *gin.Context) {
 				log.Println("gRPC Recv Error (or stream closed):", err)
 				break
 			}
-			
+
 			log.Println("Received AI Response from Python:", aiResp.TextChunk)
-			
+
 			// We can forward this AI text to the React UI as a custom JSON message
 			// (Assuming React UI can handle custom JSON alongside Deepgram STT JSON)
 			aiJson, _ := json.Marshal(map[string]interface{}{
-				"type": "ai_response",
-				"text": aiResp.TextChunk,
+				"type":        "ai_response",
+				"text":        aiResp.TextChunk,
 				"is_complete": aiResp.IsComplete,
 			})
 			if err := clientConn.WriteMessage(websocket.TextMessage, aiJson); err != nil {
@@ -239,7 +239,7 @@ func HandleInterviewWebSocket(c *gin.Context) {
 			}
 		}
 	}()
-	
+
 	<-done
 	stream.CloseSend()
 	log.Println("Interview WebSocket session ended")
