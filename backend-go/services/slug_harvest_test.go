@@ -2,7 +2,6 @@ package services
 
 import (
 	"context"
-	"strings"
 	"testing"
 
 	"github.com/ToufiqQureshi/neurofiq-ai-interview/backend-go/models"
@@ -80,7 +79,7 @@ func TestForeignMarkerNeedsIndiaToBeAbsent(t *testing.T) {
 func TestDedupeCandidatesKeepsTheRicherCopy(t *testing.T) {
 	lat, lng := 12.97, 77.59
 	in := []slugCandidate{
-		{Provider: "ashby", Slug: "bolna", Source: SourceCommonCrawl},
+		{Provider: "ashby", Slug: "bolna", Source: "probe"},
 		{
 			Provider: "ashby", Slug: "bolna", Source: SourceStartupRegister,
 			Name: "Bolna", Website: "https://bolna.ai", Sector: "AI",
@@ -88,7 +87,7 @@ func TestDedupeCandidatesKeepsTheRicherCopy(t *testing.T) {
 			Lat: &lat, Lng: &lng,
 		},
 		// Same board, different letter case: still one board.
-		{Provider: "Ashby", Slug: "Bolna", Source: SourceCommonCrawl},
+		{Provider: "Ashby", Slug: "Bolna", Source: "probe"},
 	}
 
 	out := dedupeCandidates(in)
@@ -168,64 +167,7 @@ func TestDirectoryIndexRemembersWithinARun(t *testing.T) {
 	}
 }
 
-// ccSubdomainSlug reads a tenant off a per-tenant host, and must refuse a host
-// that only looks similar.
-func TestCCSubdomainSlug(t *testing.T) {
-	keka := ccSubdomainSlug("keka.com")
-	cases := map[string]string{
-		"https://adda247.keka.com/careers":            "adda247",
-		"https://fynd.keka.com/careers/jobdetails/12": "fynd",
-		"https://www.keka.com/careers":                "www",
-		"https://keka.com/careers":                    "", // no tenant at all
-		"https://notkeka.com/careers":                 "",
-		"https://acme.kekaX.com/careers":              "",
-	}
-	for in, want := range cases {
-		if got := keka(in); got != want {
-			t.Errorf("ccSubdomainSlug(%q) = %q, want %q", in, got, want)
-		}
-	}
-}
 
-// Every host the crawl source queries must yield a slug the board readers
-// accept, or the harvest spends requests collecting strings nothing can read.
-// This is the same discipline TestSearchDomainsAreAllReadable enforces for the
-// search path.
-func TestCommonCrawlHostsYieldReadableSlugs(t *testing.T) {
-	samples := map[string]string{
-		"job-boards.greenhouse.io/*":    "https://job-boards.greenhouse.io/acme/jobs/123",
-		"boards.greenhouse.io/*":        "https://boards.greenhouse.io/acme",
-		"jobs.lever.co/*":               "https://jobs.lever.co/acme/abc-123",
-		"jobs.ashbyhq.com/*":            "https://jobs.ashbyhq.com/acme",
-		"apply.workable.com/*":          "https://apply.workable.com/acme/",
-		"careers.smartrecruiters.com/*": "https://careers.smartrecruiters.com/acme",
-		"*.keka.com":                    "https://acme.keka.com/careers",
-		"*.darwinbox.in":                "https://acme.darwinbox.in/ms/candidate/careers",
-		"*.darwinbox.com":               "https://acme.darwinbox.com/ms/candidate/careers",
-		"*.myworkdayjobs.com":           "https://acme.wd5.myworkdayjobs.com/en-US/External",
-	}
-
-	for _, host := range commonCrawlHosts {
-		sample, ok := samples[host.query]
-		if !ok {
-			t.Errorf("no sample URL for crawl host %q", host.query)
-			continue
-		}
-		slug := host.slugFrom(sample)
-		if slug == "" {
-			t.Errorf("host %q could not read a slug from %q", host.query, sample)
-			continue
-		}
-		if !validATSSlug(slug) {
-			t.Errorf("host %q produced %q, which validATSSlug rejects", host.query, slug)
-		}
-		// The provider named must be one FetchATSJobs actually switches on.
-		if _, err := FetchATSJobs("", host.provider, ""); err != nil &&
-			err.Error() == "unknown ATS provider \""+host.provider+"\"" {
-			t.Errorf("host %q names provider %q, which FetchATSJobs cannot read", host.query, host.provider)
-		}
-	}
-}
 
 // The register stores legal names in capitals with the suffix attached. A card
 // should not shout, and should not carry "PRIVATE LIMITED".
@@ -304,34 +246,7 @@ func TestTidyLocation(t *testing.T) {
 	}
 }
 
-// A company that embeds its Greenhouse board rather than linking it serves
-// boards.greenhouse.io/embed/job_board?for=observeai — the company is in the
-// query string and the path segment is the literal word "embed".
-// greenhouseLinkRe reads the path, so every embedding company collapses to one
-// useless slug. The register run showed it: Observe.ai resolved to
-// "greenhouse/embed" and was dropped.
-func TestCCGreenhouseSlugReadsEmbedForm(t *testing.T) {
-	cases := map[string]string{
-		"https://boards.greenhouse.io/embed/job_board?for=observeai": "observeai",
-		"https://boards.greenhouse.io/embed/job_board?for=acme&b=1":  "acme",
-		// The ordinary forms must keep working.
-		"https://boards.greenhouse.io/acme":              "acme",
-		"https://job-boards.greenhouse.io/acme/jobs/123": "acme",
-		"https://job-boards.eu.greenhouse.io/acme":       "acme",
-		"https://example.com/careers":                    "",
-	}
-	for in, want := range cases {
-		if got := ccGreenhouseSlug(in); got != want {
-			t.Errorf("ccGreenhouseSlug(%q) = %q, want %q", in, got, want)
-		}
-	}
 
-	// The bad slug this replaces would have been rejected anyway, which is why
-	// the symptom was a missing company rather than a wrong one.
-	if boardSlugIsAdmissible("embed") {
-		t.Error(`"embed" must stay inadmissible as a slug`)
-	}
-}
 
 // scanForATS must read an embedded Greenhouse board as well as a linked one.
 //
@@ -377,27 +292,7 @@ func TestFirstGroup(t *testing.T) {
 	}
 }
 
-// A crawled Workday URL names the tenant and the region but not the job-site
-// id, so the collector emits an incomplete slug and admission fills it in.
-func TestCCWorkdayPartialSlug(t *testing.T) {
-	cases := map[string]string{
-		"https://fnz.wd3.myworkdayjobs.com/fnz_careers/job/Pune/X_REQ-1": "fnz:wd3:",
-		"https://broadcom.wd1.myworkdayjobs.com/external_career":         "broadcom:wd1:",
-		"https://gsknch.wd3.myworkdayjobs.com/en-US/gskcareers":          "gsknch:wd3:",
-		"https://example.com/careers":                                    "",
-	}
-	for in, want := range cases {
-		if got := ccWorkdayPartialSlug(in); got != want {
-			t.Errorf("ccWorkdayPartialSlug(%q) = %q, want %q", in, got, want)
-		}
-	}
 
-	// The partial form must survive validATSSlug, or admission drops it before
-	// it ever reaches the resolver.
-	if !validATSSlug("fnz:wd3:") {
-		t.Error("the partial Workday slug must pass validATSSlug")
-	}
-}
 
 // resolveWorkdaySlug probes the live API, so only its offline branches are
 // exercised here: a slug that is already complete, and one that cannot be.
@@ -425,19 +320,3 @@ func TestResolveWorkdaySlugMalformedIsNotTransient(t *testing.T) {
 	}
 }
 
-// Every provider the crawl collects for must be one FetchATSJobs can read.
-// Workday is the one whose slug is not complete at collection time, so its
-// entry is checked against the resolved shape rather than the emitted one.
-func TestCommonCrawlProvidersAreAllReadable(t *testing.T) {
-	for _, host := range commonCrawlHosts {
-		probe := "acme"
-		if host.provider == "workday" {
-			probe = "acme:wd5:External"
-		}
-		_, err := FetchATSJobs("", host.provider, probe)
-		if err != nil && strings.Contains(err.Error(), "unknown ATS provider") {
-			t.Errorf("crawl host %q names provider %q, which FetchATSJobs cannot read",
-				host.query, host.provider)
-		}
-	}
-}

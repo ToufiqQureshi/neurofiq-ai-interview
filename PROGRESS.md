@@ -1,5 +1,13 @@
 # Progress Log
 
+## 2026-09-05
+- **Codebase Dead Code & Logic Audit (`gopls` / `deadcode`)**: Conducted whole-program static analysis across `backend-go` using Go analysis tools and `deadcode -test`. Removed unused legacy helpers (`RequireOK` in `httputil.go`, `SummarizeHistory` in `github_commits.go`, unused `fmt` imports) resulting in 0 unreachable functions.
+- **Critical Bug Fix - Global Jobs Route (`GET /api/jobs`)**: Resolved missing router entry in `main.go`. The frontend Jobs Portal was previously receiving 404s when querying global positions because `controllers.HandleGetGlobalJobs` and `services.ListGlobalJobs` were disconnected at the Gin router level. Registered `r.GET("/api/jobs", controllers.HandleGetGlobalJobs)`, restoring search and pagination across 7,400+ active roles.
+- **Common Crawl Purge**: Removed Common Crawl entirely (`slug_source_commoncrawl.go` deleted, tests/crons/flags cleaned up) and purged 11,994 junk candidates from Supabase DB to protect against foreign job clutter and ATS 429 throttling.
+- **Fast 2m/3m Ingestion Cadence**: Set IndianStartupMap collection to `@every 3m` and candidate admission to `@every 2m`, ensuring newly discovered Indian tech companies are evaluated and admitted rapidly.
+- **Services Architecture Guide**: Documented all 38 files in `backend-go/services/` inside `backend-go/services/README.md` across 5 clear architectural domains (Discovery, Jobs & ATS, Directory, AI Interviews, Infrastructure).
+- **Compilation & Verification**: `go vet ./...` clean, all unit tests passing (`services 1.259s`), and `server.exe` running with 100% green pipeline health (`/api/pipeline/health`).
+
 ## 2026-09-04
 - **Email Integration**: Integrated Resend API in Go backend (`ats_controller.go`) for automated magic link delivery, replacing placeholder text response.
 - **Enterprise UI Revamp**: Completely redesigned the React Landing Page (`LandingPage.tsx`) with a premium B2B SaaS aesthetic (dark mode, glassmorphic layout, glowing borders) shifting focus to recruiters and hiring managers.

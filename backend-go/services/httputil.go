@@ -189,21 +189,6 @@ func SafeExternalDo(ctx context.Context, req *http.Request) (*http.Response, err
 	return resp, nil
 }
 
-// RequireOK closes and discards a non-2xx response, returning an
-// HTTPStatusError that says which status it was.
-//
-// Every ATS fetcher had its own `if resp.StatusCode != 200 { return
-// fmt.Errorf("... status %d") }`, which is correct and unusable: the string
-// carries the status but no caller can read it, so a 404 and a 429 arrive at
-// the harvest as the same opaque error. Routing them through one helper is
-// what lets admitCandidate ask whether the failure is worth retrying.
-func RequireOK(resp *http.Response, rawURL string) error {
-	if resp.StatusCode >= 200 && resp.StatusCode < 300 {
-		return nil
-	}
-	io.Copy(io.Discard, io.LimitReader(resp.Body, 4<<10))
-	return &HTTPStatusError{Status: resp.StatusCode, URL: rawURL}
-}
 
 // ReadCapped reads at most max bytes and reports an error if the body was
 // longer, so an oversized response is rejected rather than silently truncated

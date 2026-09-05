@@ -165,8 +165,8 @@ func CheckPipelineHealth() PipelineHealth {
 
 	// 5. Has collection ever run.
 	var state models.HarvestState
-	if err := config.DB.Where("source = ?", SourceCommonCrawl).First(&state).Error; err != nil {
-		add("collection", young, "no Common Crawl index has been read yet%s",
+	if err := config.DB.Where("source = ?", SourceStartupRegister).First(&state).Error; err != nil {
+		add("collection", young, "no startup register collection has been run yet%s",
 			map[bool]string{true: " (within startup grace)", false: ""}[young])
 	} else {
 		add("collection", true, "last read %s at %s",

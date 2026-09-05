@@ -78,7 +78,7 @@ func TestLiveEnqueueUpsertsWithoutResettingProgress(t *testing.T) {
 		Delete(&models.BoardCandidate{})
 
 	if _, err := EnqueueCandidates([]slugCandidate{
-		{Provider: provider, Slug: slug, Source: SourceCommonCrawl},
+		{Provider: provider, Slug: slug, Source: "probe"},
 	}); err != nil {
 		t.Fatalf("first enqueue failed: %v", err)
 	}
@@ -343,7 +343,7 @@ func TestLiveAdmissionSettlesADeadBoard(t *testing.T) {
 		Delete(&models.BoardCandidate{})
 
 	if _, err := EnqueueCandidates([]slugCandidate{
-		{Provider: provider, Slug: slug, Source: SourceCommonCrawl},
+		{Provider: provider, Slug: slug, Source: "probe"},
 	}); err != nil {
 		t.Fatalf("enqueue failed: %v", err)
 	}

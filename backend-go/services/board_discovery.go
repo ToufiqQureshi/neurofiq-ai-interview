@@ -132,7 +132,6 @@ type seedCity struct {
 
 // Name is the city as the directory refers to it.
 func (c seedCity) Name() string { return c.spellings[0] }
-
 // buildBoardSeedQueries lays the rotation out so consecutive ticks land in
 // different cities.
 //

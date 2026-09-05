@@ -6,6 +6,12 @@
         "-y",
         "@playwright/mcp@latest"
       ]
+    },
+    "gopls-mcp-server": {
+      "command": "gopls",
+      "args": [
+        "mcp"
+      ]
     }
   }
 }

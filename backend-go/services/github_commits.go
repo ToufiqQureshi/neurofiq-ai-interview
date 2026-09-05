@@ -2,7 +2,6 @@ package services
 
 import (
 	"encoding/json"
-	"fmt"
 	"log"
 	"net/http"
 	"sort"
@@ -180,23 +179,4 @@ func shortDate(raw string) string {
 	return t.Format("2006-01-02")
 }
 
-// SummarizeHistory renders the commit stats as the one-paragraph brief the
-// question agent sees. Built in Go so the prompt stays deterministic.
-func SummarizeHistory(stats CommitStats) string {
-	if stats.TotalCommits == 0 && len(stats.NotableCommits) == 0 {
-		return ""
-	}
-	var b strings.Builder
-	fmt.Fprintf(&b, "%d commits by %d contributor(s)", stats.TotalCommits, stats.Contributors)
-	if stats.FirstCommitAt != "" && stats.LastCommitAt != "" {
-		fmt.Fprintf(&b, ", active %s to %s", shortDate(stats.FirstCommitAt), shortDate(stats.LastCommitAt))
-	}
-	b.WriteString(".")
-	if len(stats.NotableCommits) > 0 {
-		b.WriteString("\nNotable commits:\n")
-		for _, c := range stats.NotableCommits {
-			fmt.Fprintf(&b, "- %s: %s\n", c.Date, c.Message)
-		}
-	}
-	return b.String()
-}
+
