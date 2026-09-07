@@ -4,6 +4,7 @@ import (
 	"archive/zip"
 	"bytes"
 	"fmt"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -37,14 +38,7 @@ func snippetFiles(snippets []CodeSnippet) []string {
 	return names
 }
 
-func contains(list []string, want string) bool {
-	for _, item := range list {
-		if item == want {
-			return true
-		}
-	}
-	return false
-}
+
 
 // The scorer previously matched only .go/.py/.ts/.js by suffix, which meant a
 // React codebase contributed nothing at all: ".tsx" does not end in ".ts".
@@ -64,7 +58,7 @@ func TestProcessZipIncludesJSXAndTSX(t *testing.T) {
 
 	files := snippetFiles(snippets)
 	for _, want := range []string{"src/App.tsx", "src/components/Card.jsx", "src/services/billing.tsx"} {
-		if !contains(files, want) {
+		if !slices.Contains(files, want) {
 			t.Errorf("expected %s in snippets, got %v", want, files)
 		}
 	}
@@ -123,7 +117,7 @@ func TestProcessZipKeepsPackingPastAFileThatDoesNotFit(t *testing.T) {
 	}
 
 	packed := snippetFiles(snippets)
-	if !contains(packed, "lastsmall.go") {
+	if !slices.Contains(packed, "lastsmall.go") {
 		t.Errorf("packing stopped at the first file that did not fit; "+
 			"lastsmall.go should still have been packed into the remaining budget. Got %v", packed)
 	}
@@ -155,10 +149,10 @@ func TestProcessZipSkipsAnOversizedMemberWithoutFailing(t *testing.T) {
 		t.Fatalf("an oversized member should be skipped, not fail the analysis: %v", err)
 	}
 	packed := snippetFiles(snippets)
-	if !contains(packed, "services/real.go") {
+	if !slices.Contains(packed, "services/real.go") {
 		t.Errorf("expected the real source file to survive, got %v", packed)
 	}
-	if contains(packed, "db/dump.sql") {
+	if slices.Contains(packed, "db/dump.sql") {
 		t.Errorf("the oversized member should not have been packed, got %v", packed)
 	}
 }
@@ -178,7 +172,7 @@ func TestProcessZipSkipsDependenciesAndLockfiles(t *testing.T) {
 		t.Fatalf("processZip: %v", err)
 	}
 	files := snippetFiles(snippets)
-	if !contains(files, "services/real.go") {
+	if !slices.Contains(files, "services/real.go") {
 		t.Errorf("expected the real source file, got %v", files)
 	}
 	for _, unwanted := range []string{"node_modules", "vendor/", "dist/", "package-lock.json"} {

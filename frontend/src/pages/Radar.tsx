@@ -137,7 +137,7 @@ export function Radar() {
   };
 
   return (
-    <div className="flex flex-col h-full bg-[#09090b] text-zinc-100 relative overflow-hidden font-sans selection:bg-indigo-500/30">
+    <div className="flex flex-col h-full bg-white text-zinc-900 relative overflow-hidden font-sans selection:bg-indigo-500/30">
       
       {/* Abstract Background Elements */}
       <div className="absolute top-[-20%] left-[-10%] w-[50%] h-[50%] bg-indigo-600/10 rounded-full blur-[120px] pointer-events-none mix-blend-screen" />
@@ -148,14 +148,14 @@ export function Radar() {
         
         {/* Header Section */}
         <div className="flex flex-col items-center justify-center mb-16 text-center pt-10">
-          <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-zinc-800/50 border border-zinc-700/50 mb-6 backdrop-blur-md">
+          <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-zinc-100/50 border border-zinc-200/50 mb-6 backdrop-blur-md">
             <Sparkles className="w-4 h-4 text-indigo-400" />
-            <span className="text-xs font-semibold tracking-widest text-zinc-300 uppercase">Profile Intelligence</span>
+            <span className="text-xs font-semibold tracking-widest text-zinc-700 uppercase">Profile Intelligence</span>
           </div>
-          <h1 className="text-5xl md:text-6xl font-display font-extrabold tracking-tight mb-6 bg-clip-text text-transparent bg-gradient-to-br from-white via-zinc-200 to-zinc-500">
+          <h1 className="text-5xl md:text-6xl font-display font-extrabold tracking-tight mb-6 bg-clip-text text-transparent bg-gradient-to-br from-zinc-900 via-zinc-700 to-zinc-500">
             Optimize for Discovery
           </h1>
-          <p className="text-zinc-400 max-w-2xl text-lg font-light leading-relaxed">
+          <p className="text-zinc-600 max-w-2xl text-lg font-light leading-relaxed">
             Enter your public profile URL. Our heuristic engine acts like an ATS, analyzing your visibility, keyword density, and structural impact.
           </p>
         </div>
@@ -172,20 +172,20 @@ export function Radar() {
             
             <form onSubmit={handleScan} className="relative group">
               <div className="absolute -inset-1.5 bg-gradient-to-r from-indigo-500/30 via-fuchsia-500/30 to-blue-500/30 rounded-3xl blur-xl opacity-50 group-hover:opacity-100 transition duration-1000"></div>
-              <div className="relative flex items-center bg-zinc-900/80 backdrop-blur-2xl border border-zinc-700/50 rounded-3xl shadow-2xl p-2.5 transition-all">
+              <div className="relative flex items-center bg-white/80 backdrop-blur-2xl border border-zinc-200/50 rounded-3xl shadow-2xl p-2.5 transition-all">
                 <Search className="w-6 h-6 text-zinc-500 ml-4 flex-shrink-0" />
                 <input
                   type="text"
-                  placeholder="https://linkedin.com/in/your-profile"
+                  placeholder="Paste any profile URL (LinkedIn, Naukri, GitHub...)"
                   value={url}
                   onChange={(e) => setUrl(e.target.value)}
                   disabled={scanState === 'scanning'}
-                  className="w-full bg-transparent border-none focus:outline-none text-zinc-100 px-4 py-4 text-lg placeholder:text-zinc-600 disabled:opacity-50"
+                  className="w-full bg-transparent border-none focus:outline-none text-zinc-900 px-4 py-4 text-lg placeholder:text-zinc-600 disabled:opacity-50"
                 />
                 <button
                   type="submit"
                   disabled={scanState === 'scanning' || !url.trim()}
-                  className="bg-white hover:bg-zinc-200 text-zinc-950 px-8 py-4 rounded-2xl font-bold transition-all disabled:opacity-50 disabled:hover:bg-white whitespace-nowrap flex items-center gap-2"
+                  className="bg-zinc-900 hover:bg-zinc-800 text-white px-8 py-4 rounded-2xl font-bold transition-all disabled:opacity-50 disabled:hover:bg-zinc-900 whitespace-nowrap flex items-center gap-2"
                 >
                   {scanState === 'scanning' ? (
                     <>
@@ -205,20 +205,20 @@ export function Radar() {
             {/* Terminal Loading State */}
             {(scanState === 'scanning' || scanState === 'failed') && (
               <div className="mt-16 animate-in fade-in slide-in-from-bottom-8 duration-700">
-                <div className="bg-zinc-900/80 backdrop-blur-xl border border-zinc-800 rounded-2xl p-6 font-mono text-sm max-w-2xl mx-auto shadow-2xl">
-                  <div className="flex items-center gap-2 mb-4 border-b border-zinc-800 pb-4">
+                <div className="bg-white/80 backdrop-blur-xl border border-zinc-200 rounded-2xl p-6 font-mono text-sm max-w-2xl mx-auto shadow-2xl">
+                  <div className="flex items-center gap-2 mb-4 border-b border-zinc-200 pb-4">
                     <Terminal className="w-4 h-4 text-zinc-500" />
-                    <span className="text-zinc-400 font-semibold tracking-wider">SYSTEM LOG</span>
+                    <span className="text-zinc-600 font-semibold tracking-wider">SYSTEM LOG</span>
                     <div className="ml-auto flex gap-2">
-                      <div className="w-3 h-3 rounded-full bg-zinc-700" />
-                      <div className="w-3 h-3 rounded-full bg-zinc-700" />
-                      <div className="w-3 h-3 rounded-full bg-zinc-700" />
+                      <div className="w-3 h-3 rounded-full bg-zinc-200" />
+                      <div className="w-3 h-3 rounded-full bg-zinc-200" />
+                      <div className="w-3 h-3 rounded-full bg-zinc-200" />
                     </div>
                   </div>
                   
                   <div className="space-y-2 mb-6 min-h-[120px]">
                     {logs.map((log, i) => (
-                      <div key={i} className={`flex items-start gap-2 ${log.includes('[OK]') ? 'text-emerald-400' : log.includes('[WARN]') ? 'text-amber-400' : 'text-zinc-400'} animate-in fade-in slide-in-from-left-4 duration-300`}>
+                      <div key={i} className={`flex items-start gap-2 ${log.includes('[OK]') ? 'text-emerald-400' : log.includes('[WARN]') ? 'text-amber-400' : 'text-zinc-600'} animate-in fade-in slide-in-from-left-4 duration-300`}>
                         <span className="opacity-50">❯</span>
                         <span>{log}</span>
                       </div>
@@ -243,7 +243,7 @@ export function Radar() {
                         <span>PROCESSING</span>
                         <span>{progress}%</span>
                       </div>
-                      <div className="w-full h-1 bg-zinc-800 rounded-full overflow-hidden">
+                      <div className="w-full h-1 bg-zinc-100 rounded-full overflow-hidden">
                         <div
                           className="h-full bg-indigo-500 shadow-[0_0_10px_rgba(99,102,241,0.8)] transition-all duration-300 ease-out"
                           style={{ width: `${progress}%` }}
@@ -270,13 +270,13 @@ export function Radar() {
         {scanState === 'results' && radarData && radarData.profile_name === 'Scraping Failed' && (
           <div className="flex-1 flex flex-col items-center justify-center gap-4 max-w-xl mx-auto w-full text-center py-16">
             <ShieldAlert className="w-10 h-10 text-amber-400" />
-            <h2 className="text-xl font-display font-bold text-white">Couldn't analyze this profile</h2>
-            <p className="text-sm text-zinc-400">
+            <h2 className="text-xl font-display font-bold text-zinc-900">Couldn't analyze this profile</h2>
+            <p className="text-sm text-zinc-600">
               {radarData.general_advice || "We couldn't fetch this page. Double-check the URL is public and try again."}
             </p>
             <button
               onClick={resetRadar}
-              className="mt-2 px-6 py-3 rounded-xl bg-zinc-800 hover:bg-zinc-700 text-white text-sm font-semibold transition-colors"
+              className="mt-2 px-6 py-3 rounded-xl bg-zinc-100 hover:bg-zinc-200 text-zinc-900 text-sm font-semibold transition-colors"
             >
               Try another profile
             </button>
@@ -288,13 +288,13 @@ export function Radar() {
           <div className="flex-1 flex flex-col space-y-6 animate-in fade-in slide-in-from-bottom-12 duration-1000 max-w-7xl mx-auto w-full">
             
             {/* Top Bar - Minimalist Context */}
-            <div className="flex flex-col md:flex-row md:items-center justify-between bg-zinc-900/50 backdrop-blur-xl border border-zinc-800 p-4 rounded-2xl shadow-lg gap-4">
+            <div className="flex flex-col md:flex-row md:items-center justify-between bg-white/50 backdrop-blur-xl border border-zinc-200 p-4 rounded-2xl shadow-lg gap-4">
               <div className="flex items-center gap-4 truncate">
-                <div className="w-12 h-12 bg-zinc-800 border border-zinc-700 rounded-xl flex items-center justify-center flex-shrink-0">
-                  <User className="w-5 h-5 text-zinc-300" />
+                <div className="w-12 h-12 bg-zinc-100 border border-zinc-200 rounded-xl flex items-center justify-center flex-shrink-0">
+                  <User className="w-5 h-5 text-zinc-700" />
                 </div>
                 <div className="flex flex-col min-w-0">
-                  <span className="text-xl font-display font-bold text-white truncate">
+                  <span className="text-xl font-display font-bold text-zinc-900 truncate">
                     {radarData.profile_name || 'Anonymous Profile'}
                   </span>
                   <div className="flex items-center gap-2 mt-0.5">
@@ -307,7 +307,7 @@ export function Radar() {
               </div>
               <button 
                 onClick={resetRadar}
-                className="text-sm font-semibold text-zinc-400 hover:text-white px-5 py-2.5 rounded-xl hover:bg-zinc-800 transition-colors border border-transparent flex-shrink-0"
+                className="text-sm font-semibold text-zinc-600 hover:text-zinc-900 px-5 py-2.5 rounded-xl hover:bg-zinc-100 transition-colors border border-transparent flex-shrink-0"
               >
                 Scan Another Profile
               </button>
@@ -317,17 +317,17 @@ export function Radar() {
             <div className="grid grid-cols-1 md:grid-cols-12 gap-6 auto-rows-[minmax(180px,_auto)]">
               
               {/* Score Card - Spans 4 cols, 2 rows */}
-              <div className={`md:col-span-4 md:row-span-2 bg-zinc-900/60 backdrop-blur-xl border ${getFitBorder(radarData.overall_score)} ${getFitShadow(radarData.overall_score)} rounded-3xl p-8 flex flex-col items-center justify-center relative overflow-hidden transition-all duration-500`}>
+              <div className={`md:col-span-4 md:row-span-2 bg-white/60 backdrop-blur-xl border ${getFitBorder(radarData.overall_score)} ${getFitShadow(radarData.overall_score)} rounded-3xl p-8 flex flex-col items-center justify-center relative overflow-hidden transition-all duration-500`}>
                 <div className={`absolute top-0 right-0 w-48 h-48 ${getFitColor(radarData.overall_score).replace('text', 'bg').replace('400', '500')}/10 rounded-full blur-[80px]`} />
                 
-                <h3 className="text-zinc-400 text-sm font-semibold tracking-widest uppercase mb-8 z-10 flex items-center gap-2">
+                <h3 className="text-zinc-600 text-sm font-semibold tracking-widest uppercase mb-8 z-10 flex items-center gap-2">
                   <Activity className="w-4 h-4" />
                   ATS Optimization Score
                 </h3>
                 
                 <div className="relative w-48 h-48 flex items-center justify-center mb-6 z-10">
                   <svg className="w-full h-full transform -rotate-90 drop-shadow-xl" viewBox="0 0 100 100">
-                    <circle cx="50" cy="50" r="46" fill="none" stroke="rgba(255,255,255,0.05)" strokeWidth="6" />
+                    <circle cx="50" cy="50" r="46" fill="none" stroke="rgba(0,0,0,0.05)" strokeWidth="6" />
                     <circle 
                       cx="50" cy="50" r="46" 
                       fill="none" 
@@ -340,8 +340,8 @@ export function Radar() {
                       style={{ animation: 'dash 2s cubic-bezier(0.2, 0.8, 0.2, 1) forwards' }}
                     />
                   </svg>
-                  <div className="absolute inset-0 flex flex-col items-center justify-center bg-zinc-900/40 rounded-full backdrop-blur-[2px] m-4">
-                    <span className="text-6xl font-display font-black text-white tracking-tighter">
+                  <div className="absolute inset-0 flex flex-col items-center justify-center bg-white/40 rounded-full backdrop-blur-[2px] m-4">
+                    <span className="text-6xl font-display font-black text-zinc-900 tracking-tighter">
                       {radarData.overall_score}
                     </span>
                     <span className="text-xs font-mono text-zinc-500 mt-1">/ 100</span>
@@ -356,27 +356,27 @@ export function Radar() {
               </div>
 
               {/* General Advice - Spans 8 cols, 1 row */}
-              <div className="md:col-span-8 bg-zinc-900/60 backdrop-blur-xl border border-zinc-800 rounded-3xl p-8 relative overflow-hidden group">
+              <div className="md:col-span-8 bg-white/60 backdrop-blur-xl border border-zinc-200 rounded-3xl p-8 relative overflow-hidden group">
                 <div className="absolute right-0 top-0 w-32 h-32 bg-indigo-500/10 rounded-full blur-[60px] group-hover:bg-indigo-500/20 transition-all duration-700" />
                 <div className="flex items-center gap-3 mb-4">
-                  <div className="w-10 h-10 rounded-xl bg-zinc-800/80 flex items-center justify-center border border-zinc-700">
+                  <div className="w-10 h-10 rounded-xl bg-zinc-100/80 flex items-center justify-center border border-zinc-200">
                     <Cpu className="w-5 h-5 text-indigo-400" />
                   </div>
-                  <h3 className="font-display font-bold text-white text-xl">Heuristic Evaluation</h3>
+                  <h3 className="font-display font-bold text-zinc-900 text-xl">Heuristic Evaluation</h3>
                 </div>
-                <p className="text-zinc-300 leading-relaxed text-lg font-light">
+                <p className="text-zinc-700 leading-relaxed text-lg font-light">
                   {radarData.general_advice || "Your profile structure has been analyzed against 10,000+ successful tech profiles."}
                 </p>
               </div>
 
               {/* Missing Keywords - Spans 8 cols, 1 row */}
-              <div className="md:col-span-8 bg-zinc-900/60 backdrop-blur-xl border border-zinc-800 rounded-3xl p-8">
+              <div className="md:col-span-8 bg-white/60 backdrop-blur-xl border border-zinc-200 rounded-3xl p-8">
                 <div className="flex items-center gap-3 mb-6">
                   <div className="w-10 h-10 rounded-xl bg-amber-500/10 flex items-center justify-center border border-amber-500/20">
                     <AlertTriangle className="w-5 h-5 text-amber-400" />
                   </div>
                   <div>
-                    <h3 className="font-display font-bold text-white text-xl">Missing ATS Entities</h3>
+                    <h3 className="font-display font-bold text-zinc-900 text-xl">Missing ATS Entities</h3>
                     <p className="text-sm text-zinc-500">Inject these keywords to bypass automated filters.</p>
                   </div>
                 </div>
@@ -391,7 +391,7 @@ export function Radar() {
                       {kw}
                     </div>
                   )) : (
-                    <div className="p-6 border border-dashed border-zinc-800 rounded-2xl text-center w-full">
+                    <div className="p-6 border border-dashed border-zinc-200 rounded-2xl text-center w-full">
                       <span className="text-sm text-zinc-500 font-mono">No critical entities missing. Profile is saturated.</span>
                     </div>
                   )}
@@ -399,22 +399,22 @@ export function Radar() {
               </div>
               
               {/* Section Feedback - Spans 12 cols, auto rows */}
-              <div className="md:col-span-12 bg-zinc-900/60 backdrop-blur-xl border border-zinc-800 rounded-3xl p-8">
-                <div className="flex items-center gap-3 mb-8 border-b border-zinc-800/50 pb-6">
+              <div className="md:col-span-12 bg-white/60 backdrop-blur-xl border border-zinc-200 rounded-3xl p-8">
+                <div className="flex items-center gap-3 mb-8 border-b border-zinc-200/50 pb-6">
                   <div className="w-10 h-10 rounded-xl bg-blue-500/10 flex items-center justify-center border border-blue-500/20">
                     <CheckSquare className="w-5 h-5 text-blue-400" />
                   </div>
                   <div>
-                    <h3 className="font-display font-bold text-white text-2xl">Section Diagnostics</h3>
+                    <h3 className="font-display font-bold text-zinc-900 text-2xl">Section Diagnostics</h3>
                     <p className="text-sm text-zinc-500 mt-1">Actionable rewriting instructions for maximum impact.</p>
                   </div>
                 </div>
                 
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                   {radarData.section_feedbacks && radarData.section_feedbacks.length > 0 ? radarData.section_feedbacks.map((sf: any, idx: number) => (
-                    <div key={idx} className="bg-zinc-950/50 border border-zinc-800/80 rounded-2xl p-6 hover:border-zinc-700 transition-colors">
-                      <div className="inline-flex items-center gap-2 px-3 py-1 rounded-lg bg-zinc-900 border border-zinc-800 mb-4">
-                        <span className="text-xs font-mono font-semibold text-zinc-300">{sf.section}</span>
+                    <div key={idx} className="bg-zinc-950/50 border border-zinc-200/80 rounded-2xl p-6 hover:border-zinc-200 transition-colors">
+                      <div className="inline-flex items-center gap-2 px-3 py-1 rounded-lg bg-white border border-zinc-200 mb-4">
+                        <span className="text-xs font-mono font-semibold text-zinc-700">{sf.section}</span>
                       </div>
                       
                       <div className="space-y-4">
@@ -424,7 +424,7 @@ export function Radar() {
                           </div>
                           <div>
                             <span className="text-xs font-bold text-rose-400 uppercase tracking-wider block mb-1">Issue</span>
-                            <p className="text-sm text-zinc-400 leading-relaxed">{sf.feedback}</p>
+                            <p className="text-sm text-zinc-600 leading-relaxed">{sf.feedback}</p>
                           </div>
                         </div>
                         
@@ -442,9 +442,9 @@ export function Radar() {
                       </div>
                     </div>
                   )) : (
-                    <div className="col-span-full p-12 border border-dashed border-zinc-800 rounded-3xl text-center">
+                    <div className="col-span-full p-12 border border-dashed border-zinc-200 rounded-3xl text-center">
                       <CheckCircle2 className="w-12 h-12 text-emerald-500/50 mx-auto mb-4" />
-                      <h4 className="text-zinc-300 font-bold text-lg mb-2">No structural issues found</h4>
+                      <h4 className="text-zinc-700 font-bold text-lg mb-2">No structural issues found</h4>
                       <p className="text-sm text-zinc-500">Your profile sections are perfectly optimized.</p>
                     </div>
                   )}
@@ -468,7 +468,7 @@ export function Radar() {
 
                <Link 
                  to="/repositories" 
-                 className="relative z-10 flex items-center justify-center gap-3 bg-zinc-950 text-white px-8 py-5 rounded-2xl font-bold hover:bg-zinc-800 transition-all hover:scale-105 active:scale-95 flex-shrink-0 shadow-xl"
+                 className="relative z-10 flex items-center justify-center gap-3 bg-zinc-950 text-zinc-900 px-8 py-5 rounded-2xl font-bold hover:bg-zinc-100 transition-all hover:scale-105 active:scale-95 flex-shrink-0 shadow-xl"
                >
                  <Play className="w-5 h-5 fill-white" />
                  <span>Enter Mock Interview</span>

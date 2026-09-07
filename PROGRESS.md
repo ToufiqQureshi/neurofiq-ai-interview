@@ -493,3 +493,7 @@ predicate, invite redemption, and the job facet buckets.
  g e n e r i c  
  c r a s h .  
  
+## 2026-09-07
+- Refactored Python AI worker into modular FastAPI structure (feature_interview, feature_radar, feature_discovery)
+- Successfully switched to OpenRouter for deepseek-chat bypassing 402 Insufficient Balance errors
+- Implemented BeautifulSoup HTML cleaner in Python worker to reduce tokens for scraped profiles

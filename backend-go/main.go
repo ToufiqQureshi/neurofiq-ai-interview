@@ -208,8 +208,18 @@ func main() {
 	// per-abuser control and becomes a global cap. The startup check below
 	// makes that misconfiguration loud instead of silent, and the ceiling is
 	// tunable so an operator is never stuck with a number we guessed.
-	ipRate := envFloat("RATE_LIMIT_RPS", 10)
-	ipBurst := envInt("RATE_LIMIT_BURST", 30)
+	var ipRate float64 = 10
+	if raw := os.Getenv("RATE_LIMIT_RPS"); raw != "" {
+		if f, err := strconv.ParseFloat(raw, 64); err == nil {
+			ipRate = f
+		}
+	}
+	var ipBurst int = 30
+	if raw := os.Getenv("RATE_LIMIT_BURST"); raw != "" {
+		if i, err := strconv.Atoi(raw); err == nil {
+			ipBurst = i
+		}
+	}
 	r.Use(func(c *gin.Context) {
 		limiter := getLimiter(&ipLimiters, c.ClientIP(), rate.Limit(ipRate), ipBurst)
 		if !limiter.Allow() {
@@ -531,26 +541,6 @@ func safely(name string, fn func()) {
 		}
 	}()
 	fn()
-}
-
-// envInt and envFloat read a tunable with a sane default, so an operator can
-// change a limit without a redeploy of new code.
-func envInt(name string, fallback int) int {
-	if raw := os.Getenv(name); raw != "" {
-		if n, err := strconv.Atoi(raw); err == nil && n > 0 {
-			return n
-		}
-	}
-	return fallback
-}
-
-func envFloat(name string, fallback float64) float64 {
-	if raw := os.Getenv(name); raw != "" {
-		if f, err := strconv.ParseFloat(raw, 64); err == nil && f > 0 {
-			return f
-		}
-	}
-	return fallback
 }
 
 // allowedOrigins reads the browser origins permitted to call this API.
