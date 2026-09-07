@@ -89,39 +89,14 @@ func CheckPipelineHealth() PipelineHealth {
 	add("directory", companies > 0 && jobs > 0,
 		"%d companies, %d hiring, %d open roles", companies, hiring, jobs)
 
-	// 2. Is the queue draining.
-	//
-	// The check that matters most, and the one with a deliberately careful
-	// verdict: a queue with nothing due is healthy — it means admission has
-	// caught up — while a queue with thousands due and nothing settled in an
-	// hour is the pipeline being refused. "stored=0" reads identically in
-	// both cases, which is exactly why it was never a usable signal.
-	depth, err := CandidateQueueDepth()
-	if err != nil {
-		add("candidate queue", false, "could not be read: %v", err)
-	} else {
-		due, _ := DueCandidateCount()
-		var settledRecently int64
-		config.DB.Model(&models.BoardCandidate{}).
-			Where("updated_at > ?", time.Now().Add(-admissionStallWindow)).
-			Count(&settledRecently)
-
-		stalled := due > 0 && settledRecently == 0
-		add("candidate queue", !stalled,
-			"%d due, %d settled in the last hour | pending=%d deferred=%d dead=%d foreign=%d stored=%d attached=%d",
-			due, settledRecently,
-			depth[models.CandidatePending], depth[models.CandidateDeferred],
-			depth[models.CandidateDead], depth[models.CandidateForeign],
-			depth[models.CandidateStored], depth[models.CandidateAttached])
-
-		// A deferred pile that dwarfs everything else means hosts are
-		// refusing us, which is a different problem from a slow queue and
-		// needs saying separately — it is the failure that used to be
-		// invisible.
-		deferred := depth[models.CandidateDeferred]
-		add("providers accepting us", deferred < 500,
-			"%d candidates waiting on a retry", deferred)
-	}
+	// 2. Search Provider & Discovery Budget (Exa / Tavily)
+	remainingSearches := SearchBudgetRemaining()
+	exaUsed := scrapeUsageThisMonth("exa")
+	tavilyUsed := scrapeUsageThisMonth("tavily")
+	firecrawlUsed := scrapeUsageThisMonth("firecrawl")
+	add("search & scrape budget", remainingSearches > 0,
+		"%d searches remaining across Exa/Tavily | exa_used=%d tavily_used=%d firecrawl_used=%d",
+		remainingSearches, exaUsed, tavilyUsed, firecrawlUsed)
 
 	// 3. Are we being throttled right now.
 	throttled := ThrottledHosts()
@@ -163,14 +138,14 @@ func CheckPipelineHealth() PipelineHealth {
 			"%d of %d companies not synced in %s", stale, companies, syncStaleWindow)
 	}
 
-	// 5. Has collection ever run.
-	var state models.HarvestState
-	if err := config.DB.Where("source = ?", SourceStartupRegister).First(&state).Error; err != nil {
-		add("collection", young, "no startup register collection has been run yet%s",
+	// 5. Board Discovery Status
+	var lastDiscovery models.Company
+	if err := config.DB.Where("source = ?", boardSearchSource).Order("created_at DESC").First(&lastDiscovery).Error; err != nil {
+		add("discovery", young, "no board-discovery companies stored yet%s",
 			map[bool]string{true: " (within startup grace)", false: ""}[young])
 	} else {
-		add("collection", true, "last read %s at %s",
-			state.LastIndex, state.LastRunAt.Format(time.RFC3339))
+		add("discovery", true, "latest discovered company %q at %s",
+			lastDiscovery.Name, lastDiscovery.CreatedAt.Format(time.RFC3339))
 	}
 
 	// 6. Does the denormalised counter still match the rows it counts.

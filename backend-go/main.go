@@ -4,7 +4,6 @@ import (
 	"context"
 	"crypto/sha256"
 	"errors"
-	"flag"
 	"log"
 	"net/http"
 	"os"
@@ -107,18 +106,9 @@ func main() {
 		&models.User{}, &models.GithubProfile{}, &models.Question{},
 		&models.InterviewSession{}, &models.InterviewInvite{},
 		&models.Company{}, &models.Job{}, &models.ScrapeUsage{},
-		&models.CronLease{}, &models.HarvestState{}, &models.BoardCandidate{},
+		&models.CronLease{},
 	); err != nil {
 		log.Fatalf("Migration failed: %v", err)
-	}
-
-	// A harvest is a one-time backfill, not a scheduled job, and it exits
-	// instead of serving. It reads thousands of boards in a run, which is the
-	// wrong shape for a cron tick and the right shape for an operator who has
-	// decided to spend an afternoon on it. Nothing here starts a server, so it
-	// cannot collide with the instance already running.
-	if runHarvest() {
-		return
 	}
 
 	// Any analysis still marked "pending" is one this process (or a previous
@@ -362,10 +352,16 @@ func main() {
 	// Discovery is the only metered step; the job sync it triggers is free
 	// and covers every company already stored, so listings stay fresh at this
 	// cadence. Only the rate of finding new boards slows down.
-	if _, err := scheduler.AddFunc("@every 15m", func() {
+	if _, err := scheduler.AddFunc("@every 1h", func() {
 		safely("discovery rotation", services.RunDiscoveryRotation)
 	}); err != nil {
 		log.Fatalf("Failed to schedule discovery rotation: %v", err)
+	}
+
+	if _, err := scheduler.AddFunc("@every 3m", func() {
+		safely("free discovery rotation", services.RunFreeDiscoveryRotation)
+	}); err != nil {
+		log.Fatalf("Failed to schedule free discovery rotation: %v", err)
 	}
 
 	// Job syncing stays hourly on its own schedule, so a closed posting drops
@@ -386,24 +382,9 @@ func main() {
 	}); err != nil {
 		log.Fatalf("Failed to schedule enrichment: %v", err)
 	}
-	// Top candidate queue up from verified Indian startup portfolios every 3 minutes.
-	if _, err := scheduler.AddFunc("@every 3m", func() {
-		safely("startup register collection", services.RunStartupRegisterCollection)
-	}); err != nil {
-		log.Fatalf("Failed to schedule startup register collection: %v", err)
-	}
-	// Admission is the tick that actually produces companies and roles.
-	// Running every 2 minutes admits candidates rapidly to keep fresh Indian companies arriving.
-	if _, err := scheduler.AddFunc("@every 2m", func() {
-		safely("candidate admission", services.RunCandidateAdmission)
-	}); err != nil {
-		log.Fatalf("Failed to schedule candidate admission: %v", err)
-	}
 	// Says, on a schedule, whether roles are still arriving — and says it
 	// loudly when they are not. Every failure this catches is a quiet one: a
-	// throttled provider, a queue that stopped draining, a sync rotation
-	// falling behind. None of them raise an error, and the service reports
-	// itself healthy through all of them while the directory goes stale.
+	// throttled provider, a sync rotation falling behind.
 	if _, err := scheduler.AddFunc("@every 1h", func() {
 		safely("pipeline health", services.LogPipelineHealth)
 	}); err != nil {
@@ -495,8 +476,6 @@ func main() {
 	<-scheduler.Stop().Done()
 	services.ReleaseCronLease(services.DiscoveryLeaseName)
 	services.ReleaseCronLease(services.JobSyncLeaseName)
-	services.ReleaseCronLease(services.StartupRegisterCollectionLeaseName)
-	services.ReleaseCronLease(services.CandidateAdmissionLeaseName)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
@@ -608,38 +587,4 @@ func trustedProxies() []string {
 		}
 	}
 	return proxies
-}
-
-// runHarvest performs a one-time slug backfill when asked, and reports whether
-// it did — in which case main returns instead of serving.
-//
-// -harvest-register walks the startup register's accelerator portfolios at a
-// second a page to collect verified Indian tech startups that arrive with a
-// sector, a funding stage, and measured coordinates.
-//
-// It spends zero metered search calls.
-//
-//	go run . -harvest-register -limit 200 # 200 register pages, then stop
-func runHarvest() bool {
-	var (
-		register = flag.Bool("harvest-register", false, "backfill companies from the startup register's accelerator portfolios")
-		limit    = flag.Int("limit", 0, "cap companies stored (0 = no cap); for -harvest-register, also caps pages read")
-		admit    = flag.Bool("admit", false, "after collecting, judge queued candidates until the queue is drained")
-	)
-	flag.Parse()
-
-	if !*register {
-		return false
-	}
-
-	stats, err := services.RunHarvest(services.HarvestOptions{
-		StartupRegister: *register,
-		Limit:           *limit,
-		Admit:           *admit,
-	})
-	if err != nil {
-		log.Fatalf("harvest: %v", err)
-	}
-	log.Printf("harvest finished: %s", stats)
-	return true
 }

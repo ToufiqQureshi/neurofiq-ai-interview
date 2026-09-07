@@ -61,47 +61,32 @@ func recordScrapeUsage(provider string) {
 	}
 }
 
-// FetchRenderedPage returns the text of a page that needs JavaScript to
-// render, using a hosted service so we never run a headless browser (and
-// pay for the RAM) ourselves.
+// FetchRenderedPage returns the text and HTML of a page that needs JavaScript to
+// render, using Firecrawl as our primary hosted scraping and extraction service.
 //
-// Jina goes first because it is free, keyless and unmetered. Firecrawl reads
-// the page better, but it is metered, and paying a credit to learn something
-// the free provider would also have told us is how a month's budget
-// disappears without a single extra job in the directory.
-//
-// That ordering has a second, larger effect: when Firecrawl ran first, an
-// unset key or an exhausted budget took this whole path down with it, and
-// every company without a supported ATS dropped to zero roles. With Jina in
-// front, the free path is the one that carries the directory and Firecrawl
-// is an upgrade, not a dependency.
-//
-// Callers should try a plain HTTP fetch first; this is the escalation path
-// for pages that come back empty because they're client-rendered.
+// Plain HTTP fetch is always tried first by callers; FetchRenderedPage is the
+// escalation path for client-rendered pages that return empty HTML.
 func FetchRenderedPage(url string) (string, string, error) {
+	key := os.Getenv("FIRECRAWL_API_KEY")
+	if key != "" {
+		if used, budget := scrapeUsageThisMonth("firecrawl"), firecrawlBudget(); used < budget {
+			text, err := fetchViaFirecrawl(url, key)
+			if err == nil {
+				recordScrapeUsage("firecrawl")
+				return text, "firecrawl", nil
+			}
+			log.Printf("firecrawl failed for %s (%v) — falling back to secondary fetch", url, err)
+		} else {
+			log.Printf("firecrawl monthly budget reached (%d/%d) — falling back to secondary fetch", used, budget)
+		}
+	}
+
 	text, err := fetchViaJina(url)
 	if err == nil {
 		recordScrapeUsage("jina")
 		return text, "jina", nil
 	}
-	jinaErr := err
-	log.Printf("jina failed for %s (%v) — trying firecrawl", url, err)
-
-	key := os.Getenv("FIRECRAWL_API_KEY")
-	if key == "" {
-		return "", "", jinaErr
-	}
-	if used, budget := scrapeUsageThisMonth("firecrawl"), firecrawlBudget(); used >= budget {
-		log.Printf("firecrawl monthly budget reached (%d/%d) — giving up on %s", used, budget, url)
-		return "", "", jinaErr
-	}
-
-	text, err = fetchViaFirecrawl(url, key)
-	if err != nil {
-		return "", "", jinaErr
-	}
-	recordScrapeUsage("firecrawl")
-	return text, "firecrawl", nil
+	return "", "", fmt.Errorf("scraping failed for %s: %w", url, err)
 }
 
 type firecrawlResponse struct {

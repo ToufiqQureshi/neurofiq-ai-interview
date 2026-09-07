@@ -1,33 +1,24 @@
 # Backend-Go Services Architecture & Feature Breakdown
 
-Is folder (`backend-go/services/`) me saare core business logic, automated background pipelines, ATS integrations, and AI interview evaluations rehte hain.
-Taki kisi ko bhi files ka purpose samajhne me confusion na ho, in 38 files ko 5 distinct feature modules me classify kiya gaya hai:
+Is folder (`backend-go/services/`) me saare core business logic, automated discovery pipelines, ATS integrations, and AI interview evaluations rehte hain.
+Ab architecture ko clean karke sirf **Exa / Tavily** (for targeted search) aur **Firecrawl** (for dynamic page rendering/scraping) par consolidate kiya gaya hai:
 
 ---
 
-## 1. Automated Discovery & Ingestion Pipeline (Zero-Cost Engine)
-Ye module bina kisi costly paid search ke, zero-cost Indian startup registries and company boards se active hiring companies discover karke queue me daalta hai.
+## 1. Targeted Board Discovery & Search Engine (Exa + Tavily)
+Ye module targeted search queries run karke ATS board domains (Greenhouse, Lever, Ashby, Workable, SmartRecruiters, Keka, Darwinbox, Workday) se directly active Indian hiring companies aur ATS slugs discover karta hai.
 
-- `candidate_queue.go`:
-  - **Kya karta hai**: Database candidate admission queue manage karta hai (`board_candidates`).
-  - **Kyu zaroori hai**: Companies ko ek saath DB me dump karne ke bajay admission queue me rakhta hai taaki unhe politely rate-limited batches me admit kiya ja sake.
-- `slug_harvest_schedule.go`:
-  - **Kya karta hai**: Background cron leases schedule karta hai (`@every 3m` Startup Register collection aur `@every 2m` Candidate Admission).
-  - **Kyu zaroori hai**: Continuous ingestion ensure karta hai taaki har 2-3 minute me nayi Indian tech firms platform pe live hoti rahein.
-- `slug_source_register.go`:
-  - **Kya karta hai**: `indianstartupmap.com` ke high-signal accelerator portfolios (Y Combinator, Techstars, Antler, Plug & Play) ko parse karta hai.
-  - **Kyu zaroori hai**: Zero-cost, 100% verified Indian tech startups provide karta hai jinke paas genuine domain, location aur sector data hota hai.
-- `slug_harvest.go`:
-  - **Kya karta hai**: Candidate deduplication aur ATS slug admission logic (`admitCandidate`, `dedupeCandidates`).
-  - **Kyu zaroori hai**: Duplicate companies ko rokt hai aur verify karta hai ki ATS board valid hai ya nahi.
+- `search_provider.go`:
+  - **Kya karta hai**: Exa API (primary) aur Tavily API (fallback) ko unified `WebSearch` interface ke piche manage karta hai with monthly budget capping and usage tracking (`scrape_usages`).
+  - **Kyu zaroori hai**: Discovery ko domain filtering (`includeDomains`) deta hai taaki blog posts aur noisy links filter out ho sakein.
+- `board_discovery.go`:
+  - **Kya karta hai**: City aur role based rotation queries (`boardSeedQueries`) run karta hai, ATS URLs se slug extract karta hai, Indian job locations verify karta hai, aur real companies store karta hai.
 - `cron_lease.go`:
-  - **Kya karta hai**: Distributed cron locking using Supabase `cron_leases` table.
-  - **Kyu zaroori hai**: Multiple backend instances me ek hi cron task ko duplicate run hone se rokt hai (race condition prevention).
+  - **Kya karta hai**: Distributed cron locking using Supabase `cron_leases` table taaki multi-instance deploys me race conditions na ho.
 - `pipeline_health.go`:
-  - **Kya karta hai**: Discovery pipeline ki health monitor karta hai (`/api/pipeline/health`).
-  - **Kyu zaroori hai**: Stale rotations, rate limit throttles aur empty candidate queues ko detect karta hai.
+  - **Kya karta hai**: Discovery pipeline aur search/scrape budgets ki health monitor karta hai (`/api/pipeline/health`).
 - `guard_backfill.go`:
-  - **Kya karta hai**: Existing database companies ko audit karke foreign/dead/unverified candidates ko clean up karta hai.
+  - **Kya karta hai**: Existing database companies ko audit karke foreign/dead/unverified entries ko clean up karta hai.
 
 ---
 
@@ -40,23 +31,19 @@ Ye module actual applicant tracking systems (Ashby, Greenhouse, Lever, Workable,
 - `job_facets.go`:
   - **Kya karta hai**: Job roles ko auto-categorize karta hai (Engineering, Product, Design, Sales, Marketing, etc.) aur experience level filter karta hai.
 - `directory_counters.go`:
-  - **Kya karta hai**: Companies table ke `open_roles` denormalized counter ko aggregate job count ke sath perfectly in-sync rakhta hai.
-- `search_provider.go`:
-  - **Kya karta hai**: Exa/Google fallback search query abstraction (used only when direct ATS probe needs extra company URL context).
-- `board_discovery.go`:
-  - **Kya karta hai**: Company career pages se direct ATS board detection logic (`DetectATS`).
+  - **Kya karta hai**: Companies table ke `open_roles` denormalized counter ko aggregate job count ke sath in-sync rakhta hai.
 
 ---
 
-## 3. Companies & Public Directory
-Ye module public tech hiring directory aur interactive map view ko serve karta hai.
+## 3. Web Scraping & Company Enrichment (Firecrawl)
+Ye module public tech hiring directory aur interactive map view ko enrich karta hai.
 
+- `scrape_service.go`:
+  - **Kya karta hai**: Dynamic JavaScript-heavy careers pages ko render aur scrape karne ke liye **Firecrawl** API use karta hai with monthly quota enforcement.
 - `company_service.go`:
   - **Kya karta hai**: Company listing, filtering, pagination, search aur map coordinates endpoints (`GetCompanies`, `GetCompanyBySlug`).
 - `enrichment.go`:
-  - **Kya karta hai**: High-signal Indian tech companies ke missing metadata (funding stage, logo, industry, coordinates) ko enrich karta hai.
-- `scrape_service.go`:
-  - **Kya karta hai**: Public careers page parser jo custom career pages se job listings extract karta hai.
+  - **Kya karta hai**: Indian tech companies ke missing metadata (funding stage, logo, industry, coordinates) ko enrich karta hai.
 - `extractor_service.go`:
   - **Kya karta hai**: Raw HTML/JSON responses se clean text aur job details extract karne ke helpers.
 
@@ -82,6 +69,6 @@ Low-level robust networking, rate limiting aur testing utilities.
 - `httputil.go`:
   - **Kya karta hai**: Resilient HTTP client with timeouts, custom User-Agents, and graceful error classification (`IsTransientFetchError`).
 - `hostlimit.go`:
-  - **Kya karta hai**: Per-host rate limiter (tokens per second) taaki kisi bhi ATS (jaise Workable ya Lever) ko excessive requests na bheji jayein aur 429 rate limit na lage.
+  - **Kya karta hai**: Per-host rate limiter (tokens per second) taaki kisi bhi ATS ko excessive requests na bheji jayein aur 429 rate limit na lage.
 - `maintenance.go`:
   - **Kya karta hai**: Periodic DB hygiene checks and orphaned records cleanup.

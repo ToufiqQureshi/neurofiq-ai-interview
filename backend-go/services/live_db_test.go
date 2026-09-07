@@ -1,10 +1,8 @@
 package services
 
 import (
-	"context"
 	"os"
 	"testing"
-	"time"
 
 	"github.com/ToufiqQureshi/neurofiq-ai-interview/backend-go/config"
 	"github.com/ToufiqQureshi/neurofiq-ai-interview/backend-go/models"
@@ -36,23 +34,14 @@ func liveDB(t *testing.T) {
 	}
 }
 
-// AutoMigrate has to be able to create the queue table before anything can use
-// it: a composite primary key across two string columns, plus the ordered
-// index the due-work query depends on.
-func TestLiveAutoMigrateCandidateQueue(t *testing.T) {
+// AutoMigrate verifies that the core models (Company, Job, ScrapeUsage, CronLease)
+// migrate cleanly against Postgres.
+func TestLiveAutoMigrateCoreModels(t *testing.T) {
 	liveDB(t)
 	if err := config.DB.AutoMigrate(
-		&models.Company{}, &models.Job{}, &models.BoardCandidate{}, &models.HarvestState{},
+		&models.Company{}, &models.Job{}, &models.ScrapeUsage{}, &models.CronLease{},
 	); err != nil {
 		t.Fatalf("AutoMigrate failed: %v", err)
-	}
-	if !config.DB.Migrator().HasTable(&models.BoardCandidate{}) {
-		t.Fatal("board_candidates was not created")
-	}
-	for _, col := range []string{"provider", "slug", "status", "next_attempt_at", "attempts"} {
-		if !config.DB.Migrator().HasColumn(&models.BoardCandidate{}, col) {
-			t.Errorf("board_candidates.%s missing", col)
-		}
 	}
 	for _, col := range []string{"open_roles", "last_synced_at"} {
 		if !config.DB.Migrator().HasColumn(&models.Company{}, col) {
@@ -63,71 +52,6 @@ func TestLiveAutoMigrateCandidateQueue(t *testing.T) {
 		if !config.DB.Migrator().HasColumn(&models.Job{}, col) {
 			t.Errorf("jobs.%s missing", col)
 		}
-	}
-}
-
-// EnqueueCandidates upserts with CASE ... excluded.<col> expressions, which
-// GORM has to render into a valid ON CONFLICT DO UPDATE. A re-enqueue must
-// leave an existing row's status and schedule alone while filling in detail
-// the first sighting did not have — collection must never reset the progress
-// admission has made.
-func TestLiveEnqueueUpsertsWithoutResettingProgress(t *testing.T) {
-	liveDB(t)
-	const provider, slug = "greenhouse", "zz-neurofiq-selftest"
-	defer config.DB.Where("provider = ? AND slug = ?", provider, slug).
-		Delete(&models.BoardCandidate{})
-
-	if _, err := EnqueueCandidates([]slugCandidate{
-		{Provider: provider, Slug: slug, Source: "probe"},
-	}); err != nil {
-		t.Fatalf("first enqueue failed: %v", err)
-	}
-
-	// Pretend admission judged it and put it on the monthly re-check.
-	var row models.BoardCandidate
-	if err := config.DB.Where("provider = ? AND slug = ?", provider, slug).
-		First(&row).Error; err != nil {
-		t.Fatalf("row was not written: %v", err)
-	}
-	if err := settleCandidate(row, models.CandidateDead, "", nil); err != nil {
-		t.Fatalf("settle failed: %v", err)
-	}
-
-	// A later source sees the same board and knows more about it.
-	if _, err := EnqueueCandidates([]slugCandidate{{
-		Provider: provider, Slug: slug, Source: SourceStartupRegister,
-		Name: "Selftest", Sector: "AI", Stage: "Seed",
-	}}); err != nil {
-		t.Fatalf("second enqueue failed: %v", err)
-	}
-
-	var after models.BoardCandidate
-	if err := config.DB.Where("provider = ? AND slug = ?", provider, slug).
-		First(&after).Error; err != nil {
-		t.Fatalf("row vanished: %v", err)
-	}
-	if after.Status != models.CandidateDead {
-		t.Errorf("status reset to %q — a re-collection must not undo admission's work", after.Status)
-	}
-	if after.NextAttemptAt.Before(time.Now().Add(20 * 24 * time.Hour)) {
-		t.Error("the monthly re-check was reset; the board would be re-read immediately")
-	}
-	if after.Sector != "AI" || after.Name != "Selftest" {
-		t.Errorf("detail was not filled in: name=%q sector=%q", after.Name, after.Sector)
-	}
-}
-
-// The due-work query and the two aggregates the health check reads.
-func TestLiveQueueQueries(t *testing.T) {
-	liveDB(t)
-	if _, err := DueCandidates(5); err != nil {
-		t.Errorf("DueCandidates: %v", err)
-	}
-	if _, err := DueCandidateCount(); err != nil {
-		t.Errorf("DueCandidateCount: %v", err)
-	}
-	if _, err := CandidateQueueDepth(); err != nil {
-		t.Errorf("CandidateQueueDepth: %v", err)
 	}
 }
 
@@ -312,68 +236,4 @@ func TestLiveSyncRotationOrdering(t *testing.T) {
 		t.Fatalf("prune ordering failed: %v", err)
 	}
 	t.Logf("prune head: %d careers-page jobs", len(jobs))
-}
-
-// One admission pass with a tiny budget, to prove the whole path runs against
-// the real schema. It judges nothing unless there is queued work, and the
-// budget stops it either way.
-func TestLiveAdmissionPassRuns(t *testing.T) {
-	liveDB(t)
-	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
-	defer cancel()
-
-	stats, err := AdmitDueCandidates(ctx, 3)
-	if err != nil {
-		t.Fatalf("AdmitDueCandidates: %v", err)
-	}
-	t.Logf("admission pass: %s", stats)
-}
-
-// The whole admission path, end to end, on a slug chosen because no such board
-// exists: Greenhouse answers 404, which is a board saying it is not there. That
-// is the one outcome that can be asserted without writing a company row, and it
-// is the outcome the throttle bug used to counterfeit — a 429 arrived here as
-// the same "dead", so proving 404 lands as dead is only half the point. The
-// other half is that it lands as dead rather than as deferred, which is what
-// separates a real answer from a retry.
-func TestLiveAdmissionSettlesADeadBoard(t *testing.T) {
-	liveDB(t)
-	const provider, slug = "greenhouse", "zz-neurofiq-nonexistent-board"
-	defer config.DB.Where("provider = ? AND slug = ?", provider, slug).
-		Delete(&models.BoardCandidate{})
-
-	if _, err := EnqueueCandidates([]slugCandidate{
-		{Provider: provider, Slug: slug, Source: "probe"},
-	}); err != nil {
-		t.Fatalf("enqueue failed: %v", err)
-	}
-
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
-	defer cancel()
-	// A large batch, because the queue is ordered by due time and this row has
-	// to actually be reached rather than sorted behind whatever else is due.
-	if _, err := AdmitDueCandidates(ctx, 2000); err != nil {
-		t.Fatalf("AdmitDueCandidates: %v", err)
-	}
-
-	var after models.BoardCandidate
-	if err := config.DB.Where("provider = ? AND slug = ?", provider, slug).
-		First(&after).Error; err != nil {
-		t.Fatalf("candidate row vanished: %v", err)
-	}
-	t.Logf("settled as %q, next attempt %s, attempts=%d, err=%q",
-		after.Status, after.NextAttemptAt.Format(time.RFC3339), after.Attempts, after.LastError)
-
-	if after.Status == models.CandidatePending {
-		t.Fatal("the candidate was never judged")
-	}
-	if after.Status != models.CandidateDead {
-		t.Errorf("a 404 board settled as %q, want %q", after.Status, models.CandidateDead)
-	}
-	// And it must come back, or a company that opens this board later is
-	// invisible forever.
-	gap := time.Until(after.NextAttemptAt)
-	if gap < 20*24*time.Hour || gap > 40*24*time.Hour {
-		t.Errorf("re-check scheduled %s away, want roughly a month", gap)
-	}
 }
