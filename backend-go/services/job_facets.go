@@ -51,7 +51,6 @@ var levelKeywords = []struct {
 	{"Mid", []string{"sde 2", "sde ii", "mid-level", " ii", "engineer", "developer", "designer", "product manager", "specialist", "generalist", "consultant"}},
 }
 
-
 // ClassifyField buckets a job by what kind of work it is.
 func ClassifyField(title, department string) string {
 	hay := " " + strings.ToLower(title+" "+department) + " "

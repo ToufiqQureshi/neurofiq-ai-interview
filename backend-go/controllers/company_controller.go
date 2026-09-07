@@ -156,7 +156,6 @@ func HandleReclassifyJobs(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"status": "reclassified", "count": n})
 }
 
-
 func HandleGetCompanyByID(c *gin.Context) {
 	var company models.Company
 	if err := config.DB.First(&company, "id = ?", c.Param("id")).Error; err != nil {
@@ -187,8 +186,10 @@ func HandleGetGlobalJobs(c *gin.Context) {
 	}
 	field := c.Query("field")
 	level := c.Query("level")
+	workType := c.Query("work_type")
+	scope := c.Query("scope")
 
-	jobs, total, err := services.ListGlobalJobs(q, location, field, level, page, pageSize)
+	jobs, total, err := services.ListGlobalJobs(q, location, field, level, workType, scope, page, pageSize)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to fetch jobs"})
 		return
@@ -261,4 +262,3 @@ func HandleRunDiscovery(c *gin.Context) {
 		"budget_remaining": services.SearchBudgetRemaining(),
 	})
 }
-

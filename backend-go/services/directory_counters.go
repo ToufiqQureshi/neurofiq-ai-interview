@@ -153,4 +153,3 @@ func ReclassifyAllJobs(batchSize int) (int, error) {
 	}
 	return totalUpdated, nil
 }
-

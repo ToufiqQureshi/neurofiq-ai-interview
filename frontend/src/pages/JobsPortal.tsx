@@ -31,6 +31,24 @@ interface Company {
   job_count: number;
 }
 
+const SCOPE_OPTIONS = [
+  { label: 'All Roles', value: '' },
+  { label: 'Tech', value: 'tech' },
+  { label: 'Non-Tech', value: 'non-tech' },
+];
+
+// Maps the preference-filter's UI values onto the level/work_type buckets
+// job_facets.go actually classifies jobs into.
+const EXP_TO_LEVEL: Record<string, string> = {
+  Entry: 'Fresher',
+  Mid: 'Mid',
+  Senior: 'Senior',
+};
+const WORKTYPE_TO_API: Record<string, string> = {
+  Remote: 'Remote',
+  Hybrid: 'On-site',
+};
+
 const POPULAR_CATEGORIES = [
   { label: 'All Tech Roles', value: '' },
   { label: 'Backend / Systems (Go/Java/Py)', value: 'Backend' },
@@ -63,6 +81,7 @@ export function JobsPortal() {
   const [selectedExp, setSelectedExp] = useState('');
   const [selectedWorkType, setSelectedWorkType] = useState('');
   const [selectedCategory, setSelectedCategory] = useState('');
+  const [selectedScope, setSelectedScope] = useState('');
 
   // Data State
   const [companies, setCompanies] = useState<Company[]>([]);
@@ -111,6 +130,9 @@ export function JobsPortal() {
       if (selectedLocation) params.set('location', selectedLocation);
       if (searchQuery) params.set('q', searchQuery);
       if (selectedCategory) params.set('field', selectedCategory);
+      if (selectedScope) params.set('scope', selectedScope);
+      if (selectedExp && EXP_TO_LEVEL[selectedExp]) params.set('level', EXP_TO_LEVEL[selectedExp]);
+      if (selectedWorkType && WORKTYPE_TO_API[selectedWorkType]) params.set('work_type', WORKTYPE_TO_API[selectedWorkType]);
 
       fetch(`${import.meta.env.VITE_API_URL}/api/jobs?${params.toString()}`, {
         credentials: 'include',
@@ -144,7 +166,7 @@ export function JobsPortal() {
       isMounted = false;
       clearTimeout(debounceTimer);
     };
-  }, [searchQuery, selectedLocation, selectedCategory]);
+  }, [searchQuery, selectedLocation, selectedCategory, selectedScope, selectedExp, selectedWorkType]);
 
   const filteredJobs = jobs;
 
@@ -295,6 +317,24 @@ export function JobsPortal() {
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
         {/* Left Column: Popular Search Roles & Tech Sub-Hubs (3 cols) */}
         <div className="hidden lg:flex flex-col gap-5 lg:col-span-3 sticky top-24">
+          {/* Tech / Non-Tech Scope Toggle */}
+          <div className="bg-paper dark:bg-zinc-900/90 border border-line rounded-2xl p-2 shadow-xs flex gap-1">
+            {SCOPE_OPTIONS.map(opt => (
+              <button
+                key={opt.label}
+                type="button"
+                onClick={() => setSelectedScope(opt.value)}
+                className={`flex-1 text-center px-2 py-1.5 rounded-xl text-xs font-semibold transition-colors ${
+                  selectedScope === opt.value
+                    ? 'bg-accent text-white'
+                    : 'text-ink-soft hover:bg-zinc-100 dark:hover:bg-zinc-800 hover:text-ink'
+                }`}
+              >
+                {opt.label}
+              </button>
+            ))}
+          </div>
+
           {/* Categories Box */}
           <div className="bg-paper dark:bg-zinc-900/90 border border-line rounded-2xl p-4 shadow-xs">
             <h4 className="text-xs font-mono font-bold uppercase text-ink-faint tracking-wider mb-3 flex items-center gap-2">

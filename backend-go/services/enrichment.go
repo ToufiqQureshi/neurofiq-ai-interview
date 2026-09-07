@@ -141,7 +141,6 @@ type siteMeta struct {
 	SiteName    string
 }
 
-
 // fetchSiteMetaWithFallback attempts the provided website URL first, and if that
 // yields no description or has a subpath, falls back to the clean root domain.
 func fetchSiteMetaWithFallback(website, domain string) siteMeta {

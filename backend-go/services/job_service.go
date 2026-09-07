@@ -1688,8 +1688,15 @@ type JobWithCompany struct {
 	Level         string `json:"level"`
 }
 
-// ListGlobalJobs searches across all active jobs in the system with keyword, location, role field, and level filters.
-func ListGlobalJobs(q, location, field, level string, page, pageSize int) ([]JobWithCompany, int64, error) {
+// TechFields and NonTechFields split job_facets.go's FieldBuckets into the two
+// groups the jobs portal's scope toggle filters on.
+var (
+	TechFields    = []string{"Engineering", "Data & AI", "Product", "Design"}
+	NonTechFields = []string{"Sales & Marketing", "Operations", "Other"}
+)
+
+// ListGlobalJobs searches across all active jobs in the system with keyword, location, role field, level, work type, and tech/non-tech scope filters.
+func ListGlobalJobs(q, location, field, level, workType, scope string, page, pageSize int) ([]JobWithCompany, int64, error) {
 	if page < 1 {
 		page = 1
 	}
@@ -1731,6 +1738,20 @@ func ListGlobalJobs(q, location, field, level string, page, pageSize int) ([]Job
 		} else {
 			db = db.Where("jobs.title ILIKE ? OR jobs.department ILIKE ?", "%"+field+"%", "%"+field+"%")
 		}
+	}
+
+	if scope == "tech" {
+		db = db.Where("COALESCE(NULLIF(jobs.field, ''), 'Other') IN ?", TechFields)
+	} else if scope == "non-tech" {
+		db = db.Where("COALESCE(NULLIF(jobs.field, ''), 'Other') IN ?", NonTechFields)
+	}
+	if level != "" {
+		db = db.Where("COALESCE(NULLIF(jobs.level, ''), 'Unspecified') = ?", level)
+	}
+	if workType == "Remote" {
+		db = db.Where("jobs.location ILIKE ?", "%remote%")
+	} else if workType == "On-site" {
+		db = db.Where("jobs.location NOT ILIKE ? OR jobs.location IS NULL", "%remote%")
 	}
 
 	var total int64
