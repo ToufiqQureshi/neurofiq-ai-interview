@@ -4,8 +4,12 @@ import (
 	"encoding/json"
 	"log"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
+
+	"github.com/ToufiqQureshi/neurofiq-ai-interview/backend-go/config"
+	"github.com/ToufiqQureshi/neurofiq-ai-interview/backend-go/models"
 )
 
 // The startup register as a source of company *information*.
@@ -62,8 +66,36 @@ const registerPoliteness = 1100 * time.Millisecond
 // self-declared: "the company ticked a box on its own Startup India profile
 // saying it had raised money, and nobody checked." The 4.7% board rate was
 // measured on the attested slice, so that is the slice this defaults to.
+//
+// The site lists 658 portfolio pages in total, and the other 600+ were
+// deliberately left out. They are almost entirely university and government
+// incubation cells (Atal Incubation Centres, college TBIs) that fund
+// idea-stage student projects — a different population from the four above,
+// which back companies expected to scale and hire. Walking all 658 would be
+// roughly 25x the requests for a population even less likely than the 95%
+// dead rate already measured on the attested slice. What is listed below is
+// the same kind of signal as the original four: a corporate innovation
+// program, a professional accelerator, or a VC platform whose portfolio
+// companies plausibly run engineering teams and post roles on a real ATS.
 var registerAccelerators = []string{
 	"y-combinator", "techstars", "antler", "plug-and-play",
+	"techstars-startup-weekend", "google-for-startups-accelerator-india",
+	"nvidia-inception-for-startups", "amazon-launchpad", "cisco-launchpad",
+	"oracle-for-startups", "netapp-excellerator", "dell-technologies",
+	"bosch", "pitney-bowes", "philips-healthworks", "novartis-biome",
+	"jiogennext", "airtel-startup-accelerator", "jsw-mg-motor-india",
+	"bharat-petroleum", "sterlite-technologies-ltd", "comviva-technologies-ltd",
+	"manipal-technologies-limited", "max-life-innovation-labs",
+	"t-hub", "t-hub-foundation", "brigade-reap", "village-capital",
+	"zone-startups-india", "startupbootcamp-india",
+	"startupbootcamp-smart-cities-dubai", "angellist-india",
+	"tie-hyderabad", "tie-pune", "e-cell-iit-madras", "upaya-social-ventures",
+	"hexgn", "padup-ventures", "mindspace-ventures", "fundenable",
+	"india-accelerator", "88mph", "rocketfuel-accelerator", "ghv-accelerator",
+	"gomassive", "gruhas-aspire", "caret-accelerator", "alpha-labs-accelerator",
+	"maha-accelerator", "yes-fintech",
+	"catalyst-societe-generale-startup-accelerator-program",
+	"toilet-board-coalition", "marico-innovation-foundation",
 }
 
 var (
@@ -107,6 +139,51 @@ func (o registerOrganization) website() string {
 	return ""
 }
 
+// registerCursorSource keys the HarvestState row that remembers how far a
+// scheduled pass has walked through the flattened portfolio list.
+//
+// Every collection tick used to call registerPortfolioSlugs and start reading
+// from index 0, so a limit of 25 against a list of thousands meant the same
+// first 25 companies were re-read every three minutes forever — the register
+// scanned Y Combinator's earliest portfolio entries in perpetuity and never
+// reached Techstars, let alone anything after it. The cursor is what turns
+// "read 25 companies" into "read the next 25", so a scheduled pass makes
+// forward progress across ticks instead of resampling the same prefix.
+//
+// A one-time backfill (limit <= 0, run from the CLI) ignores the cursor and
+// reads the list once from the start, because it means to see everything in
+// one pass rather than resume a schedule.
+const registerCursorSource = "startup-register-cursor"
+
+// loadRegisterCursor returns where the last scheduled pass left off, clamped
+// to the current list length so a shrunk or regenerated list cannot index out
+// of range.
+func loadRegisterCursor(total int) int {
+	if total <= 0 {
+		return 0
+	}
+	var state models.HarvestState
+	if err := config.DB.Where("source = ?", registerCursorSource).First(&state).Error; err != nil {
+		return 0
+	}
+	n, err := strconv.Atoi(state.LastIndex)
+	if err != nil || n < 0 {
+		return 0
+	}
+	return n % total
+}
+
+// saveRegisterCursor records the position the next pass should resume from.
+func saveRegisterCursor(next int) {
+	if err := config.DB.Save(&models.HarvestState{
+		Source:    registerCursorSource,
+		LastIndex: strconv.Itoa(next),
+		LastRunAt: time.Now(),
+	}).Error; err != nil {
+		log.Printf("startup register: could not save cursor: %v", err)
+	}
+}
+
 // HarvestFromStartupRegister reads the accelerator portfolios and returns a
 // candidate for every company whose site advertises a board it can read.
 //
@@ -117,7 +194,10 @@ func (o registerOrganization) website() string {
 // limit caps how many company pages one run reads, because the full funded set
 // is 47,744 pages at roughly a second each and a scheduled job has no business
 // spending thirteen hours on that. Zero means read them all, which is for a
-// deliberate one-time backfill.
+// deliberate one-time backfill; a positive limit is the scheduled case and
+// resumes from where the previous pass's cursor left off (see
+// registerCursorSource), wrapping back to the start once the list is
+// exhausted.
 func HarvestFromStartupRegister(accelerators []string, limit int) []slugCandidate {
 	if len(accelerators) == 0 {
 		accelerators = registerAccelerators
@@ -125,13 +205,28 @@ func HarvestFromStartupRegister(accelerators []string, limit int) []slugCandidat
 
 	slugs := registerPortfolioSlugs(accelerators)
 	log.Printf("startup register: %d companies across %d portfolios", len(slugs), len(accelerators))
+	if len(slugs) == 0 {
+		return nil
+	}
+
+	start := 0
+	scheduled := limit > 0
+	if scheduled {
+		start = loadRegisterCursor(len(slugs))
+	}
 
 	var out []slugCandidate
 	read := 0
-	for _, slug := range slugs {
-		if limit > 0 && read >= limit {
+	pos := start
+	for {
+		if scheduled && read >= limit {
 			break
 		}
+		if read >= len(slugs) {
+			break
+		}
+		slug := slugs[pos]
+		pos = (pos + 1) % len(slugs)
 		read++
 
 		org, ok := registerCompany(slug)
@@ -176,6 +271,9 @@ func HarvestFromStartupRegister(accelerators []string, limit int) []slugCandidat
 		}
 		out = append(out, cand)
 		log.Printf("startup register: %s -> %s (%s/%s)", cand.Name, domain, provider, boardSlug)
+	}
+	if scheduled {
+		saveRegisterCursor(pos)
 	}
 	return out
 }

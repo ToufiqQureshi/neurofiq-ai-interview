@@ -45,10 +45,12 @@ var levelKeywords = []struct {
 	{"Fresher", []string{"intern", "trainee", "fresher", "graduate", "entry level", "entry-level", "apprentice", "campus"}},
 	// 4. Junior: Entry-level corporate roles & early ICs (1-2 yrs)
 	{"Junior", []string{"junior", "jr.", "jr ", "associate", "assistant", "sde 1", "sde i ", "analyst", "coordinator", "representative", " bdr ", " sdr "}},
-	// 5. Mid: Core professional IC roles (Levels.fyi / Radford IC2 standard, 2-4 yrs)
-	// When a company posts "Software Engineer", "Backend Developer", "Product Manager",
-	// or "UI/UX Designer" without a prefix, by industry taxonomy it is a Mid-level role.
-	{"Mid", []string{"sde 2", "sde ii", "mid-level", " ii", "engineer", "developer", "designer", "product manager", "specialist", "generalist", "consultant"}},
+	// 5. Mid: Explicit mid-level indicators (SDE 2, IC2, Mid-level). Standalone
+	// generic titles (e.g. "Software Engineer", "Product Manager") are unranked
+	// and legitimately belong to "Unspecified" rather than guessing.
+	// Roman numerals are matched with a leading space so "ii" finds "Engineer II"
+	// without firing on words like "Hawaii" or "Skiing".
+	{"Mid", []string{"sde 2", "sde ii", "mid-level", "mid level", " ii"}},
 }
 
 // ClassifyField buckets a job by what kind of work it is.
