@@ -157,8 +157,68 @@ Product ko development se nikal kar actual investors aur clients ke saamne launc
 - Production Launch 1-click ho gaya hai (scalable infra).
 - Enterprise landing page ki wajah se brand premium lagti hai, trust badhta hai, and funding raise karna aasaan hoga.
 
-**Warna Kya Hojata (What if we didn't do this):**  
-Product hamesha "localhost" par hi fasa rehta. Koi investor usko serious startup nahi maanta agar landing page basic hota ya manual deployment hota.
+---
 
-*(Drafted by Antigravity during the B2B Pivot)*
+## 10. Production-Grade Custom Glass Popover Dropdowns (`CustomDropdown.tsx`)
+
+**Kya Kiya (What was done):**  
+`CompanyMap.tsx` aur directory filters me jo standard browser native `<select>` dropdowns ("All sectors", "All stages") the, unhe hata kar ek custom Linear / Stripe-style floating glassmorphic popover dropdown component (`CustomDropdown.tsx`) banaya.
+- Custom `useRef` + `mousedown` hook se robust outside-click detection.
+- Smooth keyboard accessibility (`Escape` to close).
+- Rotating Lucide Chevron icons and active Checkmark badge indicator.
+- Dark/Light mode support with border glow and backdrop blur (`backdrop-blur-xl`).
+
+**Kyu Kiya (Why was it necessary):**  
+Native HTML `<select>` elements browser-controlled hote hain (ugly blue box, harsh OS borders, zero custom typography/animation), jisse high-end B2B enterprise platform ka visual design low-budget lag raha tha ("itna basic kyu dikhra ha").
+
+**Kya Fayeda Iska (What is the benefit):**  
+- UI visually premium aur modern B2B SaaS (Linear/Vercel standard) feel deti hai.
+- Dropdown animations smooth hain aur layout me koi pop-in/jumping issue nahi hota.
+
+**Warna Kya Hojata (What if we didn't do this):**  
+Company directory ek generic student project ya admin panel jaisi lagti, enterprise customers UI polish dekh kar product trust nahi karte.
+
+---
+
+## 11. Company Description Metadata Scraper & Smart Card Fallback
+
+**Kya Kiya (What was done):**  
+1. Backend me `fetchSiteMetaWithFallback` banaya jo company ke website URL aur root domain (`https://` + `domain`) par jaakar `<meta name="description">`, `<meta property="og:description">`, aur `<meta name="twitter:description">` scrape karta hai.
+2. Clean text parser: HTML tags, extra whitespace, aur repetitive marketing buzzwords ko strip karke clean 15-320 characters me summarize karta hai.
+3. Batch enrichment worker (`EnrichAllPendingCompanies`) create kiya jo un-enriched companies ko parallel goroutines se enrich karta hai.
+4. Frontend card fallback: UI par `c.description || `${c.name} is an active Indian tech company hiring in ${c.area || 'India'} across ${c.sector || 'technology & business'} roles.`` add kiya aur CSS `line-clamp-2 min-h-[34px]` lagaya taaki har card ki height uniform rahe.
+
+**Kyu Kiya (Why was it necessary):**  
+ATS platforms (Greenhouse, Lever, Ashby) job openings dete hain lekin company ka "About Us" description provide nahi karte. Pehle hourly enrichment batch 40 par capped tha, jisse directory ke 544+ companies me se zyadaatar cards ke descriptions blank the.
+
+**Kya Fayeda Iska (What is the benefit):**  
+- Har card par crisp, accurate description aati hai bina kisi paid LLM token cost ke.
+- Card layout 100% stable hai, koi blank white-space ya misaligned action buttons nahi dikhte.
+
+**Warna Kya Hojata (What if we didn't do this):**  
+Recruiter ya candidate jab company directory scroll karta, cards aadhe khali lagte aur pata nahi chalta ki company kis sector ya space me kaam karti hai.
+
+---
+
+## 12. Exa Multi-Location Board Discovery Engine & Sweeper
+
+**Kya Kiya (What was done):**  
+1. Exa ATS Board search discovery (`DiscoverFromBoards`) ko active multi-location sweep capability di (`RunMultiCityDiscovery`).
+2. Har key Indian tech hub (Bengaluru, Mumbai, Gurgaon, Hyderabad, Pune, Chennai, Noida, Delhi) ke liye seed query rotate hoti hai ("software engineer jobs in [City], India") restricted strictly to ATS domains (`boards.greenhouse.io`, `jobs.lever.co`, `jobs.ashbyhq.com`, `keka.com`, etc.).
+3. Budget guards: `SearchBudgetRemaining()` aur `schedulerReserve()` ke check se monthly search allowance safely conserve rehti hai.
+4. Admin trigger endpoint: `POST /api/admin/run-discovery?sweep=true` banaya jisse operator kisi bhi waqt multi-city discovery initiate kar sakta hai.
+
+**Kyu Kiya (Why was it necessary):**  
+Pehle discovery rotation har 15 minute me sirf ek single location query run karti thi, jisse multi-city ecosystem (jaise Hyderabad, Pune, Gurgaon) populate hone me bohot waqt lagta tha ya stuck ho sakti thi.
+
+**Kya Fayeda Iska (What is the benefit):**  
+- Exa automatically har target Indian tech city me hiring companies dhoondh kar unke public ATS slugs extract karta hai.
+- Ek search se provably hiring companies discover hoti hain aur unke saare live jobs zero-token cost par direct ATS JSON APIs se ingest ho jate hain.
+
+**Warna Kya Hojata (What if we didn't do this):**  
+Directory sirf ek ya do cities tak limited reh jati aur nationwide Indian tech hubs ke fresh startups miss ho jate.
+
+---
+
+*(Drafted and maintained by Antigravity during the B2B Pivot & Production Polish)*
 
