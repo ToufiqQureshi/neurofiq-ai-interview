@@ -38,8 +38,6 @@ func snippetFiles(snippets []CodeSnippet) []string {
 	return names
 }
 
-
-
 // The scorer previously matched only .go/.py/.ts/.js by suffix, which meant a
 // React codebase contributed nothing at all: ".tsx" does not end in ".ts".
 func TestProcessZipIncludesJSXAndTSX(t *testing.T) {
