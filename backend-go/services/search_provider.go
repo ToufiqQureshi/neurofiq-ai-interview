@@ -168,6 +168,47 @@ func WebSearch(query string, includeDomains []string, numResults int) ([]searchR
 	return nil, fmt.Errorf("no search provider available (%v)", skipped)
 }
 
+// searchWithProvider calls exactly one named provider, with no fallback to
+// the next one in line. WebSearch's fallback is right for "get an answer,
+// don't care who serves it" callers; the daily per-source targets need the
+// opposite — to know for certain which provider actually answered, so its
+// own budget and its own daily count are the ones charged.
+func searchWithProvider(name, query string, includeDomains []string, numResults int) ([]searchResult, error) {
+	p, ok := providerByName(name)
+	if !ok {
+		return nil, fmt.Errorf("unknown search provider %q", name)
+	}
+	apiKey := os.Getenv(p.envKey)
+	if apiKey == "" {
+		return nil, fmt.Errorf("%s not configured", name)
+	}
+	used, budget := scrapeUsageThisMonth(p.name), providerBudget(p)
+	if used >= budget {
+		return nil, fmt.Errorf("%s monthly budget reached (%d/%d)", name, used, budget)
+	}
+
+	results, err := p.search(apiKey, query, includeDomains, numResults)
+	recordScrapeUsage(p.name)
+	if err != nil {
+		return nil, fmt.Errorf("%s search failed: %w", name, err)
+	}
+	return results, nil
+}
+
+// providerBudgetRemainingByName is SearchBudgetRemaining scoped to one
+// provider, for a caller pinning that provider directly rather than trusting
+// WebSearch's combined fallback figure.
+func providerBudgetRemainingByName(name string) int {
+	p, ok := providerByName(name)
+	if !ok || os.Getenv(p.envKey) == "" {
+		return 0
+	}
+	if left := providerBudget(p) - scrapeUsageThisMonth(p.name); left > 0 {
+		return left
+	}
+	return 0
+}
+
 // ---- Exa ----
 
 type exaSearchResponse struct {
@@ -318,4 +359,54 @@ func postSearchJSON(endpoint string, body map[string]interface{}, headers map[st
 		return nil, fmt.Errorf("status %d: %.200s", resp.StatusCode, string(raw))
 	}
 	return raw, nil
+}
+
+// ---- Free Discovery via AI Worker ----
+
+// freeDiscoverResponse mirrors ai-worker's FreeDiscoverResponse. The worker
+// reports which engine actually served the query rather than Go trusting
+// what it asked for: a "ddg" request that DDG can't answer falls through to
+// SearXNG worker-side, and the label stored on the company needs to say
+// which one really found it, not which one was asked first.
+type freeDiscoverResponse struct {
+	Engine  string
+	Results []searchResult
+}
+
+// FreeWebSearch asks the local Python worker to run a free search.
+//
+// engine pins which one: "searxng" skips DDG entirely, "ddg" (or "") tries
+// DDG first and lets the worker fall through to SearXNG on its own. Either
+// way the second return value is the engine that actually answered.
+//
+// It reuses workerURL() and internalSecret() (httputil.go) rather than its own
+// env var and default — a second "where is the worker" answer is how this
+// silently pointed at port 8000, which nothing listens on; the worker runs on
+// 8001 (see CLAUDE.md), and PYTHON_WORKER_URL is the only env var that names it.
+func FreeWebSearch(query string, numResults int, engine string) ([]searchResult, string, error) {
+	secret := internalSecret()
+	if secret == "" {
+		return nil, "", fmt.Errorf("INTERNAL_SECRET not set, cannot call worker")
+	}
+
+	body := map[string]interface{}{
+		"query":       query,
+		"num_results": numResults,
+	}
+	if engine != "" {
+		body["engine"] = engine
+	}
+	raw, err := postSearchJSON(workerURL()+"/internal/discover-free", body, map[string]string{
+		"x-internal-secret": secret,
+	})
+	if err != nil {
+		return nil, "", fmt.Errorf("ai-worker free discovery failed: %w", err)
+	}
+
+	var parsed freeDiscoverResponse
+	if err := json.Unmarshal(raw, &parsed); err != nil {
+		return nil, "", fmt.Errorf("failed to parse free discovery response: %w", err)
+	}
+
+	return parsed.Results, parsed.Engine, nil
 }

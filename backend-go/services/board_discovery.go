@@ -49,6 +49,11 @@ var boardSearchDomains = []string{
 	"darwinbox.in",
 	"darwinbox.com",
 	"myworkdayjobs.com",
+	"recruitee.com",
+	"freshteam.com",
+	"jobs.personio.de",
+	"jobs.personio.com",
+	"jobs.gem.com",
 }
 
 // boardSeedQueries rotate the search so the directory keeps widening instead
@@ -166,13 +171,16 @@ func buildBoardSeedQueries() []string {
 // rotation cursor is derived from it, so a mismatch would skip or repeat
 // queries.
 //
-// Three-hourly, not hourly. Discovery is the only part of this pipeline that
-// costs a metered call, and the free search allowances are ~1000/month: at
-// one search an hour the rotation alone would spend 720 of them before a
-// single company was looked up. Job syncing still runs hourly, so listings
-// stay just as fresh; it is finding *new* boards that slows down, and a seed
-// query that waits three hours costs nothing.
-const discoveryIntervalSeconds = 15 * 60 // front-loaded; see main.go
+// Hourly. Exa and Tavily now run as two independent sources every tick (see
+// runRotationSource), each against its own ~800/month budget and its own
+// best-effort daily target — not the shared fallback pair this used to be.
+// That is deliberately more spend than the old three-hourly, single-provider
+// rotation: each source stops calling out for the rest of the day the moment
+// its own daily target is met, so the ceiling is the daily target times
+// however many ticks it takes to reach it, not 24 calls guaranteed. A day
+// that never reaches its target will spend up to 24 calls on that source —
+// worth watching against the monthly budget if targets are raised further.
+const discoveryIntervalSeconds = 3600 // hourly; see main.go
 
 // DiscoveryLeaseName is the cron lease that keeps two instances from running
 // the same discovery tick.
@@ -181,6 +189,10 @@ const DiscoveryLeaseName = "discovery-rotation"
 // discoveryLeaseTTL spans a full rotation interval, so no second instance can
 // repeat the tick this one just ran.
 const discoveryLeaseTTL = discoveryIntervalSeconds * time.Second
+
+const FreeDiscoveryLeaseName = "free-discovery-rotation"
+const freeDiscoveryIntervalSeconds = 3 * 60
+const freeDiscoveryLeaseTTL = freeDiscoveryIntervalSeconds * time.Second
 
 // jobSyncIntervalSeconds must match the job-sync cron schedule in main.go.
 const jobSyncIntervalSeconds = 3600
@@ -238,10 +250,37 @@ var vendorDemoSlugs = map[string]bool{
 	"testing": true, "sandbox": true, "staging": true, "example": true,
 }
 
-// boardSearchSource labels the companies this file stores. Written out at
-// every use before, which meant a sweep filtering on it could disagree with
-// the writer by a typo and silently judge nothing.
+// boardSearchSource labels companies stored by a fallback-based search
+// (DiscoverFromBoardsManual, RunMultiCityDiscovery) that does not pin a
+// single provider. The rotation below pins one, and stamps the provider's
+// own name instead — see runRotationSource.
 const boardSearchSource = "board-search"
+
+// Best-effort daily targets, one per discovery source. "Best-effort" means
+// exactly that: a source that runs out of new boards to find on a given day
+// simply falls short, same as any other day the seed queries turn up
+// nothing new. Nothing here spends harder or accepts weaker matches to
+// chase the number — mayStartLookup and the admission guards downstream
+// (scanForATS, boardSlugIsAdmissible, isAggregatorHost) are unchanged.
+const (
+	exaDailyTarget     = 30
+	tavilyDailyTarget  = 30
+	ddgDailyTarget     = 20
+	searxngDailyTarget = 30
+)
+
+// companiesFoundToday counts how many companies a given discovery source has
+// stored since UTC midnight, so runRotationSource knows whether that
+// source's daily target is already met. Calendar day is UTC, matching every
+// other timestamp in this codebase — nothing else here is IST-aware either.
+func companiesFoundToday(source string) int {
+	var count int64
+	startOfDay := time.Now().UTC().Truncate(24 * time.Hour)
+	config.DB.Model(&models.Company{}).
+		Where("source = ? AND created_at >= ?", source, startOfDay).
+		Count(&count)
+	return int(count)
+}
 
 // aggregatorHosts are never a company's own site. A "website" on one of these
 // is a page *about* the company, and storing it would point the careers-page
@@ -589,12 +628,41 @@ func companyNameFromBoard(title, slug string) string {
 	return slugDisplayName(slug)
 }
 
-// boardHitsFor runs one search and returns the distinct boards it found.
-func boardHitsFor(query string, numResults int) []boardHit {
-	results, err := WebSearch(query, boardSearchDomains, numResults)
+// boardHitsFor runs one search and returns the distinct boards it found,
+// plus the source that should be stamped onto whatever gets stored — the
+// provider actually asked to answer, except for the free path, where the
+// worker itself reports which engine actually served it (DDG can silently
+// fall through to SearXNG worker-side, and the stored label should say so).
+//
+// source is one of "exa", "tavily" (pinned, no fallback — the daily targets
+// need to know which provider actually answered), "ddg", "searxng" (the free
+// pair, same reasoning), or "paid" (the old Exa-then-Tavily fallback, still
+// used by the manual and multi-city entry points, which are not part of the
+// daily-target system).
+func boardHitsFor(query string, numResults int, source string) ([]boardHit, string) {
+	var results []searchResult
+	var actualSource string
+	var err error
+
+	switch source {
+	case "exa", "tavily":
+		results, err = searchWithProvider(source, query, boardSearchDomains, numResults)
+		actualSource = source
+	case "ddg", "searxng":
+		var engine string
+		results, engine, err = FreeWebSearch(query, numResults, source)
+		actualSource = engine
+		if actualSource == "" {
+			actualSource = source
+		}
+	default:
+		results, err = WebSearch(query, boardSearchDomains, numResults)
+		actualSource = boardSearchSource
+	}
+
 	if err != nil {
-		log.Printf("board discovery: search failed for %q: %v", query, err)
-		return nil
+		log.Printf("board discovery: search failed for %q via %s: %v", query, source, err)
+		return nil, actualSource
 	}
 
 	// scanForATS is free for every provider but Workday, whose job-site id is
@@ -651,7 +719,7 @@ func boardHitsFor(query string, numResults int) []boardHit {
 			URL:      url,
 		})
 	}
-	return hits
+	return hits, actualSource
 }
 
 // boardURL is the public, human-facing address of a board — used as the
@@ -675,6 +743,15 @@ func boardURL(provider, slug string) string {
 		return "https://" + slug + ".keka.com/careers"
 	case "darwinbox":
 		return "https://" + slug + ".darwinbox.in/ms/candidate/careers"
+	case "recruitee":
+		return "https://" + slug + ".recruitee.com"
+	case "freshteam":
+		return "https://" + slug + ".freshteam.com/jobs"
+	case "personio":
+		// slug is already the full host — see personioLinkRe.
+		return "https://" + slug
+	case "gem":
+		return "https://jobs.gem.com/" + slug
 	case "workday":
 		// Stored as "tenant:region:site" — the same three parts the job
 		// URLs are built from.
@@ -1017,7 +1094,7 @@ func DiscoverFromBoardsManual(query string, limit int) ([]models.Company, error)
 			"manual discovery is paused: %d searches left this month and %d of them are reserved for the scheduled rotation",
 			SearchBudgetRemaining(), reserved)
 	}
-	return discoverFromBoards(query, limit, schedulerReserve())
+	return discoverFromBoards(query, limit, schedulerReserve(), "paid")
 }
 
 // mayStartLookup decides whether another company-website search may begin.
@@ -1037,14 +1114,18 @@ func mayStartLookup(lookups, limit, remaining, floor int) bool {
 
 // DiscoverFromBoards is the scheduled entry point: it may spend the whole
 // remaining budget, because the rotation is what the budget is for.
-func DiscoverFromBoards(query string, limit int) ([]models.Company, error) {
-	return discoverFromBoards(query, limit, 0)
+//
+// source is "exa", "tavily", "ddg" or "searxng" to pin one provider (see
+// boardHitsFor), or "paid" for the old Exa-then-Tavily fallback used by the
+// manual and multi-city entry points.
+func DiscoverFromBoards(query string, limit int, source string) ([]models.Company, error) {
+	return discoverFromBoards(query, limit, 0, source)
 }
 
 // discoverFromBoards runs one search and stores the companies behind the
 // boards it finds. floor is the budget level it will not spend past — zero
 // for the rotation, the scheduler's reserve for a manual run.
-func discoverFromBoards(query string, limit, floor int) ([]models.Company, error) {
+func discoverFromBoards(query string, limit, floor int, source string) ([]models.Company, error) {
 	if limit <= 0 || limit > maxNewCompaniesPerRun {
 		limit = maxNewCompaniesPerRun
 	}
@@ -1061,12 +1142,23 @@ func discoverFromBoards(query string, limit, floor int) ([]models.Company, error
 	// The lookups keep their own guard. mayStartLookup is checked immediately
 	// before each metered one, which is the only place that can know whether
 	// it is actually needed.
-	if remaining := SearchBudgetRemaining(); remaining <= floor {
-		return nil, fmt.Errorf("search budget nearly spent (%d left, %d reserved) — skipping discovery",
-			remaining, floor)
+	switch source {
+	case "exa", "tavily":
+		// Pinned to its own provider, so it is that provider's own monthly
+		// budget on the line — not the combined figure, which would let Exa
+		// keep searching after its own 800 were spent just because Tavily's
+		// were not.
+		if remaining := providerBudgetRemainingByName(source); remaining <= floor {
+			return nil, fmt.Errorf("%s search budget nearly spent (%d left) — skipping discovery", source, remaining)
+		}
+	case "paid":
+		if remaining := SearchBudgetRemaining(); remaining <= floor {
+			return nil, fmt.Errorf("search budget nearly spent (%d left, %d reserved) — skipping discovery",
+				remaining, floor)
+		}
 	}
 
-	hits := boardHitsFor(query, boardResultsPerQuery)
+	hits, actualSource := boardHitsFor(query, boardResultsPerQuery, source)
 	if len(hits) == 0 {
 		return nil, nil
 	}
@@ -1167,7 +1259,7 @@ func discoverFromBoards(query string, limit, floor int) ([]models.Company, error
 			CareersURL: hit.URL,
 			ATSType:    hit.Provider,
 			ATSSlug:    hit.Slug,
-			Source:     boardSearchSource,
+			Source:     actualSource,
 		}
 		now := time.Now()
 		company.ATSCheckedAt = &now
@@ -1294,12 +1386,49 @@ func RunDiscoveryRotation() {
 	idx := int((time.Now().Unix() / int64(discoveryIntervalSeconds)) % int64(len(boardSeedQueries)))
 	query := boardSeedQueries[idx]
 
-	if saved, err := DiscoverFromBoards(query, maxNewCompaniesPerRun); err != nil {
-		log.Printf("board discovery rotation failed for %q: %v", query, err)
-	} else {
-		log.Printf("board discovery rotation: %q -> %d new companies saved | search budget left: %d",
-			query, len(saved), SearchBudgetRemaining())
+	// Exa and Tavily both run every tick now, as two independent sources
+	// rather than a fallback pair — each against its own budget, each with
+	// its own best-effort daily target.
+	runRotationSource(query, "exa", exaDailyTarget)
+	runRotationSource(query, "tavily", tavilyDailyTarget)
+}
+
+// runRotationSource runs one source's board search for this tick, unless
+// that source has already met its own best-effort daily target — the target
+// is a ceiling on how hard a source tries today, not a promise the day owes
+// it a number. Shared by RunDiscoveryRotation and RunFreeDiscoveryRotation
+// so all four sources are gated the same way.
+func runRotationSource(query, source string, dailyTarget int) {
+	if found := companiesFoundToday(source); found >= dailyTarget {
+		return
 	}
+	saved, err := DiscoverFromBoards(query, maxNewCompaniesPerRun, source)
+	if err != nil {
+		log.Printf("board discovery rotation (%s) failed for %q: %v", source, query, err)
+		return
+	}
+	log.Printf("board discovery rotation: %s %q -> %d new companies | today: %d/%d | search budget left: %d",
+		source, query, len(saved), companiesFoundToday(source), dailyTarget, SearchBudgetRemaining())
+}
+
+// RunFreeDiscoveryRotation triggers the 100% free DuckDuckGo + SearXNG
+// pipeline via ai-worker. Same shape as RunDiscoveryRotation: both engines
+// run every tick as independent sources, each with its own daily target.
+func RunFreeDiscoveryRotation() {
+	if len(boardSeedQueries) == 0 {
+		return
+	}
+
+	if !AcquireCronLease(FreeDiscoveryLeaseName, freeDiscoveryLeaseTTL) {
+		log.Printf("free discovery rotation: another instance holds the lease, skipping")
+		return
+	}
+
+	idx := int((time.Now().Unix() / int64(freeDiscoveryIntervalSeconds)) % int64(len(boardSeedQueries)))
+	query := boardSeedQueries[idx]
+
+	runRotationSource(query, "ddg", ddgDailyTarget)
+	runRotationSource(query, "searxng", searxngDailyTarget)
 }
 
 // JobSyncLeaseName is the cron lease for the hourly role refresh.
@@ -1340,7 +1469,7 @@ func RunMultiCityDiscovery(cities []string, limitPerCity int) (map[string]int, e
 			break
 		}
 		query := fmt.Sprintf("software engineer jobs in %s, India", city)
-		saved, err := DiscoverFromBoards(query, limitPerCity)
+		saved, err := DiscoverFromBoards(query, limitPerCity, "paid")
 		if err != nil {
 			log.Printf("multi-city discovery: failed for city %q: %v", city, err)
 			results[city] = 0

@@ -99,7 +99,7 @@ func TestGuidanceArticlesAreRejectedAsSourcePages(t *testing.T) {
 // An unreadable provider must not look like an empty board: the caller
 // deletes every stored role when a board legitimately returns none.
 func TestUnknownProviderIsAnErrorNotAnEmptyBoard(t *testing.T) {
-	rows, err := FetchATSJobs("company-123", "recruitee", "acme")
+	rows, err := FetchATSJobs("company-123", "bamboohr", "acme")
 	if err == nil {
 		t.Fatalf("unknown provider returned no error (rows=%v) — the caller would clear every stored role", rows)
 	}
@@ -122,6 +122,11 @@ func TestEverySearchDomainYieldsAReadableSlug(t *testing.T) {
 		"keka.com":                    "https://acme.keka.com/careers",
 		"darwinbox.in":                "https://acme.darwinbox.in/ms/candidate/careers",
 		"darwinbox.com":               "https://acme.darwinbox.com/ms/candidate/careers",
+		"recruitee.com":               "https://acme.recruitee.com/o/some-job",
+		"freshteam.com":               "https://acme.freshteam.com/jobs",
+		"jobs.personio.de":            "https://acme.jobs.personio.de/job/12345",
+		"jobs.personio.com":           "https://acme.jobs.personio.com/job/12345",
+		"jobs.gem.com":                "https://jobs.gem.com/acme",
 	}
 	for _, domain := range boardSearchDomains {
 		sample, ok := samples[domain]

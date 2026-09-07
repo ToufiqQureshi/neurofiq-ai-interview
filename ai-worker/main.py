@@ -2,11 +2,13 @@ from fastapi import FastAPI, Header, HTTPException, Depends
 from pydantic import BaseModel, Field
 from typing import List, Optional
 import os
+import requests
 
 from agno.agent import Agent
 from agno.models.deepseek import DeepSeek
 
 from scraper import scrape_url
+from duckduckgo_search import DDGS
 
 app = FastAPI()
 
@@ -125,6 +127,28 @@ class ProfileRadarResult(BaseModel):
     missing_keywords: List[str]
     section_feedbacks: List[ProfileSectionFeedback]
     general_advice: str
+
+# ---- Pydantic models for Free Discovery ----
+class FreeDiscoverPayload(BaseModel):
+    query: str
+    num_results: int = 30
+    # "ddg" (default) tries DDG first and falls through to SearXNG on this
+    # side if it comes back empty or errors; "searxng" skips DDG entirely.
+    # Go pins one or the other so it knows which source to charge against
+    # that source's own daily target — see runRotationSource in board_discovery.go.
+    engine: Optional[str] = None
+
+class SearchResult(BaseModel):
+    Title: str
+    URL: str
+
+class FreeDiscoverResponse(BaseModel):
+    # Which engine actually answered — not necessarily what was requested,
+    # since a "ddg" request that DDG can't serve still falls through to
+    # SearXNG here. Go trusts this field over its own request, so the label
+    # it stores on a company says who really found it.
+    engine: str
+    results: List[SearchResult]
 
 if DEEPSEEK_API_KEY:
     analysis_agent = Agent(
@@ -349,4 +373,96 @@ async def optimize_profile(payload: ProfileRadarPayload):
     except Exception as e:
         print(f"Agno Agent Error (Profile Radar): {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+# A handful of public SearXNG instances that serve JSON output — most public
+# instances disable format=json to deter scraping, so this list is curated to
+# ones known to allow it, tried in order until one answers. No self-hosting:
+# this stays the free/zero-infra path, the same shape as Jina before
+# Firecrawl elsewhere in this stack — one instance being down just means the
+# next one in the list gets tried, never a reason to stop discovery.
+SEARXNG_INSTANCES = [
+    "https://searx.be",
+    "https://searx.tiekoetter.com",
+    "https://priv.au",
+    "https://search.inetol.net",
+    "https://baresearch.org",
+]
+
+
+def search_searxng(query: str, num_results: int):
+    for base in SEARXNG_INSTANCES:
+        try:
+            resp = requests.get(
+                f"{base}/search",
+                params={"q": query, "format": "json"},
+                headers={"User-Agent": "Mozilla/5.0 (compatible; NeuroFIQ-JobMap/1.0)"},
+                timeout=8,
+            )
+            if resp.status_code != 200:
+                continue
+            results = resp.json().get("results", [])
+            if not results:
+                continue
+            return [
+                {"title": r.get("title", ""), "href": r.get("url", "")}
+                for r in results[:num_results]
+            ]
+        except Exception as e:
+            print(f"SearXNG instance {base} failed: {e}")
+            continue
+    return []
+
+
+@app.post("/internal/discover-free", dependencies=[Depends(verify_internal_secret)], response_model=FreeDiscoverResponse)
+async def discover_free(payload: FreeDiscoverPayload):
+    try:
+        raw_results = []
+        engine_used = "none"
+
+        # engine="searxng" skips DDG entirely, so Go can run it as its own
+        # independent source (with its own daily target) instead of only
+        # ever seeing it as a fallback DDG never needed.
+        if payload.engine != "searxng":
+            try:
+                ddgs = DDGS()
+                raw_results = list(ddgs.text(payload.query, max_results=payload.num_results))
+                if raw_results:
+                    engine_used = "ddg"
+            except Exception as e:
+                print(f"DDG search failed: {e}")
+
+        # DDG comes back empty just as often as it errors outright — a spent
+        # rate limit still answers 200 with nothing. Either way SearXNG is
+        # the fallback, not a second opinion: no single free provider should
+        # be load-bearing for this pipeline.
+        if not raw_results:
+            raw_results = search_searxng(payload.query, payload.num_results)
+            if raw_results:
+                engine_used = "searxng"
+
+        if not raw_results:
+            return FreeDiscoverResponse(engine="none", results=[])
+
+        # No relevance filtering here. The Go side already rejects anything
+        # that isn't a real ATS board link (scanForATS, boardSlugIsAdmissible)
+        # and confirms live India roles before ever storing a company — a
+        # second, weaker filter here only risked dropping a real hit before
+        # that check ever saw it.
+        seen = set()
+        out = []
+        for res in raw_results:
+            url = res.get("href", "")
+            if not url or url in seen:
+                continue
+            seen.add(url)
+            out.append(SearchResult(Title=res.get("title", ""), URL=url))
+            if len(out) >= payload.num_results:
+                break
+
+        return FreeDiscoverResponse(engine=engine_used, results=out)
+
+    except Exception as e:
+        print(f"Free Discovery Error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
 

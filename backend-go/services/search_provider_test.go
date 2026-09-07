@@ -140,6 +140,11 @@ func TestSearchDomainsAreAllReadable(t *testing.T) {
 		"keka.com":                    "https://acme.keka.com/careers",
 		"darwinbox.in":                "https://acme.darwinbox.in/ms/candidate/careers",
 		"darwinbox.com":               "https://acme.darwinbox.com/ms/candidate/careers",
+		"recruitee.com":               "https://acme.recruitee.com/o/some-job",
+		"freshteam.com":               "https://acme.freshteam.com/jobs",
+		"jobs.personio.de":            "https://acme.jobs.personio.de/job/12345",
+		"jobs.personio.com":           "https://acme.jobs.personio.com/job/12345",
+		"jobs.gem.com":                "https://jobs.gem.com/acme",
 	}
 
 	for _, domain := range boardSearchDomains {

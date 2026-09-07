@@ -7,3 +7,4 @@ requests
 grpcio
 grpcio-tools
 protobuf
+duckduckgo-search
