@@ -78,11 +78,36 @@ def optimize_profile(payload: ProfileRadarPayload):
             "general_advice": "We hit a login wall. LinkedIn aggressively blocks automated scrapers from viewing non-public profiles."
         }
 
+    # Scraped pages have no size ceiling — a large job portal or profile page
+    # can run to hundreds of thousands of characters, which blows the model's
+    # context window regardless of which site was pasted. Cap it here, once,
+    # for every source rather than trusting each scraper to behave.
+    MAX_PROFILE_CHARS = 8000
+    if len(profile_text) > MAX_PROFILE_CHARS:
+        profile_text = profile_text[:MAX_PROFILE_CHARS]
+
     prompt = f"Analyze this candidate's profile:\n{profile_text}\n\n"
     prompt += "Provide optimization feedback to improve their ATS score and recruiter visibility."
 
     try:
         run_response = radar_agent.run(prompt)
+        # If the LLM failed to return a strict JSON that Agno could parse, it returns a string
+        if isinstance(run_response.content, str):
+            print(f"Agno Agent Warning: returned string instead of Pydantic model. {run_response.content[:100]}...")
+            return {
+                "profile_name": "Analysis Failed",
+                "overall_score": 0,
+                "missing_keywords": ["Format Error"],
+                "section_feedbacks": [
+                    {
+                        "section": "System",
+                        "feedback": "The AI generated an incomplete or incorrectly formatted response.",
+                        "suggestion": "Please try scanning the profile again."
+                    }
+                ],
+                "general_advice": "We encountered an issue formatting the AI's response."
+            }
+            
         return run_response.content.model_dump()
     except Exception as e:
         print(f"Agno Agent Error (Profile Radar): {e}")

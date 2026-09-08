@@ -381,7 +381,7 @@ func main() {
 
 	// Job syncing stays hourly on its own schedule, so a closed posting drops
 	// off within the hour even between discovery runs.
-	if _, err := scheduler.AddFunc("@every 1h", func() {
+	if _, err := scheduler.AddFunc("@every 5m", func() {
 		safely("job sync", services.RunJobSync)
 	}); err != nil {
 		log.Fatalf("Failed to schedule job sync: %v", err)

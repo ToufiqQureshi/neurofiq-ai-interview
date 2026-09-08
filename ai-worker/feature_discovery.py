@@ -2,7 +2,7 @@ import requests
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from typing import List, Optional
-from duckduckgo_search import DDGS
+from ddgs import DDGS
 from deps import verify_internal_secret
 
 router = APIRouter()
@@ -59,13 +59,8 @@ async def discover_free(payload: FreeDiscoverPayload):
         engine_used = "none"
 
         if payload.engine != "searxng":
-            try:
-                ddgs = DDGS()
-                raw_results = list(ddgs.text(payload.query, max_results=payload.num_results))
-                if raw_results:
-                    engine_used = "ddg"
-            except Exception as e:
-                print(f"DDG search failed: {e}")
+            # Disabled DDGS due to primp segfault on Windows
+            pass
 
         if not raw_results:
             raw_results = search_searxng(payload.query, payload.num_results)

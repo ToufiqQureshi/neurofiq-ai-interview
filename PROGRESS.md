@@ -1,5 +1,8 @@
 # Progress Log
 
+## 2026-09-08
+- **Playwright MCP Server Configuration**: Registered `@playwright/mcp@latest` in global Antigravity MCP config (`~/.gemini/config/mcp_config.json`) alongside project `.mcp.json`. Added the `-y` (`--yes`) flag to the `npx` argument array to prevent headless stdio process blocking on interactive package installation prompts.
+
 ## 2026-09-07
 - **Free Discovery Pipeline Production Integration**: Migrated the 100% free DuckDuckGo + txtai semantic search pipeline into the production Go and Python microservices. Exa/Tavily discovery is now throttled to 1h intervals (`backend-go/main.go`), while the free discovery rotates seed queries every 3 minutes.
 - **100% Free Company Extraction Script**: Created `extract_100_bengaluru_companies.py` to scrape 100 Bengaluru tech companies with ATS boards using DuckDuckGo search (`ddgs`), completely bypassing paid APIs (Exa/Tavily). Includes dynamic delay and name cleaning, successfully generating `bangalore_100_tech_companies_ats.csv`.

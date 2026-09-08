@@ -76,15 +76,12 @@ var gemReservedPaths = map[string]bool{
 }
 
 // atsRecheckInterval is how long a company with a known board is left alone
-// before its detection is revisited. Its roles are still re-synced every
-// tick — this only governs re-detection.
-const atsRecheckInterval = 7 * 24 * time.Hour
+// before we scan it again for fresh roles.
+const atsRecheckInterval = 1 * time.Hour
 
 // atsRetryInterval is the shorter wait for a company we could not find a
-// board for. Detection improves (a new provider, a better careers-page
-// reader), and a week-long freeze meant those improvements reached the
-// directory a week late.
-const atsRetryInterval = 12 * time.Hour
+// board for. The board may not exist, or our heuristics may have missed it.
+const atsRetryInterval = 15 * time.Minute
 
 // workdaySiteCandidates are the job-site ids Workday tenants commonly use.
 // Detection probes these in order and keeps the first that returns jobs.

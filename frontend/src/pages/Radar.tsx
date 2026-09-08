@@ -412,31 +412,31 @@ export function Radar() {
                 
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                   {radarData.section_feedbacks && radarData.section_feedbacks.length > 0 ? radarData.section_feedbacks.map((sf: any, idx: number) => (
-                    <div key={idx} className="bg-zinc-950/50 border border-zinc-200/80 rounded-2xl p-6 hover:border-zinc-200 transition-colors">
-                      <div className="inline-flex items-center gap-2 px-3 py-1 rounded-lg bg-white border border-zinc-200 mb-4">
+                    <div key={idx} className="bg-white/70 border border-zinc-200 rounded-2xl p-6 hover:border-zinc-300 hover:shadow-lg transition-all">
+                      <div className="inline-flex items-center gap-2 px-3 py-1 rounded-lg bg-zinc-100 border border-zinc-200 mb-4">
                         <span className="text-xs font-mono font-semibold text-zinc-700">{sf.section}</span>
                       </div>
-                      
+
                       <div className="space-y-4">
                         <div className="flex items-start gap-3">
                           <div className="w-6 h-6 rounded-md bg-rose-500/10 flex items-center justify-center flex-shrink-0 mt-0.5">
-                            <AlertTriangle className="w-3 h-3 text-rose-400" />
+                            <AlertTriangle className="w-3 h-3 text-rose-500" />
                           </div>
                           <div>
-                            <span className="text-xs font-bold text-rose-400 uppercase tracking-wider block mb-1">Issue</span>
+                            <span className="text-xs font-bold text-rose-500 uppercase tracking-wider block mb-1">Issue</span>
                             <p className="text-sm text-zinc-600 leading-relaxed">{sf.feedback}</p>
                           </div>
                         </div>
-                        
-                        <div className="w-full h-[1px] bg-gradient-to-r from-transparent via-zinc-800 to-transparent" />
-                        
+
+                        <div className="w-full h-[1px] bg-gradient-to-r from-transparent via-zinc-200 to-transparent" />
+
                         <div className="flex items-start gap-3">
                           <div className="w-6 h-6 rounded-md bg-emerald-500/10 flex items-center justify-center flex-shrink-0 mt-0.5">
-                            <Lightbulb className="w-3 h-3 text-emerald-400" />
+                            <Lightbulb className="w-3 h-3 text-emerald-500" />
                           </div>
                           <div>
-                            <span className="text-xs font-bold text-emerald-400 uppercase tracking-wider block mb-1">Fix</span>
-                            <p className="text-sm text-zinc-200 leading-relaxed font-medium">{sf.suggestion}</p>
+                            <span className="text-xs font-bold text-emerald-500 uppercase tracking-wider block mb-1">Fix</span>
+                            <p className="text-sm text-zinc-800 leading-relaxed font-medium">{sf.suggestion}</p>
                           </div>
                         </div>
                       </div>
