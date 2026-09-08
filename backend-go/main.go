@@ -208,15 +208,20 @@ func main() {
 	// per-abuser control and becomes a global cap. The startup check below
 	// makes that misconfiguration loud instead of silent, and the ceiling is
 	// tunable so an operator is never stuck with a number we guessed.
+	// A zero or negative value here is not a lower limit, it's an outage —
+	// rate.NewLimiter with burst 0 or a non-positive rate admits nothing, so
+	// a typo'd env var (RATE_LIMIT_BURST=0) would silently 429 every request
+	// instead of falling back to the default. Only a valid positive value
+	// overrides the default; anything else is treated the same as unset.
 	var ipRate float64 = 10
 	if raw := os.Getenv("RATE_LIMIT_RPS"); raw != "" {
-		if f, err := strconv.ParseFloat(raw, 64); err == nil {
+		if f, err := strconv.ParseFloat(raw, 64); err == nil && f > 0 {
 			ipRate = f
 		}
 	}
 	var ipBurst int = 30
 	if raw := os.Getenv("RATE_LIMIT_BURST"); raw != "" {
-		if i, err := strconv.Atoi(raw); err == nil {
+		if i, err := strconv.Atoi(raw); err == nil && i > 0 {
 			ipBurst = i
 		}
 	}

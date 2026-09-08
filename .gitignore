@@ -12,6 +12,7 @@
 backend-go/tmp_server
 backend-go/backend-go.exe
 backend-go/main
+backend-go/tmp_build
 
 # Node & Frontend
 node_modules/

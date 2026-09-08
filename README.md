@@ -291,7 +291,6 @@ Some decisions worth knowing about, and the bugs behind them:
 | File | What |
 |---|---|
 | `PROGRESS.md` | Dated changelog |
-| `SESSION_JOB_MAP_HANDOFF.md` | Full Job Map handoff — architecture, every bug, alternatives evaluated and rejected, prioritised next steps |
 | `project docs/` | Architecture, schema, API, security, roadmap |
 
 ---

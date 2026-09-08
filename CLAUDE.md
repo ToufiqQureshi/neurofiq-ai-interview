@@ -205,5 +205,4 @@ exist only via AutoMigrate.
 
 ## More detail
 
-`SESSION_JOB_MAP_HANDOFF.md` — every bug, alternatives evaluated and rejected,
-and why. `PROGRESS.md` — dated changelog.
+`PROGRESS.md` — dated changelog.
