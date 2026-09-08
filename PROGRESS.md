@@ -127,8 +127,6 @@
 
 ## 2026-08-28 (Job Map feature + security/QA/UI audit)
 
-> Full detail, including handoff notes for the next agent, is in **SESSION_2026-08-28_JOB_MAP.md**.
-
 - Built the **Job Map** (/directory) - an automatic startup + real-jobs directory, replacing the disabled Job Map sidebar placeholder. A Go cron (@every 6h + one run at startup) rotates 24 seed queries through an Agno discovery_agent (DeepSeek + DuckDuckGo + structured output), upserts companies deduped by domain, geocodes them via free Nominatim/OSM, and exposes them on a public /api/companies. Frontend has a grid + Leaflet map toggle with clustering and filters. No data is scraped from bangalorestartupmap.com - it was inspiration only.
 - **Real job listings, not just careers links**: services.DetectATS finds a company Greenhouse/Lever board with pure HTTP (regex the careers page for an embedded board link, else verify a slug guess against the API) - deliberately NOT via the LLM, which is unreliable and costs tokens per company. SyncJobsForCompany then pulls live roles from the official public Greenhouse/Lever JSON APIs, dedupes on (company_id, url), and drops closed postings. Verified live: Razorpay -> 20 real roles, re-sync idempotent (no dupes); Zerodha correctly detected as having no ATS.
 - Gave the two **candidate-facing** Agno agents (questions_agent, evaluation_agent) hiring-manager instructions so they sound like a real interviewer; left the two internal agents alone to avoid paying tokens for persona nobody reads. Verified live with a generated question that referenced the candidate actual adapter-pattern code.
@@ -150,8 +148,6 @@
 - PhonePe now returns 404 from Greenhouse (previously had a board). Correctly detected as no-ATS - not a bug.
 
 ## 2026-08-29 (Workday + Firecrawl/Jina + credit guards)
-
-> Full handoff doc: **SESSION_JOB_MAP_HANDOFF.md** - read that first.
 
 - Added **Workday** support (7th ATS). Slug stored as `tenant:region:site`; the site id isn't in the URL so detection probes the common ones. Verified: BrowserStack -> 32 real roles, idempotent re-sync.
 - Added `services/scrape_service.go` - **Firecrawl primary, Jina Reader fallback**, both hosted so we never run headless Chrome ourselves. Auto-switches to Jina on budget-exceeded or any Firecrawl error. Usage tracked per month+provider in a new `scrape_usages` table and logged each sync.
@@ -164,8 +160,6 @@
 
 ## 2026-08-28 (Job Map feature + security/QA/UI audit)
 
-> Full detail, including handoff notes for the next agent, is in **SESSION_2026-08-28_JOB_MAP.md**.
-
 - Built the **Job Map** (/directory) - an automatic startup + real-jobs directory, replacing the disabled Job Map sidebar placeholder. A Go cron (@every 6h + one run at startup) rotates 24 seed queries through an Agno discovery_agent (DeepSeek + DuckDuckGo + structured output), upserts companies deduped by domain, geocodes them via free Nominatim/OSM, and exposes them on a public /api/companies. Frontend has a grid + Leaflet map toggle with clustering and filters. No data is scraped from bangalorestartupmap.com - it was inspiration only.
 - **Real job listings, not just careers links**: services.DetectATS finds a company Greenhouse/Lever board with pure HTTP (regex the careers page for an embedded board link, else verify a slug guess against the API) - deliberately NOT via the LLM, which is unreliable and costs tokens per company. SyncJobsForCompany then pulls live roles from the official public Greenhouse/Lever JSON APIs, dedupes on (company_id, url), and drops closed postings. Verified live: Razorpay -> 20 real roles, re-sync idempotent (no dupes); Zerodha correctly detected as having no ATS.
 - Gave the two **candidate-facing** Agno agents (questions_agent, evaluation_agent) hiring-manager instructions so they sound like a real interviewer; left the two internal agents alone to avoid paying tokens for persona nobody reads. Verified live with a generated question that referenced the candidate actual adapter-pattern code.
@@ -187,8 +181,6 @@
 - PhonePe now returns 404 from Greenhouse (previously had a board). Correctly detected as no-ATS - not a bug.
 
 ## 2026-08-29 (Workday + Firecrawl/Jina + credit guards)
-
-> Full handoff doc: **SESSION_JOB_MAP_HANDOFF.md** - read that first.
 
 - Added **Workday** support (7th ATS). Slug stored as `tenant:region:site`; the site id isn't in the URL so detection probes the common ones. Verified: BrowserStack -> 32 real roles, idempotent re-sync.
 - Added `services/scrape_service.go` - **Firecrawl primary, Jina Reader fallback**, both hosted so we never run headless Chrome ourselves. Auto-switches to Jina on budget-exceeded or any Firecrawl error. Usage tracked per month+provider in a new `scrape_usages` table and logged each sync.
@@ -205,8 +197,6 @@
 
 ## 2026-08-29 (later: dedupe, hiring-only filter, careers-URL resolver)
 
-> Full handoff doc: **SESSION_JOB_MAP_HANDOFF.md** - read that first.
-
 - **Tier 4 added - careers-page job extraction.** Companies with no supported ATS (the majority) now get their jobs pulled straight off their own careers page via Firecrawl LLM extraction, tagged `source: careers-page`. This was the real gap: 10 of 16 hiring companies use a custom portal. Verified on Doceree (19 real roles), Schoolnet (16), BYJU'S Exam Prep (15).
 - **Tier 0 added - `ResolveCareersURL`.** The agent often omits the careers URL or points it at the homepage, leaving the company permanently at zero jobs. Now probes /careers, /jobs, /careers/jobs etc on the company domain and verifies the page contains careers vocabulary. Free (plain HTTP). Recovered 4 companies.
 - **Duplicate companies merged.** Domain-only dedupe let BYJU'S through twice (byjus.com and byjusexamprep.com). Added `normalizeCompanyName` - strips parentheticals, legal suffixes, punctuation - so "BYJU'S Exam Prep (Gradeup)" and "BYJU'S Exam Prep" collapse to one key. Merged 2 existing dupes, keeping the row with more jobs.
@@ -220,8 +210,6 @@
 - **Next up (priority order)**: swap DuckDuckGo for Serper (weakest link - it's why ~13 companies arrived with no careers URL), job field/level facets, retry failed extractions, follow "View Openings" links.
 
 ## 2026-08-29 (final: Exa search + job facets)
-
-> Full handoff doc: **SESSION_JOB_MAP_HANDOFF.md**
 
 - **Swapped DuckDuckGo for Exa** as the discovery agent's primary search (`ExaTools(category="company")`). DuckDuckGo was returning blog posts and listicles *about* companies rather than the companies themselves - the reason ~13 companies had no usable careers URL. Measured on one query: 5 of 6 companies came back with a careers URL, and the companies were real funded businesses (Perfios, Plum, Jodo). First full run added **10 new companies in one cycle** vs 1-3 before.
 - DuckDuckGo is deliberately kept as a keyless fallback, so discovery degrades rather than stopping if the Exa key is missing or its credits run out.
