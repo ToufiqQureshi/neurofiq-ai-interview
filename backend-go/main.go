@@ -49,10 +49,6 @@ type visitor struct {
 var (
 	ipLimiters   sync.Map // map[string]*visitor
 	writeLimiter sync.Map // map[userID]*visitor — the expensive endpoints
-	// discoveryLimiter is separate because discovery is not billed in the
-	// same units as everything else in the paid group: one call spends real
-	// searches out of a small monthly allowance the whole Job Map depends on.
-	discoveryLimiter sync.Map // map[userID]*visitor
 )
 
 func getLimiter(store *sync.Map, key string, r rate.Limit, burst int) *rate.Limiter {
@@ -408,7 +404,6 @@ func main() {
 			services.ReclaimStaleAnalyses(30 * time.Minute)
 			sweepLimiters(&ipLimiters, time.Hour)
 			sweepLimiters(&writeLimiter, time.Hour)
-			sweepLimiters(&discoveryLimiter, 3*time.Hour)
 		})
 	}); err != nil {
 		log.Fatalf("Failed to schedule housekeeping: %v", err)
