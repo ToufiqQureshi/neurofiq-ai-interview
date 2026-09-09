@@ -1,6 +1,7 @@
 package services
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
 	"fmt"
@@ -475,6 +476,55 @@ func fallbackCoordsForArea(name, area string) (*float64, *float64) {
 // rotation instead: every link is still reached, just not all in one tick.
 const pruneBatchSize = 3000
 
+// jobLinkIsGone reports whether a posting URL is definitively gone.
+//
+// It goes through SafeExternalGetCtx like every other third-party fetch in the
+// package, so the prune queues behind a host's pacing gate and sees its 429s
+// instead of hammering past both with a client of its own — a batch of 3,000
+// links is exactly the traffic shape that gate exists for.
+//
+// That routing brings one new failure mode with it, and it decides the shape of
+// this function: awaitHostSlot answers with ErrHostBusy or ErrHostThrottled
+// when it will not let a request through. Those say nothing about the posting,
+// and the old code's rule — any error means dead — would have read them as a
+// closed role and deleted a live one. So only an answer we actually got back
+// counts: a 404 or 410 from the server, or the one host we know serves a page
+// for a posting that no longer exists. Anything else leaves the row alone for
+// the next tick, the same way an empty ATS read does not clear a board.
+func jobLinkIsGone(targetURL string) bool {
+	if strings.Contains(targetURL, "wellfound.com") {
+		return true
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+
+	// HEAD first: a posting page can be large and the status is all we want.
+	// Plenty of boards reject HEAD outright, so a non-answer here is not an
+	// answer about the posting — only a GET's verdict is trusted below.
+	req, err := http.NewRequestWithContext(ctx, http.MethodHead, targetURL, nil)
+	if err != nil {
+		return false // not a URL we can ask about; nothing to conclude
+	}
+	if resp, err := SafeExternalDo(ctx, req); err == nil {
+		defer resp.Body.Close()
+		if resp.StatusCode == http.StatusNotFound || resp.StatusCode == http.StatusGone {
+			return true
+		}
+		if resp.StatusCode < 400 {
+			return false
+		}
+		// 4xx that is not 404/410, or a 5xx: fall through and ask properly.
+	}
+
+	resp, err := SafeExternalGetCtx(ctx, targetURL)
+	if err != nil {
+		return false // throttled, busy, or unreachable — not evidence
+	}
+	defer resp.Body.Close()
+	return resp.StatusCode == http.StatusNotFound || resp.StatusCode == http.StatusGone
+}
+
 func PruneDeadJobs() (int, error) {
 	var jobs []models.Job
 	// Board-sourced roles are deliberately excluded. replaceJobsForCompany
@@ -495,16 +545,6 @@ func PruneDeadJobs() (int, error) {
 		return 0, nil
 	}
 
-	client := &http.Client{
-		Timeout: 5 * time.Second,
-		CheckRedirect: func(req *http.Request, via []*http.Request) error {
-			if len(via) >= 5 {
-				return http.ErrUseLastResponse
-			}
-			return nil
-		},
-	}
-
 	deadIDs := make([]string, 0)
 	var mu sync.Mutex
 	sem := make(chan struct{}, 15) // Max 15 concurrent health checks
@@ -514,42 +554,15 @@ func PruneDeadJobs() (int, error) {
 		wg.Add(1)
 		go func(job models.Job) {
 			defer wg.Done()
+			defer func() {
+				if r := recover(); r != nil {
+					log.Printf("prune: recovered while checking %q: %v", job.URL, r)
+				}
+			}()
 			sem <- struct{}{}
 			defer func() { <-sem }()
 
-			isDead := false
-			targetURL := job.URL
-
-			if strings.Contains(targetURL, "wellfound.com") {
-				isDead = true
-			} else {
-				req, err := http.NewRequest("HEAD", targetURL, nil)
-				if err == nil {
-					req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
-					resp, err := client.Do(req)
-					if err != nil || resp.StatusCode == 404 || resp.StatusCode == 410 || resp.StatusCode == 400 {
-						// Double-check with GET if HEAD was rejected
-						reqGet, errGet := http.NewRequest("GET", targetURL, nil)
-						if errGet == nil {
-							reqGet.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64)")
-							respGet, errGetDo := client.Do(reqGet)
-							if errGetDo != nil || respGet.StatusCode == 404 || respGet.StatusCode == 410 {
-								isDead = true
-							}
-							if respGet != nil {
-								respGet.Body.Close()
-							}
-						} else {
-							isDead = true
-						}
-					}
-					if resp != nil {
-						resp.Body.Close()
-					}
-				}
-			}
-
-			if isDead {
+			if jobLinkIsGone(job.URL) {
 				mu.Lock()
 				deadIDs = append(deadIDs, job.ID)
 				mu.Unlock()
