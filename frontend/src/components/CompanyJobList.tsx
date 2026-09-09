@@ -20,7 +20,6 @@ interface CompanyJobListProps {
   companyName: string;
   field?: string;
   level?: string;
-  onJobSelect?: (job: Job) => void;
 }
 
 export default function CompanyJobList({

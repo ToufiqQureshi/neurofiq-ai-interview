@@ -84,7 +84,6 @@ export function JobsPortal() {
       .catch(err => console.error('Failed to load company by id:', err));
   };
 
-  const [totalLiveJobs, setTotalLiveJobs] = useState(3550);
 
   // Fetch Companies for Drawer & Global Directory Stats
   useEffect(() => {
@@ -119,7 +118,6 @@ export function JobsPortal() {
         .then(r => (r.ok ? r.json() : null))
         .then(d => {
           if (!isMounted || !d) return;
-          if (d.total) setTotalLiveJobs(d.total);
           const mappedJobs: JobCardData[] = (d.jobs || []).map((j: any) => ({
             id: j.id,
             title: j.title,
@@ -402,7 +400,6 @@ export function JobsPortal() {
         {/* Right Column: AI Matcher & Copilot Sidebar (3 cols) */}
         <div className="lg:col-span-3">
           <AiMatchSummaryCard
-            totalJobsCount={totalLiveJobs}
             filteredCount={filteredJobs.length}
           />
         </div>

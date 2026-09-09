@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, type ClipboardEvent } from 'react';
 import { Mic, SkipForward, VolumeX, Loader2, Volume2, MicOff, FileCode2, ShieldCheck, AlertTriangle } from 'lucide-react';
 import { useSearchParams, useParams, useNavigate } from 'react-router-dom';
 import { CameraPreview } from '../components/CameraPreview';
@@ -98,6 +98,16 @@ export function InterviewSession() {
       ws.close();
     };
   }, [isVoiceMode]);
+
+  // Copying, pasting and cutting in the answer box are all the same event as
+  // far as the session is concerned: the candidate reached for the clipboard.
+  // One handler for the three, which were three copies of these four lines.
+  const flagClipboardUse = (e: ClipboardEvent) => {
+    e.preventDefault();
+    setTabSwitches(prev => prev + 1);
+    setShowCheatWarning(true);
+    setTimeout(() => setShowCheatWarning(false), 3000);
+  };
 
   // Anti-Cheat Monitor
   useEffect(() => {
@@ -441,24 +451,9 @@ export function InterviewSession() {
         <div className="flex-1 bg-[#1e1e1e] flex flex-col relative">
           {/* Workspace Area */}
           <div className="flex-1 relative bg-slate-900"
-            onCopy={(e) => {
-              e.preventDefault();
-              setTabSwitches(prev => prev + 1);
-              setShowCheatWarning(true);
-              setTimeout(() => setShowCheatWarning(false), 3000);
-            }}
-            onPaste={(e) => {
-              e.preventDefault();
-              setTabSwitches(prev => prev + 1);
-              setShowCheatWarning(true);
-              setTimeout(() => setShowCheatWarning(false), 3000);
-            }}
-            onCut={(e) => {
-              e.preventDefault();
-              setTabSwitches(prev => prev + 1);
-              setShowCheatWarning(true);
-              setTimeout(() => setShowCheatWarning(false), 3000);
-            }}
+            onCopy={flagClipboardUse}
+            onPaste={flagClipboardUse}
+            onCut={flagClipboardUse}
           >
             <div className="absolute top-4 right-4 z-10">
               <div className="flex items-center gap-2 px-3 py-1.5 bg-slate-800/80 backdrop-blur rounded border border-slate-700 text-xs font-mono">

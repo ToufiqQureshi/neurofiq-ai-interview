@@ -1,5 +1,5 @@
-import React, { useState } from 'react';
-import { Sparkles, ExternalLink, Bookmark, MapPin, Building2, Clock, CheckCircle2 } from 'lucide-react';
+import React from 'react';
+import { Sparkles, ExternalLink, MapPin, Building2, Clock, CheckCircle2 } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import CompanyLogo from './CompanyLogo';
 
@@ -16,28 +16,19 @@ export interface JobCardData {
   experienceLevel?: string;
   workType?: string;
   postedDate?: string;
-  isBookmarked?: boolean;
 }
 
 interface JobListingCardProps {
   job: JobCardData;
-  onBookmarkToggle?: (jobId: string) => void;
   onSelectCompany?: (companyId: string) => void;
 }
 
 export function JobListingCard({
   job,
-  onBookmarkToggle,
   onSelectCompany,
 }: JobListingCardProps) {
   const navigate = useNavigate();
-  const [bookmarked, setBookmarked] = useState(job.isBookmarked || false);
 
-  const handleBookmark = (e: React.MouseEvent) => {
-    e.stopPropagation();
-    setBookmarked(!bookmarked);
-    if (onBookmarkToggle) onBookmarkToggle(job.id);
-  };
 
   const handlePracticeInterview = (e: React.MouseEvent) => {
     e.stopPropagation();
@@ -100,19 +91,6 @@ export function JobListingCard({
           </div>
         </div>
 
-        {/* Bookmark Button */}
-        <button
-          type="button"
-          onClick={handleBookmark}
-          title={bookmarked ? 'Saved' : 'Save job'}
-          className={`p-1.5 rounded-xl border transition-all flex-shrink-0 ${
-            bookmarked
-              ? 'bg-accent-soft text-accent border-accent/40'
-              : 'text-ink-faint border-transparent hover:border-line hover:text-ink hover:bg-zinc-100 dark:hover:bg-zinc-800'
-          }`}
-        >
-          <Bookmark className={`w-4 h-4 ${bookmarked ? 'fill-current' : ''}`} />
-        </button>
       </div>
 
       {/* Bottom Bar: Action Triggers */}

@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { Search } from 'lucide-react';
 import { Link, useNavigate } from 'react-router-dom';
+import { scoreBand } from '../lib/score';
 
 export function ReportsList() {
   const [reports, setReports] = useState<any[]>([]);
@@ -68,11 +69,9 @@ export function ReportsList() {
                 </div>
                 <div className="flex flex-col items-end gap-1">
                   <span className={`lowercase px-3 py-1 rounded-full text-[11px] font-semibold ${
-                    report.overall_score >= 8 ? 'bg-pass-soft text-pass' :
-                    report.overall_score >= 5 ? 'bg-warn-soft text-warn' :
-                    'bg-crit-soft text-crit'
-                  }`}>
-                    {report.overall_score >= 8 ? 'excellent' : report.overall_score >= 5 ? 'average' : 'needs review'}
+                    scoreBand(report.overall_score).chip
+                  } ${scoreBand(report.overall_score).text}`}>
+                    {scoreBand(report.overall_score).label}
                   </span>
                   <span className="text-xs font-mono font-medium text-ink-faint text-right tabular-nums">{Math.round((report.overall_score || 0) * 10)}% score</span>
                 </div>
