@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { Search, Mic, MicOff, MapPin, Sparkles, X, ChevronDown } from 'lucide-react';
+import { LOCATION_OPTIONS } from '../lib/locations';
 
 interface UnifiedSearchCapsuleProps {
   searchQuery: string;
@@ -11,16 +12,6 @@ interface UnifiedSearchCapsuleProps {
   onSelectPill?: (pill: string) => void;
 }
 
-const COMMON_LOCATIONS = [
-  { label: 'All India', value: '' },
-  { label: 'Bengaluru', value: 'Bengaluru' },
-  { label: 'Mumbai & Suburbs', value: 'Mumbai' },
-  { label: 'Vasai-Virar (Palghar)', value: 'Vasai' },
-  { label: 'Delhi NCR (Gurugram/Noida)', value: 'Delhi' },
-  { label: 'Hyderabad', value: 'Hyderabad' },
-  { label: 'Pune', value: 'Pune' },
-  { label: 'Remote / Pan-India', value: 'Remote' },
-];
 
 export function UnifiedSearchCapsule({
   searchQuery,
@@ -157,7 +148,7 @@ export function UnifiedSearchCapsule({
               <div className="px-3 py-1.5 text-[11px] font-mono uppercase text-ink-faint font-semibold tracking-wider">
                 Select Tech Hub
               </div>
-              {COMMON_LOCATIONS.map(loc => (
+              {LOCATION_OPTIONS.map(loc => (
                 <button
                   key={loc.label}
                   type="button"

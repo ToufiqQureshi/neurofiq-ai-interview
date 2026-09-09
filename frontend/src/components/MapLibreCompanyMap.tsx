@@ -3,6 +3,7 @@ import * as maplibregl from 'maplibre-gl';
 import 'maplibre-gl/dist/maplibre-gl.css';
 import { Sparkles, Compass } from 'lucide-react';
 import CompanyDrawer from './CompanyDrawer';
+import type { Company, TechHub } from '../lib/types';
 
 // Each pin below is built with innerHTML, because that is what MapLibre's
 // marker API takes, and the company name going into it comes from a scraped
@@ -15,33 +16,7 @@ function escapeHtml(value: unknown): string {
   ));
 }
 
-interface Company {
-  id: string;
-  name: string;
-  description: string;
-  website: string;
-  domain: string;
-  sector: string;
-  stage: string;
-  area: string;
-  careers_url: string;
-  lat: number | null;
-  lng: number | null;
-  job_count: number;
-}
 
-interface TechHub {
-  id: string;
-  name: string;
-  query: string;
-  lat: number;
-  lng: number;
-  zoom: number;
-  minZoom: number;
-  maxZoom: number;
-  bounds: [[number, number], [number, number]];
-  icon: string;
-}
 
 interface MapLibreCompanyMapProps {
   companies: Company[];

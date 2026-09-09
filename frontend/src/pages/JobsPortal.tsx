@@ -16,21 +16,9 @@ import { JobListingCard, type JobCardData } from '../components/JobListingCard';
 import { AiMatchSummaryCard } from '../components/AiMatchSummaryCard';
 import CompanyDrawer from '../components/CompanyDrawer';
 import CompanyLogo from '../components/CompanyLogo';
+import { LOCATION_OPTIONS } from '../lib/locations';
+import type { Company } from '../lib/types';
 
-interface Company {
-  id: string;
-  name: string;
-  description: string;
-  website: string;
-  domain: string;
-  sector: string;
-  stage: string;
-  area: string;
-  careers_url: string;
-  lat: number | null;
-  lng: number | null;
-  job_count: number;
-}
 
 const SCOPE_OPTIONS = [
   { label: 'All Roles', value: '' },
@@ -61,16 +49,6 @@ const POPULAR_CATEGORIES = [
   { label: 'Security & QA', value: 'Security' },
 ];
 
-const SUB_HUBS = [
-  { name: 'Pan-India', query: '' },
-  { name: 'Bengaluru (HSR / Koramangala)', query: 'Bengaluru' },
-  { name: 'Mumbai (BKC / Andheri / Powai)', query: 'Mumbai' },
-  { name: 'Vasai-Virar (Palghar Suburbs)', query: 'Vasai' },
-  { name: 'Delhi NCR (Cyber City / Noida)', query: 'Delhi' },
-  { name: 'Hyderabad (Hitec City)', query: 'Hyderabad' },
-  { name: 'Pune (Hinjawadi)', query: 'Pune' },
-  { name: 'Remote Roles', query: 'Remote' },
-];
 
 export function JobsPortal() {
   const navigate = useNavigate();
@@ -365,19 +343,19 @@ export function JobsPortal() {
               <span>Tech Sub-Hubs</span>
             </h4>
             <div className="flex flex-col gap-1">
-              {SUB_HUBS.map(hub => (
+              {LOCATION_OPTIONS.map(hub => (
                 <button
-                  key={hub.name}
+                  key={hub.value}
                   type="button"
-                  onClick={() => setSelectedLocation(hub.query)}
+                  onClick={() => setSelectedLocation(hub.value)}
                   className={`text-left px-3 py-2 rounded-xl text-xs font-medium transition-colors flex items-center justify-between ${
-                    selectedLocation === hub.query
+                    selectedLocation === hub.value
                       ? 'bg-accent-soft text-accent font-semibold'
                       : 'text-ink-soft hover:bg-zinc-100 dark:hover:bg-zinc-800 hover:text-ink'
                   }`}
                 >
-                  <span className="truncate">{hub.name}</span>
-                  {selectedLocation === hub.query && (
+                  <span className="truncate">{hub.label}</span>
+                  {selectedLocation === hub.value && (
                     <CheckCircle2 className="w-3.5 h-3.5 text-accent flex-shrink-0" />
                   )}
                 </button>

@@ -2,21 +2,8 @@ import { X, ExternalLink, Sparkles, MapPin, Briefcase } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import CompanyJobList from './CompanyJobList';
 import CompanyLogo from './CompanyLogo';
+import type { Company } from '../lib/types';
 
-interface Company {
-  id: string;
-  name: string;
-  description: string;
-  website: string;
-  domain: string;
-  sector: string;
-  stage: string;
-  area: string;
-  careers_url: string;
-  lat: number | null;
-  lng: number | null;
-  job_count: number;
-}
 
 interface CompanyDrawerProps {
   company: Company | null;

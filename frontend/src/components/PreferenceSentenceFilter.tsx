@@ -1,5 +1,6 @@
 import { useState, useRef, useEffect } from 'react';
 import { ChevronDown, Sparkles } from 'lucide-react';
+import { LOCATION_OPTIONS } from '../lib/locations';
 
 interface PreferenceSentenceFilterProps {
   selectedRole: string;
@@ -37,14 +38,6 @@ const WORK_TYPES = [
   { label: 'Full-time Any Setup', value: '' },
 ];
 
-const LOCATIONS = [
-  { label: 'Bengaluru (HSR/Koramangala/E-City)', value: 'Bengaluru' },
-  { label: 'Mumbai & Vasai-Virar Suburbs', value: 'Mumbai' },
-  { label: 'Delhi NCR (Gurugram/Noida)', value: 'Delhi' },
-  { label: 'Hyderabad (Hitec City)', value: 'Hyderabad' },
-  { label: 'Pune (Hinjawadi/Baner)', value: 'Pune' },
-  { label: 'Pan-India', value: '' },
-];
 
 export function PreferenceSentenceFilter({
   selectedRole,
@@ -73,7 +66,7 @@ export function PreferenceSentenceFilter({
   const currentRoleLabel = ROLES.find(r => r.value === selectedRole)?.label || selectedRole || 'Software Engineer';
   const currentExpLabel = EXPERIENCES.find(e => e.value === selectedExp)?.label || (selectedExp ? selectedExp : 'Fresher / Any Level');
   const currentWorkLabel = WORK_TYPES.find(w => w.value === selectedWorkType)?.label || (selectedWorkType ? selectedWorkType : 'Any Setup');
-  const currentLocLabel = LOCATIONS.find(l => l.value === selectedLocation)?.label || (selectedLocation ? selectedLocation : 'Pan-India');
+  const currentLocLabel = LOCATION_OPTIONS.find(l => l.value === selectedLocation)?.label || (selectedLocation ? selectedLocation : 'Pan-India');
 
   return (
     <div
@@ -212,7 +205,7 @@ export function PreferenceSentenceFilter({
 
           {activeDropdown === 'loc' && (
             <div className="absolute left-0 top-full mt-2 w-64 bg-paper dark:bg-zinc-900 border border-line rounded-xl shadow-2xl z-50 py-1 overflow-hidden">
-              {LOCATIONS.map(l => (
+              {LOCATION_OPTIONS.map(l => (
                 <button
                   key={l.label}
                   type="button"

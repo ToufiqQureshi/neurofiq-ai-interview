@@ -4,39 +4,14 @@ import MapLibreCompanyMap from '../components/MapLibreCompanyMap';
 import CompanyJobList from '../components/CompanyJobList';
 import CompanyLogo from '../components/CompanyLogo';
 import { CustomDropdown } from '../components/CustomDropdown';
+import type { Company, TechHub } from '../lib/types';
 
-interface Company {
-  id: string;
-  name: string;
-  description: string;
-  website: string;
-  domain: string;
-  sector: string;
-  stage: string;
-  area: string;
-  careers_url: string;
-  lat: number | null;
-  lng: number | null;
-  job_count: number;
-}
 
 interface Facet {
   name: string;
   count: number;
 }
 
-interface TechHub {
-  id: string;
-  name: string;
-  query: string;
-  lat: number;
-  lng: number;
-  zoom: number;
-  minZoom: number;
-  maxZoom: number;
-  bounds: [[number, number], [number, number]];
-  icon: string;
-}
 
 const TECH_HUBS: TechHub[] = [
   {
