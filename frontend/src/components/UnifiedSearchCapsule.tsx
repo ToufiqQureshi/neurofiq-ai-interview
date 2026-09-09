@@ -137,7 +137,13 @@ export function UnifiedSearchCapsule({
             <div className="flex items-center gap-2 truncate">
               <MapPin className="w-4 h-4 text-accent flex-shrink-0" />
               <span className="truncate font-medium">
-                {selectedLocation || 'All India & Remote'}
+                {/* The label, not the raw filter value: the menu offers
+                    "Bengaluru (HSR / Koramangala)" and the closed capsule used
+                    to answer "Bengaluru", so the control disagreed with itself
+                    about what had just been picked. */}
+                {LOCATION_OPTIONS.find(l => l.value === selectedLocation)?.label ||
+                  selectedLocation ||
+                  'All India & Remote'}
               </span>
             </div>
             <ChevronDown className="w-3.5 h-3.5 text-ink-faint flex-shrink-0" />

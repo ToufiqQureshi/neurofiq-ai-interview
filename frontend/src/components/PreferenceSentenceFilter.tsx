@@ -1,6 +1,6 @@
 import { useState, useRef, useEffect } from 'react';
 import { ChevronDown, Sparkles } from 'lucide-react';
-import { LOCATION_OPTIONS } from '../lib/locations';
+import { LOCATION_OPTIONS, type LocationOption } from '../lib/locations';
 
 interface PreferenceSentenceFilterProps {
   selectedRole: string;
@@ -38,6 +38,70 @@ const WORK_TYPES = [
   { label: 'Full-time Any Setup', value: '' },
 ];
 
+/**
+ * One underlined choice inside the sentence.
+ *
+ * Deliberately not CustomDropdown: that renders a bordered pill, and the whole
+ * point of this control is that each choice reads as a word in a sentence.
+ * What the four choices here shared was the markup below, written out four
+ * times.
+ */
+function SentenceChoice({
+  open,
+  onToggle,
+  display,
+  options,
+  value,
+  onChange,
+  menuWidth,
+}: {
+  open: boolean;
+  onToggle: () => void;
+  display: string;
+  options: LocationOption[];
+  value: string;
+  onChange: (v: string) => void;
+  menuWidth: string;
+}) {
+  return (
+    <div className="relative inline-block mx-1.5">
+      <button
+        type="button"
+        onClick={onToggle}
+        aria-haspopup="listbox"
+        aria-expanded={open}
+        className="inline-flex items-center gap-1 font-semibold text-accent border-b-2 border-accent/40 hover:border-accent pb-0.5 transition-colors"
+      >
+        <span>{display}</span>
+        <ChevronDown className="w-3.5 h-3.5" />
+      </button>
+
+      {open && (
+        <div
+          role="listbox"
+          className={`absolute left-0 top-full mt-2 ${menuWidth} bg-paper dark:bg-zinc-900 border border-line rounded-xl shadow-2xl z-50 py-1 overflow-hidden`}
+        >
+          {options.map(opt => (
+            <button
+              key={opt.value}
+              type="button"
+              role="option"
+              aria-selected={value === opt.value}
+              onClick={() => onChange(opt.value)}
+              className={`w-full text-left px-3.5 py-2 text-xs transition-colors ${
+                value === opt.value
+                  ? 'bg-accent-soft text-accent font-semibold'
+                  : 'text-ink hover:bg-zinc-100 dark:hover:bg-zinc-800'
+              }`}
+            >
+              {opt.label}
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
 
 export function PreferenceSentenceFilter({
   selectedRole,
@@ -50,7 +114,7 @@ export function PreferenceSentenceFilter({
   onLocationChange,
   onApplyPreferences,
 }: PreferenceSentenceFilterProps) {
-  const [activeDropdown, setActiveDropdown] = useState<'role' | 'exp' | 'work' | 'loc' | null>(null);
+  const [activeDropdown, setActiveDropdown] = useState<string | null>(null);
   const containerRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -63,10 +127,49 @@ export function PreferenceSentenceFilter({
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, []);
 
-  const currentRoleLabel = ROLES.find(r => r.value === selectedRole)?.label || selectedRole || 'Software Engineer';
-  const currentExpLabel = EXPERIENCES.find(e => e.value === selectedExp)?.label || (selectedExp ? selectedExp : 'Fresher / Any Level');
-  const currentWorkLabel = WORK_TYPES.find(w => w.value === selectedWorkType)?.label || (selectedWorkType ? selectedWorkType : 'Any Setup');
-  const currentLocLabel = LOCATION_OPTIONS.find(l => l.value === selectedLocation)?.label || (selectedLocation ? selectedLocation : 'Pan-India');
+  function labelFor(options: LocationOption[], value: string, fallback: string) {
+    return options.find(o => o.value === value)?.label || value || fallback;
+  }
+
+  // The sentence, as data: a lead-in phrase and the choice that follows it.
+  const parts = [
+    {
+      key: 'role',
+      lead: "I'm a",
+      options: ROLES,
+      value: selectedRole,
+      onChange: onRoleChange,
+      display: labelFor(ROLES, selectedRole, 'Software Engineer'),
+      menuWidth: 'w-72',
+    },
+    {
+      key: 'exp',
+      lead: 'with',
+      options: EXPERIENCES,
+      value: selectedExp,
+      onChange: onExpChange,
+      display: labelFor(EXPERIENCES, selectedExp, 'Fresher / Any Level'),
+      menuWidth: 'w-56',
+    },
+    {
+      key: 'work',
+      lead: 'open to',
+      options: WORK_TYPES,
+      value: selectedWorkType,
+      onChange: onWorkTypeChange,
+      display: labelFor(WORK_TYPES, selectedWorkType, 'Any Setup'),
+      menuWidth: 'w-64',
+    },
+    {
+      key: 'loc',
+      lead: 'roles in',
+      options: LOCATION_OPTIONS,
+      value: selectedLocation,
+      onChange: onLocationChange,
+      display: labelFor(LOCATION_OPTIONS, selectedLocation, 'Pan-India'),
+      menuWidth: 'w-64',
+    },
+  ];
 
   return (
     <div
@@ -82,149 +185,23 @@ export function PreferenceSentenceFilter({
 
       {/* Natural Language Sentence */}
       <div className="flex flex-wrap items-center gap-y-2.5 text-sm sm:text-base text-ink leading-relaxed">
-        <span className="text-ink-soft">I'm a</span>
-
-        {/* 1. Role Selector */}
-        <div className="relative inline-block mx-1.5">
-          <button
-            type="button"
-            onClick={() => setActiveDropdown(activeDropdown === 'role' ? null : 'role')}
-            className="inline-flex items-center gap-1 font-semibold text-accent border-b-2 border-accent/40 hover:border-accent pb-0.5 transition-colors"
-          >
-            <span>{currentRoleLabel}</span>
-            <ChevronDown className="w-3.5 h-3.5" />
-          </button>
-
-          {activeDropdown === 'role' && (
-            <div className="absolute left-0 top-full mt-2 w-72 bg-paper dark:bg-zinc-900 border border-line rounded-xl shadow-2xl z-50 py-1 overflow-hidden">
-              {ROLES.map(r => (
-                <button
-                  key={r.label}
-                  type="button"
-                  onClick={() => {
-                    onRoleChange(r.value);
-                    setActiveDropdown(null);
-                  }}
-                  className={`w-full text-left px-3.5 py-2 text-xs transition-colors ${
-                    selectedRole === r.value
-                      ? 'bg-accent-soft text-accent font-semibold'
-                      : 'text-ink hover:bg-zinc-100 dark:hover:bg-zinc-800'
-                  }`}
-                >
-                  {r.label}
-                </button>
-              ))}
-            </div>
-          )}
-        </div>
-
-        <span className="text-ink-soft">with</span>
-
-        {/* 2. Experience Selector */}
-        <div className="relative inline-block mx-1.5">
-          <button
-            type="button"
-            onClick={() => setActiveDropdown(activeDropdown === 'exp' ? null : 'exp')}
-            className="inline-flex items-center gap-1 font-semibold text-accent border-b-2 border-accent/40 hover:border-accent pb-0.5 transition-colors"
-          >
-            <span>{currentExpLabel}</span>
-            <ChevronDown className="w-3.5 h-3.5" />
-          </button>
-
-          {activeDropdown === 'exp' && (
-            <div className="absolute left-0 top-full mt-2 w-56 bg-paper dark:bg-zinc-900 border border-line rounded-xl shadow-2xl z-50 py-1 overflow-hidden">
-              {EXPERIENCES.map(e => (
-                <button
-                  key={e.label}
-                  type="button"
-                  onClick={() => {
-                    onExpChange(e.value);
-                    setActiveDropdown(null);
-                  }}
-                  className={`w-full text-left px-3.5 py-2 text-xs transition-colors ${
-                    selectedExp === e.value
-                      ? 'bg-accent-soft text-accent font-semibold'
-                      : 'text-ink hover:bg-zinc-100 dark:hover:bg-zinc-800'
-                  }`}
-                >
-                  {e.label}
-                </button>
-              ))}
-            </div>
-          )}
-        </div>
-
-        <span className="text-ink-soft">open to</span>
-
-        {/* 3. Work Type Selector */}
-        <div className="relative inline-block mx-1.5">
-          <button
-            type="button"
-            onClick={() => setActiveDropdown(activeDropdown === 'work' ? null : 'work')}
-            className="inline-flex items-center gap-1 font-semibold text-accent border-b-2 border-accent/40 hover:border-accent pb-0.5 transition-colors"
-          >
-            <span>{currentWorkLabel}</span>
-            <ChevronDown className="w-3.5 h-3.5" />
-          </button>
-
-          {activeDropdown === 'work' && (
-            <div className="absolute left-0 top-full mt-2 w-64 bg-paper dark:bg-zinc-900 border border-line rounded-xl shadow-2xl z-50 py-1 overflow-hidden">
-              {WORK_TYPES.map(w => (
-                <button
-                  key={w.label}
-                  type="button"
-                  onClick={() => {
-                    onWorkTypeChange(w.value);
-                    setActiveDropdown(null);
-                  }}
-                  className={`w-full text-left px-3.5 py-2 text-xs transition-colors ${
-                    selectedWorkType === w.value
-                      ? 'bg-accent-soft text-accent font-semibold'
-                      : 'text-ink hover:bg-zinc-100 dark:hover:bg-zinc-800'
-                  }`}
-                >
-                  {w.label}
-                </button>
-              ))}
-            </div>
-          )}
-        </div>
-
-        <span className="text-ink-soft">roles in</span>
-
-        {/* 4. Location Selector */}
-        <div className="relative inline-block mx-1.5">
-          <button
-            type="button"
-            onClick={() => setActiveDropdown(activeDropdown === 'loc' ? null : 'loc')}
-            className="inline-flex items-center gap-1 font-semibold text-accent border-b-2 border-accent/40 hover:border-accent pb-0.5 transition-colors"
-          >
-            <span>{currentLocLabel}</span>
-            <ChevronDown className="w-3.5 h-3.5" />
-          </button>
-
-          {activeDropdown === 'loc' && (
-            <div className="absolute left-0 top-full mt-2 w-64 bg-paper dark:bg-zinc-900 border border-line rounded-xl shadow-2xl z-50 py-1 overflow-hidden">
-              {LOCATION_OPTIONS.map(l => (
-                <button
-                  key={l.label}
-                  type="button"
-                  onClick={() => {
-                    onLocationChange(l.value);
-                    setActiveDropdown(null);
-                  }}
-                  className={`w-full text-left px-3.5 py-2 text-xs transition-colors ${
-                    selectedLocation === l.value
-                      ? 'bg-accent-soft text-accent font-semibold'
-                      : 'text-ink hover:bg-zinc-100 dark:hover:bg-zinc-800'
-                  }`}
-                >
-                  {l.label}
-                </button>
-              ))}
-            </div>
-          )}
-        </div>
+        {parts.map(part => (
+          <span key={part.key} className="contents">
+            <span className="text-ink-soft">{part.lead}</span>
+            <SentenceChoice
+              open={activeDropdown === part.key}
+              onToggle={() => setActiveDropdown(activeDropdown === part.key ? null : part.key)}
+              display={part.display}
+              options={part.options}
+              value={part.value}
+              onChange={v => {
+                part.onChange(v);
+                setActiveDropdown(null);
+              }}
+              menuWidth={part.menuWidth}
+            />
+          </span>
+        ))}
 
         {/* Instant Apply / Match Action Button */}
         {onApplyPreferences && (
