@@ -264,7 +264,6 @@ func TestPickCompanyLink(t *testing.T) {
 	}
 }
 
-
 // A firm can hire for other companies without naming itself a recruiter.
 // "APAC Talent Attraction" is Cielo, an RPO, and it was stored as an employer
 // with 98 roles that belong to its clients — the same failure Jobgether was,

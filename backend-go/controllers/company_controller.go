@@ -212,11 +212,6 @@ func HandleGetGlobalJobs(c *gin.Context) {
 	})
 }
 
-type triggerDiscoveryRequest struct {
-	Query string `json:"query" binding:"required"`
-	Limit int    `json:"limit"`
-}
-
 // HandleEnrichCompanies triggers batch metadata and description enrichment across all companies.
 func HandleEnrichCompanies(c *gin.Context) {
 	updated, err := services.EnrichAllPendingCompanies(12)
@@ -292,10 +287,9 @@ func HandleExportFailures(c *gin.Context) {
 		// Escape quotes and commas for CSV
 		query := strings.ReplaceAll(f.Query, "\"", "\"\"")
 		reason := strings.ReplaceAll(f.Reason, "\"", "\"\"")
-		
+
 		record := fmt.Sprintf("%d,\"%s\",\"%s\",\"%s\",\"%s\"\n",
 			f.ID, f.Provider, query, reason, f.CreatedAt.Format(time.RFC3339))
 		c.Writer.Write([]byte(record))
 	}
 }
-

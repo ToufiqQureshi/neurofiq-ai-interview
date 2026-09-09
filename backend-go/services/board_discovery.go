@@ -98,19 +98,6 @@ var vendorDemoSlugs = map[string]bool{
 	"testing": true, "sandbox": true, "staging": true, "example": true,
 }
 
-// companiesFoundToday counts how many companies a given discovery source has
-// stored since UTC midnight, so runRotationSource knows whether that
-// source's daily target is already met. Calendar day is UTC, matching every
-// other timestamp in this codebase — nothing else here is IST-aware either.
-func companiesFoundToday(source string) int {
-	var count int64
-	startOfDay := time.Now().UTC().Truncate(24 * time.Hour)
-	config.DB.Model(&models.Company{}).
-		Where("source = ? AND created_at >= ?", source, startOfDay).
-		Count(&count)
-	return int(count)
-}
-
 // aggregatorHosts are never a company's own site. A "website" on one of these
 // is a page *about* the company, and storing it would point the careers-page
 // resolver at a job board's own domain.
@@ -1094,4 +1081,3 @@ func RunJobSync() {
 	}
 	SyncAllCompanyJobs()
 }
-
