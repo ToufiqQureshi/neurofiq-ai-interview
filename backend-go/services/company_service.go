@@ -30,16 +30,36 @@ var (
 	companyNoiseRe  = regexp.MustCompile(`\b(private|pvt|limited|ltd|llp|inc|incorporated|corp|corporation|technologies|technology|tech|solutions|systems|labs|software|services|india|global|group|company|co)\b`)
 )
 
+// trailingCountRe is the number an ATS appends when a company takes a slug it
+// already has — acme, acme2, brillio-2, adeebaeservicespvtltd3.
+var trailingCountRe = regexp.MustCompile(`[0-9]{1,2}$`)
+
+// minStemBeforeCount is how much name has to survive stripping that number
+// before the strip is believable. Below it the digits are part of the name:
+// "Web3" keeps its 3 because "web" alone is not the company, while "acme2"
+// and "adeebaeservicespvtltd3" are second registrations of names already here.
+//
+// Four, not six: six read well against the long slug that prompted this and
+// then failed the short ones, which is where the real duplicates were —
+// asapp/asapp-2 and brillio/brillio-2 are both live on Lever right now.
+const minStemBeforeCount = 4
+
 // normalizeCompanyName reduces a name to a comparable key: lowercased, with
-// parentheticals, legal suffixes and punctuation removed.
+// parentheticals, legal suffixes, punctuation and a re-registration number
+// removed.
 //
 //	"BYJU'S Exam Prep (Gradeup)"      -> "byjusexamprep"
 //	"Edunext Technologies Pvt. Ltd."  -> "edunext"
+//	"adeebaeservicespvtltd3"          -> "adeebaeservicespvtltd"
 func normalizeCompanyName(name string) string {
 	s := strings.ToLower(strings.TrimSpace(name))
 	s = parentheticalRe.ReplaceAllString(s, " ")
 	s = companyNoiseRe.ReplaceAllString(s, " ")
-	return nonSlugChars.ReplaceAllString(s, "")
+	s = nonSlugChars.ReplaceAllString(s, "")
+	if stem := trailingCountRe.ReplaceAllString(s, ""); len(stem) >= minStemBeforeCount {
+		return stem
+	}
+	return s
 }
 
 // findDuplicateCompany returns an existing company that is the same business
@@ -598,17 +618,41 @@ func PruneDeadJobs() (int, error) {
 // two never disagree.
 const listableCondition = "open_roles > 0 OR COALESCE(ats_slug, '') <> ''"
 
+// jobFacetCondition narrows a jobs query to one field and/or level bucket.
+//
+// The COALESCE/NULLIF defaults are the ones JobFacets counts by, and they have
+// to stay identical: the chips show a count taken from that expression, so a
+// filter written any other way would return a different number of roles than
+// the chip the user clicked promised — and "Other"/"Unspecified", which are
+// only ever produced by these defaults, would match nothing at all.
+func jobFacetCondition(db *gorm.DB, field, level string) *gorm.DB {
+	if field != "" {
+		db = db.Where("COALESCE(NULLIF(jobs.field, ''), 'Other') = ?", field)
+	}
+	if level != "" {
+		db = db.Where("COALESCE(NULLIF(jobs.level, ''), 'Unspecified') = ?", level)
+	}
+	return db
+}
+
 // ListCompanies returns a filtered, paginated slice of the company directory.
 // hiringOnly restricts it to companies with at least one open role — most
 // companies aren't hiring at any given moment, so browsing the full list is
 // only useful when you want the directory rather than the jobs.
-func ListCompanies(sector, stage, area, q string, hiringOnly bool, page, pageSize int) ([]CompanyWithJobCount, int64, error) {
+//
+// field and level narrow the list to companies with at least one role in that
+// bucket. They cost a correlated subquery, which is why they are opt-in: with
+// both empty the query is exactly the single-table scan described below, and
+// that is the common case.
+func ListCompanies(sector, stage, area, q, field, level string, hiringOnly bool, page, pageSize int) ([]CompanyWithJobCount, int64, error) {
 	if page < 1 {
 		page = 1
 	}
 	if pageSize < 1 || pageSize > 500 {
 		pageSize = 24
 	}
+
+	byFacet := field != "" || level != ""
 
 	applyFilters := func() *gorm.DB {
 		dbQuery := config.DB.Model(&models.Company{})
@@ -617,6 +661,15 @@ func ListCompanies(sector, stage, area, q string, hiringOnly bool, page, pageSiz
 		dbQuery = applyAreaFilter(dbQuery, area, "")
 		if q != "" {
 			dbQuery = dbQuery.Where("name ILIKE ? OR description ILIKE ?", "%"+q+"%", "%"+q+"%")
+		}
+		if byFacet {
+			// EXISTS rather than a join: a company with twelve matching roles
+			// is still one row, and the planner can stop at the first match
+			// instead of counting them to throw the count away.
+			sub := jobFacetCondition(
+				config.DB.Model(&models.Job{}).Select("1").Where("jobs.company_id = companies.id"),
+				field, level)
+			dbQuery = dbQuery.Where("EXISTS (?)", sub)
 		}
 		return dbQuery
 	}
@@ -644,9 +697,22 @@ func ListCompanies(sector, stage, area, q string, hiringOnly bool, page, pageSiz
 		return nil, 0, err
 	}
 
+	// job_count is what the card's "N open" badge shows and what its button
+	// offers to open, so under a facet it has to count that bucket. Left as
+	// companies.open_roles it advertised 40 roles and then listed the 3 the
+	// filter actually kept.
+	listQuery := base()
+	if byFacet {
+		countSub := jobFacetCondition(
+			config.DB.Model(&models.Job{}).Select("COUNT(*)").Where("jobs.company_id = companies.id"),
+			field, level)
+		listQuery = listQuery.Select("companies.*, (?) AS job_count", countSub)
+	} else {
+		listQuery = listQuery.Select("companies.*, companies.open_roles AS job_count")
+	}
+
 	var companies []CompanyWithJobCount
-	err := base().
-		Select("companies.*, companies.open_roles AS job_count").
+	err := listQuery.
 		// Hiring companies first, then most recently discovered.
 		Order("companies.open_roles DESC, companies.created_at DESC").
 		Offset((page - 1) * pageSize).
@@ -674,7 +740,7 @@ func ListCompanies(sector, stage, area, q string, hiringOnly bool, page, pageSiz
 
 // TotalOpenRoles returns the number of open roles matching the same filters,
 // for the "N open roles across M companies" header.
-func TotalOpenRoles(sector, stage, area, q string) (int64, error) {
+func TotalOpenRoles(sector, stage, area, q, field, level string) (int64, error) {
 	dbQuery := config.DB.Model(&models.Job{}).
 		Joins("JOIN companies ON companies.id = jobs.company_id")
 	dbQuery = applyFacetFilter(dbQuery, "sector", sector, "companies")
@@ -683,6 +749,7 @@ func TotalOpenRoles(sector, stage, area, q string) (int64, error) {
 	if q != "" {
 		dbQuery = dbQuery.Where("companies.name ILIKE ? OR companies.description ILIKE ?", "%"+q+"%", "%"+q+"%")
 	}
+	dbQuery = jobFacetCondition(dbQuery, field, level)
 
 	var n int64
 	err := dbQuery.Count(&n).Error

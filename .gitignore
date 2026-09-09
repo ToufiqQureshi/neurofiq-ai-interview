@@ -45,6 +45,12 @@ Thumbs.db
 # Graphify output
 graphify-out/
 
+# CSV exports from the discovery scripts — regenerated on demand
+jobs_*.csv
+
+# Discovery cron output
+scripts/discovery_cron.log
+
 # Claude Code local scheduler lock
 .claude/scheduled_tasks.lock
 

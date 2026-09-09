@@ -1,9 +1,7 @@
 package services
 
 import (
-	"strings"
 	"testing"
-	"time"
 )
 
 // Board discovery reads a slug straight out of a search result's URL, so the
@@ -147,20 +145,6 @@ func TestLooksIndian(t *testing.T) {
 	}
 }
 
-// A lease shorter than its schedule lets a second instance re-run the tick
-// this one just ran — the same metered searches, the same boards fetched
-// twice. That is the whole reason the lease exists, so the two must be tied.
-func TestCronLeasesCoverTheirFullInterval(t *testing.T) {
-	if discoveryLeaseTTL < time.Duration(discoveryIntervalSeconds)*time.Second {
-		t.Errorf("discovery lease %v is shorter than its %ds interval — another instance could repeat the tick",
-			discoveryLeaseTTL, discoveryIntervalSeconds)
-	}
-	if jobSyncLeaseTTL < time.Duration(jobSyncIntervalSeconds)*time.Second {
-		t.Errorf("job sync lease %v is shorter than its %ds interval",
-			jobSyncLeaseTTL, jobSyncIntervalSeconds)
-	}
-}
-
 // Every provider a search can return must resolve to a usable careers URL,
 // either canonically or by falling back to the URL the search gave us.
 func TestBoardURLCoversEverySearchableProvider(t *testing.T) {
@@ -189,84 +173,6 @@ func TestBoardURLCoversEverySearchableProvider(t *testing.T) {
 	// half-formed URL.
 	if got := boardURL("workday", "acme"); got != "" {
 		t.Errorf("expected a malformed workday slug to return \"\", got %q", got)
-	}
-}
-
-// The manual endpoint is open to any signed-in user and the budget is one
-// shared pot, so a per-user rate limit does not bound what several accounts
-// spend together. The reserve is what keeps the scheduled rotation running
-// when they have spent everything else.
-func TestManualDiscoveryLeavesTheSchedulerAReserve(t *testing.T) {
-	t.Setenv("EXA_API_KEY", "test-key")
-	t.Setenv("EXA_MONTHLY_BUDGET", "800")
-	t.Setenv("TAVILY_API_KEY", "")
-
-	reserved := schedulerReserve()
-	if reserved <= 0 {
-		t.Fatal("no budget is reserved for the scheduler — several accounts could stop discovery for the month")
-	}
-	if reserved >= 800 {
-		t.Errorf("reserve of %d leaves nothing for manual runs", reserved)
-	}
-	if want := 800 / schedulerReserveFraction; reserved != want {
-		t.Errorf("reserved %d, want %d", reserved, want)
-	}
-}
-
-// A provider with no key contributes no budget, so its absence must not
-// inflate the reserve into blocking every manual run.
-func TestManualDiscoveryBudgetCountsOnlyConfiguredProviders(t *testing.T) {
-	t.Setenv("EXA_API_KEY", "")
-	t.Setenv("TAVILY_API_KEY", "")
-
-	if reserved := schedulerReserve(); reserved != 0 {
-		t.Errorf("with no provider configured the reserve should be 0, got %d", reserved)
-	}
-}
-
-// The run has to stop on lookups started, not on companies saved. A candidate
-// rejected *after* its website lookup — no site found, or a domain already
-// held — has spent a search all the same, so counting saves let a "5 company"
-// run spend one search per board hit.
-func TestLookupsAreCappedByAttemptNotBySave(t *testing.T) {
-	const limit, plenty, noFloor = 5, 1000, 0
-
-	for lookups := 0; lookups < limit; lookups++ {
-		if !mayStartLookup(lookups, limit, plenty, noFloor) {
-			t.Errorf("lookup %d of %d should be allowed", lookups+1, limit)
-		}
-	}
-	if mayStartLookup(limit, limit, plenty, noFloor) {
-		t.Error("a run must stop once it has started `limit` lookups, however few were saved")
-	}
-}
-
-// A manual run passes the reserve check on entry; it must not then spend
-// through the reserve while the loop is running.
-func TestLookupsStopAtTheReserve(t *testing.T) {
-	const limit, floor = 5, 200
-
-	if !mayStartLookup(0, limit, floor+1, floor) {
-		t.Error("a lookup with budget above the reserve should be allowed")
-	}
-	if mayStartLookup(0, limit, floor, floor) {
-		t.Error("a lookup that would take the budget to the reserve must not start")
-	}
-	if mayStartLookup(0, limit, floor-1, floor) {
-		t.Error("a lookup below the reserve must not start")
-	}
-}
-
-func TestBoardSeedQueriesAreDistinct(t *testing.T) {
-	if len(boardSeedQueries) == 0 {
-		t.Fatal("no seed queries built")
-	}
-	seen := map[string]bool{}
-	for _, q := range boardSeedQueries {
-		if seen[q] {
-			t.Fatalf("duplicate seed query %q — the rotation would repeat it", q)
-		}
-		seen[q] = true
 	}
 }
 
@@ -358,56 +264,62 @@ func TestPickCompanyLink(t *testing.T) {
 	}
 }
 
-// The rotation”'s order matters as much as its weights.
-//
-// It used to loop city-outer, so all ten of a city”'s queries ran back to back:
-// a day of discovery was one or two cities and nothing else, and a report on
-// "which city has the most companies" measured the cursor instead of the
-// country. Weighting alone would have made that worse.
-func TestSeedRotationInterleavesCities(t *testing.T) {
-	// A spelling is not a city. "Bengaluru" and "Bangalore" are the same
-	// place, and counting them apart is how two consecutive ticks on Bengaluru
-	// once looked like two different cities.
-	canonical := map[string]string{}
-	for _, c := range boardSeedCities {
-		for _, sp := range c.spellings {
-			canonical[sp] = c.Name()
-		}
-	}
-	cityOf := func(q string) string {
-		i := strings.Index(q, " in ")
-		if i < 0 {
-			t.Fatalf("unexpected query shape: %q", q)
-		}
-		spelling := strings.TrimSuffix(q[i+4:], ", India")
-		name, ok := canonical[spelling]
-		if !ok {
-			t.Fatalf("query names a city not in boardSeedCities: %q", spelling)
-		}
-		return name
-	}
 
-	for i := 1; i < len(boardSeedQueries); i++ {
-		if a, b := cityOf(boardSeedQueries[i-1]), cityOf(boardSeedQueries[i]); a == b {
-			t.Fatalf("ticks %d and %d are both %s — the rotation is clustering again", i-1, i, a)
+// A firm can hire for other companies without naming itself a recruiter.
+// "APAC Talent Attraction" is Cielo, an RPO, and it was stored as an employer
+// with 98 roles that belong to its clients — the same failure Jobgether was,
+// in a name the first pattern list had no word for.
+func TestStaffingFirmsWithoutRecruiterInTheName(t *testing.T) {
+	blocked := []string{
+		"APAC Talent Attraction", "apactalentattraction", "GlobalTalentAcquisition",
+		"Acme RPO", "Zenith BPO", "Outsourcing Partners", "WorkforceOne",
+		"HeadhuntPro", "TalentNetwork India",
+	}
+	for _, name := range blocked {
+		if !aggregatorBoardRe.MatchString(name) {
+			t.Errorf("expected %q to be rejected as a staffing firm", name)
 		}
 	}
 
-	// Weights track the published ecosystem sizes, so the order of the big
-	// three has to come out right, and Hyderabad has to outrank Kolkata.
-	share := map[string]int{}
-	for _, q := range boardSeedQueries {
-		share[cityOf(q)]++
+	// The words this guard must not reach for. Every one of these is an
+	// employer the directory exists to list, and "consulting" or "solutions"
+	// alone would take all of them out.
+	allowed := []string{
+		"Capco", "QAD Inc", "Deloitte", "Fiddich Consulting", "Softobiz",
+		"MongoDB", "Altisource", "Clifford Chance", "Xoxoday", "TalentSprint",
 	}
-	if !(share["Bengaluru"] >= share["Mumbai"] && share["Mumbai"] > share["Pune"]) {
-		t.Errorf("share order Bengaluru %d, Mumbai %d, Pune %d", share["Bengaluru"], share["Mumbai"], share["Pune"])
+	for _, name := range allowed {
+		if aggregatorBoardRe.MatchString(name) {
+			t.Errorf("expected %q to be accepted as an employer", name)
+		}
 	}
-	ncr := share["Gurgaon"] + share["Noida"] + share["Delhi"]
-	if ncr <= share["Pune"] {
-		t.Errorf("Delhi NCR %d should outweigh Pune %d", ncr, share["Pune"])
+}
+
+// An ATS appends a number when a company takes a slug it already holds, and
+// the directory stored both: adeebaeservicespvtltd and
+// adeebaeservicespvtltd3, one business under two rows with two domains.
+func TestReRegistrationNumberDoesNotDefeatDedupe(t *testing.T) {
+	same := [][2]string{
+		{"adeebaeservicespvtltd", "adeebaeservicespvtltd3"},
+		{"brillio", "brillio-2"},
+		{"asapp", "asapp-2"},
+		{"Acme Technologies", "Acme Technologies 2"},
 	}
-	if share["Hyderabad"] <= share["Kolkata"] {
-		t.Errorf("Hyderabad %d <= Kolkata %d; Hyderabad is the fourth-largest hub and Kolkata is outside the top ten",
-			share["Hyderabad"], share["Kolkata"])
+	for _, p := range same {
+		if a, b := normalizeCompanyName(p[0]), normalizeCompanyName(p[1]); a != b {
+			t.Errorf("%q and %q normalise apart: %q vs %q", p[0], p[1], a, b)
+		}
+	}
+
+	// Names whose digits are the name. Stripping these would merge companies
+	// that have nothing to do with each other.
+	distinct := [][2]string{
+		{"Web3", "Web"},
+		{"100ms", "ms"},
+	}
+	for _, p := range distinct {
+		if a, b := normalizeCompanyName(p[0]), normalizeCompanyName(p[1]); a == b {
+			t.Errorf("%q and %q normalised together as %q", p[0], p[1], a)
+		}
 	}
 }

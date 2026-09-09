@@ -292,6 +292,11 @@ export function CompanyMap() {
     if (effectiveArea) params.set('area', effectiveArea);
     
     if (q) params.set('q', q);
+    // The role-bucket chips filter the directory itself. They used to be sent
+    // only to the per-company roles endpoint, so clicking "Engineering 3210"
+    // highlighted the chip and left all 625 companies on screen.
+    if (field) params.set('field', field);
+    if (level) params.set('level', level);
     if (hiringOnly) params.set('hiring', '1');
     return `${import.meta.env.VITE_API_URL}/api/companies?${params.toString()}`;
   }
@@ -341,7 +346,7 @@ export function CompanyMap() {
       fetchCompanies(1, false, view !== 'grid' ? MAP_PAGE_SIZE : PAGE_SIZE);
     }, 150);
     return () => clearTimeout(timer);
-  }, [sector, stage, area, selectedHub, q, hiringOnly, view]);
+  }, [sector, stage, area, selectedHub, q, hiringOnly, view, field, level]);
 
   const canLoadMore = companies.length < total;
 
@@ -587,7 +592,9 @@ export function CompanyMap() {
                     <JobList companyId={c.id} companyName={c.name} field={field} level={level} />
                   </div>
                 )}
-                               <div className={`flex items-center gap-2 pt-3 border-t border-line/40 mt-auto ${expandedId === c.id ? 'hidden' : ''}`}>
+                {/* Stays visible while expanded: this row carries the only
+                    control that closes the roles list again. */}
+                <div className="flex items-center gap-2 pt-3 border-t border-line/40 mt-auto">
                   {c.website && (
                     <a
                       href={c.website}
@@ -604,8 +611,12 @@ export function CompanyMap() {
                       className="ml-auto text-[11px] font-bold px-4 py-2 rounded-full bg-ink text-white hover:bg-accent flex items-center gap-1.5 shadow-md hover:shadow-lg transition-all duration-300 active:scale-95 group-hover:scale-105"
                     >
                       <Briefcase className="w-3.5 h-3.5" />
-                      View {c.job_count} {c.job_count === 1 ? 'role' : 'roles'}
-                      <ChevronDown className="w-3.5 h-3.5" />
+                      {expandedId === c.id
+                        ? 'Hide roles'
+                        : `View ${c.job_count} ${c.job_count === 1 ? 'role' : 'roles'}`}
+                      <ChevronDown
+                        className={`w-3.5 h-3.5 transition-transform ${expandedId === c.id ? 'rotate-180' : ''}`}
+                      />
                     </button>
                   ) : c.careers_url ? (
                     <a

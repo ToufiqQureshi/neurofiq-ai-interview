@@ -1,4 +1,4 @@
-import { Sparkles, ArrowRight, ShieldCheck, Target } from 'lucide-react';
+import { Sparkles, ArrowRight, ShieldCheck, Play } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 
@@ -70,11 +70,11 @@ export function AiMatchSummaryCard({ totalJobsCount = 3318, filteredCount }: AiM
       {/* Quick Launch CTA */}
       <button
         type="button"
-        onClick={() => navigate('/radar')}
+        onClick={() => navigate('/repositories')}
         className="w-full py-2.5 px-4 rounded-xl bg-accent hover:bg-accent/90 text-white text-xs font-semibold shadow-md shadow-accent/20 transition-all flex items-center justify-center gap-2 group"
       >
-        <Target className="w-4 h-4" />
-        <span>Open Profile Radar</span>
+        <Play className="w-4 h-4" />
+        <span>Start Mock Interview</span>
         <ArrowRight className="w-3.5 h-3.5 group-hover:translate-x-0.5 transition-transform" />
       </button>
 

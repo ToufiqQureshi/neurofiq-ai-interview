@@ -12,7 +12,6 @@ import { PublicReport } from './pages/PublicReport';
 import { InviteLanding } from './pages/InviteLanding';
 import { CompanyMap } from './pages/CompanyMap';
 import { JobsPortal } from './pages/JobsPortal';
-import { Radar } from './pages/Radar';
 import { NotFound } from './pages/NotFound';
 import { DashboardLayout } from './components/DashboardLayout';
 import { AuthProvider } from './context/AuthContext';
@@ -47,7 +46,6 @@ function App() {
             {/* Authenticated Routes with Sidebar */}
             <Route element={<DashboardLayout />}>
               <Route path="/dashboard" element={<Dashboard />} />
-              <Route path="/radar" element={<Radar />} />
               <Route path="/repositories" element={<Repositories />} />
               <Route path="/reports" element={<ReportsList />} />
               <Route path="/analyze/:repoId" element={<AnalysisProgress />} />

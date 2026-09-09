@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { Outlet, Link, useLocation } from 'react-router-dom';
-import { LayoutDashboard, FolderKanban, FileText, Menu, X, FileUser, FilePenLine, Map, LogOut, Target, Briefcase } from 'lucide-react';
+import { LayoutDashboard, FolderKanban, FileText, Menu, X, FileUser, FilePenLine, Map, LogOut, Briefcase } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 
 function Avatar({ avatarUrl, name, className }: { avatarUrl?: string; name: string; className?: string }) {
@@ -32,7 +32,6 @@ const navGroups: { label: string; items: NavItem[] }[] = [
   {
     label: 'Optimize',
     items: [
-      { name: 'Job Radar', icon: Target, href: '/radar' },
       { name: 'LinkedIn Optimizer', icon: FileUser, soon: true },
       { name: 'CV Optimizer', icon: FilePenLine, soon: true },
     ],
@@ -169,7 +168,12 @@ export function DashboardLayout() {
       </aside>
 
       {/* Main Content */}
-      <main className="flex-1 lg:pl-64 flex flex-col min-h-screen">
+      {/* min-w-0 because a flex child defaults to min-width:auto, which is its
+          content's intrinsic width — the Job Map's tech-hub pill row is wider
+          than a phone, so main stretched to fit it and took the whole page
+          into horizontal scroll (404px of it at 375px wide) instead of letting
+          that one row scroll inside its own overflow-x-auto. */}
+      <main className="flex-1 min-w-0 lg:pl-64 flex flex-col min-h-screen">
         {/* Top Navbar */}
         <header className="hidden lg:flex items-center justify-between h-16 px-8 bg-surface border-b border-line sticky top-0 z-30">
           {/* A disabled search box sat here, directly above the Job Map's own

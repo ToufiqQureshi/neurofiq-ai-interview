@@ -76,6 +76,7 @@ func FetchRenderedPage(url string) (string, string, error) {
 				return text, "firecrawl", nil
 			}
 			log.Printf("firecrawl failed for %s (%v) — falling back to secondary fetch", url, err)
+			LogFailedRequest("firecrawl", url, err.Error())
 		} else {
 			log.Printf("firecrawl monthly budget reached (%d/%d) — falling back to secondary fetch", used, budget)
 		}
@@ -86,6 +87,7 @@ func FetchRenderedPage(url string) (string, string, error) {
 		recordScrapeUsage("jina")
 		return text, "jina", nil
 	}
+	LogFailedRequest("jina", url, err.Error())
 	return "", "", fmt.Errorf("scraping failed for %s: %w", url, err)
 }
 

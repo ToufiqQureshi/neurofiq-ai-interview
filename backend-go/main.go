@@ -106,7 +106,7 @@ func main() {
 		&models.User{}, &models.GithubProfile{}, &models.Question{},
 		&models.InterviewSession{}, &models.InterviewInvite{},
 		&models.Company{}, &models.Job{}, &models.ScrapeUsage{},
-		&models.CronLease{},
+		&models.CronLease{}, &models.FailedRequest{},
 	); err != nil {
 		log.Fatalf("Migration failed: %v", err)
 	}
@@ -248,7 +248,8 @@ func main() {
 	r.GET("/api/jobs", controllers.HandleGetGlobalJobs)
 	r.POST("/api/admin/reclassify-jobs", controllers.HandleReclassifyJobs)
 	r.POST("/api/admin/enrich-companies", controllers.HandleEnrichCompanies)
-	r.POST("/api/admin/run-discovery", controllers.HandleRunDiscovery)
+	r.POST("/api/admin/import-boards", controllers.HandleImportBoards)
+	r.GET("/api/admin/failures/export", controllers.HandleExportFailures)
 	// Whether the pipeline behind that directory is actually working. Public
 	// and read-only: it reports counts and timings the directory already
 	// exposes, and being able to ask without credentials is the point — a
@@ -291,35 +292,27 @@ func main() {
 		{
 			paid.POST("/repos/analyze", controllers.HandleAnalyzeRepo)
 			paid.POST("/interviews/submit", controllers.HandleSubmitInterview)
-			paid.POST("/radar/analyze", controllers.HandleRadarAnalyze)
 		}
 
-		// Discovery is throttled far harder than the rest of the paid group,
-		// because it is the one endpoint that spends a resource the product
-		// cannot buy more of. Each call costs up to
-		// services.MaxNewCompaniesPerRun + 1 metered searches against a free
-		// tier of 800 a month; at the shared write limit one account could
-		// spend the entire month in about five minutes. Two now, then one an
-		// hour — generous for a manual top-up, bounded for everyone else.
-		//
-		// This is a limit, not an authorisation check: the endpoint is still
-		// open to any signed-in user, and admin-only remains the real fix.
-		discover := api.Group("")
-		discover.Use(perUserLimitOn(&discoveryLimiter, rate.Every(time.Hour), 2))
-		{
-			discover.POST("/companies/discover", controllers.HandleTriggerDiscovery)
-		}
+		// The user-triggered discovery endpoint and its own hard rate limit are
+		// gone with the search that backed them. It existed to spend a metered
+		// allowance the product could not buy more of, which is why it was
+		// throttled to two calls an hour; nothing on this server spends that
+		// allowance any more.
 
 		api.POST("/reports/:id/share", controllers.HandleShareReport)
 	}
 
 	// 8. Background schedules.
 	//
-	// Discovery searches job-board domains and stores the companies behind
-	// the boards it finds, so the Job Map fills itself in without any manual
-	// scraping and without an LLM. Run once immediately so a fresh deploy
-	// doesn't sit empty waiting on the first scheduled tick — the cron lease
-	// inside RunDiscoveryRotation makes sure only one instance does the work.
+	// Finding boards is no longer one of them. Search moved out to
+	// scripts/discover_companies.py, which queries a self-hosted SearXNG behind
+	// a residential proxy — free, and deeper per query than the metered API this
+	// used to pay for: one query walked four pages returns around fifty distinct
+	// companies where an Exa call returned forty-five. It reports what it finds
+	// to POST /api/admin/import-boards and the server admits it, so every guard
+	// still runs here and nothing outside this process writes to the database.
+	//
 	// Blocking, before a single request can be served: the directory listing
 	// filters and sorts on companies.open_roles, and that column is zero for
 	// every row until this runs. A server that comes up first answers
@@ -339,7 +332,6 @@ func main() {
 		services.LogPipelineHealth()
 	})
 
-	go safely("startup discovery", services.RunDiscoveryRotation)
 	// The backfill follows the sync in the same goroutine rather than racing
 	// it. Run in parallel, the sync held a company list read before the
 	// backfill deleted one of them from under it, and wrote that company's
@@ -354,30 +346,13 @@ func main() {
 	})
 
 	scheduler := cron.New()
-	// Every 15 minutes, matching services.discoveryIntervalSeconds — the
-	// rotation cursor is derived from that interval, so the two must agree.
+	// No discovery schedule here any more. The search that finds new boards
+	// runs outside this process (see the note above section 8); what arrives
+	// through the importer is admitted by the same guards either path always
+	// used, so removing the schedule removed a caller, not a rule.
 	//
-	// This is a deliberate front-load, not a default. At four ticks an hour a
-	// run can spend six metered searches each, which is the whole free month
-	// in about two and a half days; the budget guards then stop discovery for
-	// the rest of it. What a month yields is set by the budget, not by the
-	// cadence — this buys the same companies sooner, and nothing after. Put it
-	// back to 3h / 3*3600 once the directory is full enough.
-	//
-	// Discovery is the only metered step; the job sync it triggers is free
-	// and covers every company already stored, so listings stay fresh at this
-	// cadence. Only the rate of finding new boards slows down.
-	if _, err := scheduler.AddFunc("@every 1h", func() {
-		safely("discovery rotation", services.RunDiscoveryRotation)
-	}); err != nil {
-		log.Fatalf("Failed to schedule discovery rotation: %v", err)
-	}
-
-	if _, err := scheduler.AddFunc("@every 3m", func() {
-		safely("free discovery rotation", services.RunFreeDiscoveryRotation)
-	}); err != nil {
-		log.Fatalf("Failed to schedule free discovery rotation: %v", err)
-	}
+	// Everything below is work on companies already stored — free, and
+	// unaffected by where they were found.
 
 	// Job syncing stays hourly on its own schedule, so a closed posting drops
 	// off within the hour even between discovery runs.
@@ -485,11 +460,10 @@ func main() {
 	<-quit
 	log.Println("Shutdown signal received — draining connections...")
 
-	// Stop taking new scheduled work and hand the discovery lease back, so
-	// the next instance can pick it up immediately instead of waiting out the
-	// remaining TTL.
+	// Stop taking new scheduled work and hand the sync lease back, so the next
+	// instance can pick it up immediately instead of waiting out the remaining
+	// TTL.
 	<-scheduler.Stop().Done()
-	services.ReleaseCronLease(services.DiscoveryLeaseName)
 	services.ReleaseCronLease(services.JobSyncLeaseName)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)

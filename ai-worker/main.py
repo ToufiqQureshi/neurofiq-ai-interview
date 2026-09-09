@@ -2,7 +2,6 @@ from fastapi import FastAPI
 import threading
 import grpc_server
 from feature_interview import router as interview_router
-from feature_radar import router as radar_router
 from feature_discovery import router as discovery_router
 
 app = FastAPI()
@@ -18,5 +17,4 @@ async def health_check():
 
 # Include the modular routers
 app.include_router(interview_router, prefix="/internal")
-app.include_router(radar_router, prefix="/internal")
 app.include_router(discovery_router, prefix="/internal")

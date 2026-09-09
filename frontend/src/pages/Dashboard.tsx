@@ -182,6 +182,26 @@ export function Dashboard() {
            </div>
         </div>
       </div>
+
+      {/* Admin Exports Section */}
+      <div className="bg-surface border border-line rounded-xl overflow-hidden mt-6">
+        <div className="p-5 border-b border-line flex flex-col">
+          <h3 className="font-display font-bold text-ink text-base">Admin Tools: Data Exports</h3>
+          <p className="text-xs text-ink-faint mt-1">Download raw logs and reports for credit tracking and debugging.</p>
+        </div>
+        <div className="p-5 bg-paper/50 flex items-center justify-between flex-wrap gap-4">
+           <div>
+             <p className="text-sm font-semibold text-ink">Failed API Requests Log</p>
+             <p className="text-xs text-ink-faint">Export all Exa/Tavily failures to track where credits are being wasted.</p>
+           </div>
+           <a 
+             href={`${import.meta.env.VITE_API_URL}/api/admin/failures/export`}
+             className="px-6 py-2 bg-surface border border-line hover:border-accent hover:text-accent text-ink text-sm font-semibold rounded-lg transition-colors"
+           >
+             Download CSV (Excel)
+           </a>
+        </div>
+      </div>
     </div>
   );
 }

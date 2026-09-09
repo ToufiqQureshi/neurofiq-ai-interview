@@ -3,7 +3,6 @@ package services
 import (
 	"fmt"
 	"log"
-	"os"
 	"regexp"
 	"strings"
 	"time"
@@ -56,167 +55,16 @@ var boardSearchDomains = []string{
 	"jobs.gem.com",
 }
 
-// boardSeedQueries rotate the search so the directory keeps widening instead
-// of re-reading the same boards. Cities and roles, because that is what a
-// board page's text actually contains — a Bangalore posting says "Bangalore",
-// it does not say "Series A fintech".
-var (
-	// boardSeedCities carries a role budget per city, because the cities are
-	// not the same size and an equal share sent the rotation to the wrong
-	// places.
-	//
-	// Every city used to get all ten roles, so Kolkata drew as much of the
-	// budget as Hyderabad. The directory ended up holding 21 Kolkata companies
-	// and 4 Hyderabad ones — while Hyderabad is India's fourth-largest startup
-	// hub with ~5,000 startups and the fastest-growing funding of any Indian
-	// city, and Kolkata is outside the top ten. Delhi NCR meanwhile drew three
-	// shares by accident, because it is spelled as three cities, and came to
-	// hold 70 companies against Bengaluru's 28 — with Bengaluru the larger
-	// ecosystem, 12,000 startups to NCR's 10,000.
-	//
-	// roles is how many of boardSeedRoles that city gets, taken from the front
-	// of the list. Weighting by repeating a query instead would have spent a
-	// metered search to fetch results already seen; a bigger city earns a
-	// broader sweep of roles, which is both distinct and more useful — a large
-	// ecosystem really does hire designers and data scientists, a small one
-	// mostly hires engineers.
-	//
-	// Sizes follow published counts (Inc42, Tracxn, StartupBlink, 2025-26):
-	// Bengaluru 12k, Delhi NCR 10k, Mumbai 8k, Hyderabad 5k, Pune 4k, Chennai
-	// 3.5k, Ahmedabad 2.5k, Kochi 1.8k, Jaipur 1.5k, Chandigarh 1.2k. Bengaluru
-	// carries both spellings because boards use both and they return different
-	// pages.
-	boardSeedCities = []seedCity{
-		// spellings, not separate cities: boards write both "Bengaluru" and
-		// "Bangalore" and the two return different pages, so the rotation uses
-		// them in turn. Listing them as two entries put the same city on two
-		// consecutive ticks while pretending they were different places.
-		{spellings: []string{"Bengaluru", "Bangalore"}, roles: 10},
-		{spellings: []string{"Mumbai"}, roles: 10},
-		{spellings: []string{"Gurgaon", "Gurugram"}, roles: 8},
-		{spellings: []string{"Hyderabad"}, roles: 8},
-		{spellings: []string{"Noida"}, roles: 7},
-		{spellings: []string{"Pune"}, roles: 5},
-		{spellings: []string{"Chennai"}, roles: 5},
-		{spellings: []string{"Delhi", "New Delhi"}, roles: 5},
-		{spellings: []string{"India remote"}, roles: 4},
-		{spellings: []string{"Ahmedabad"}, roles: 3},
-		{spellings: []string{"Kochi"}, roles: 2},
-		{spellings: []string{"Jaipur"}, roles: 2},
-		{spellings: []string{"Chandigarh"}, roles: 2},
-		{spellings: []string{"Indore"}, roles: 2},
-		{spellings: []string{"Coimbatore"}, roles: 2},
-		// Kolkata is outside the published top ten and its budget says so, but
-		// it is not nothing either: the directory already holds 21 companies
-		// hiring there. Cutting a city to zero stops the rotation ever looking
-		// again, which is a stronger claim than the data supports.
-		{spellings: []string{"Kolkata"}, roles: 2},
-	}
-
-	// boardSeedRoles are ordered most general first, because a city with a
-	// small budget takes them from the front and should spend it on the roles
-	// most likely to exist anywhere.
-	boardSeedRoles = []string{
-		"software engineer", "backend engineer", "sales", "marketing",
-		"data scientist", "frontend engineer", "product manager",
-		"designer", "devops engineer", "machine learning engineer",
-	}
-
-	boardSeedQueries = buildBoardSeedQueries()
-)
-
-// seedCity is one place the rotation searches, and how much of the role list
-// it is worth spending there.
-type seedCity struct {
-	// spellings are the ways boards write this city. They are alternated
-	// across the city's queries rather than listed as separate cities.
-	spellings []string
-	// roles is how many of boardSeedRoles this city gets, from the front.
-	roles int
-}
-
-// Name is the city as the directory refers to it.
-func (c seedCity) Name() string { return c.spellings[0] }
-
-// buildBoardSeedQueries lays the rotation out so consecutive ticks land in
-// different cities.
-//
-// The order is the whole point. This used to loop city-outer, role-inner,
-// which put all ten of a city's queries next to each other: a day of discovery
-// was one or two cities and nothing else, and a report on "which city has the
-// most companies" measured the cursor rather than the country — 20 of the 34
-// companies found in one window came from the two cities the rotation happened
-// to be sitting on.
-//
-// Roles run on the outside now and cities on the inside, so every city is
-// visited once before any city is visited twice. A city with a bigger budget
-// survives into more of the later role passes, and the two heaviest keep a
-// full budget so the tail of the rotation still alternates rather than ending
-// on one city repeated.
-func buildBoardSeedQueries() []string {
-	out := make([]string, 0, len(boardSeedCities)*len(boardSeedRoles))
-	for r, role := range boardSeedRoles {
-		for _, city := range boardSeedCities {
-			if r >= city.roles {
-				continue // this city's budget is spent
-			}
-			spelling := city.spellings[r%len(city.spellings)]
-			out = append(out, fmt.Sprintf("%s jobs in %s, India", role, spelling))
-		}
-	}
-	return out
-}
-
-// discoveryIntervalSeconds must match the cron schedule in main.go — the
-// rotation cursor is derived from it, so a mismatch would skip or repeat
-// queries.
-//
-// Hourly. Exa and Tavily now run as two independent sources every tick (see
-// runRotationSource), each against its own ~800/month budget and its own
-// best-effort daily target — not the shared fallback pair this used to be.
-// That is deliberately more spend than the old three-hourly, single-provider
-// rotation: each source stops calling out for the rest of the day the moment
-// its own daily target is met, so the ceiling is the daily target times
-// however many ticks it takes to reach it, not 24 calls guaranteed. A day
-// that never reaches its target will spend up to 24 calls on that source —
-// worth watching against the monthly budget if targets are raised further.
-const discoveryIntervalSeconds = 3600 // hourly; see main.go
-
-// DiscoveryLeaseName is the cron lease that keeps two instances from running
-// the same discovery tick.
-const DiscoveryLeaseName = "discovery-rotation"
-
-// discoveryLeaseTTL spans a full rotation interval, so no second instance can
-// repeat the tick this one just ran.
-const discoveryLeaseTTL = discoveryIntervalSeconds * time.Second
-
-const FreeDiscoveryLeaseName = "free-discovery-rotation"
-const freeDiscoveryIntervalSeconds = 3 * 60
-const freeDiscoveryLeaseTTL = freeDiscoveryIntervalSeconds * time.Second
-
 // jobSyncIntervalSeconds must match the job-sync cron schedule in main.go.
 const jobSyncIntervalSeconds = 3600
 
 // jobSyncLeaseTTL spans a full sync interval, for the same reason.
 const jobSyncLeaseTTL = jobSyncIntervalSeconds * time.Second
 
-// boardResultsPerQuery is how many search hits one query asks for. Most
-// resolve to a handful of distinct boards once duplicates collapse.
-const boardResultsPerQuery = 25
-
-// MaxNewCompaniesPerRun is exported so the API can advertise the same ceiling
-// it actually enforces. A handler that accepts 25 and returns 5 is a contract
-// that lies about itself.
-const MaxNewCompaniesPerRun = maxNewCompaniesPerRun
-
-// maxNewCompaniesPerRun caps how many companies one run will store.
-//
-// Each new company costs a second search to find its website, so an
-// uncapped run against a fruitful query could spend 25 searches in one tick
-// and a good chunk of the month in an afternoon. The boards this run skips
-// are not lost — the rotation comes back around, and a board that exists
-// today still exists next week.
-const maxNewCompaniesPerRun = 5
+// boardSearchSource is the source label carried by companies the retired
+// search rotation stored. Nothing writes it any more; the guard backfill
+// and the health check still read it, because those rows are still here.
+const boardSearchSource = "board-search"
 
 // boardHit is one distinct board found by a search.
 type boardHit struct {
@@ -249,25 +97,6 @@ var vendorDemoSlugs = map[string]bool{
 	"demo": true, "salesdemo": true, "democompany": true, "test": true,
 	"testing": true, "sandbox": true, "staging": true, "example": true,
 }
-
-// boardSearchSource labels companies stored by a fallback-based search
-// (DiscoverFromBoardsManual, RunMultiCityDiscovery) that does not pin a
-// single provider. The rotation below pins one, and stamps the provider's
-// own name instead — see runRotationSource.
-const boardSearchSource = "board-search"
-
-// Best-effort daily targets, one per discovery source. "Best-effort" means
-// exactly that: a source that runs out of new boards to find on a given day
-// simply falls short, same as any other day the seed queries turn up
-// nothing new. Nothing here spends harder or accepts weaker matches to
-// chase the number — mayStartLookup and the admission guards downstream
-// (scanForATS, boardSlugIsAdmissible, isAggregatorHost) are unchanged.
-const (
-	exaDailyTarget     = 30
-	tavilyDailyTarget  = 30
-	ddgDailyTarget     = 20
-	searxngDailyTarget = 30
-)
 
 // companiesFoundToday counts how many companies a given discovery source has
 // stored since UTC midnight, so runRotationSource knows whether that
@@ -323,7 +152,25 @@ var sharedBoardRe = regexp.MustCompile(`(?i)\b(vc|ventures?|capital|partners|fun
 // them, Jobgether, put 4440 roles into this directory under a single company,
 // two thirds of every job it held. Those roles are real. They just belong to
 // several hundred other employers.
-var aggregatorBoardRe = regexp.MustCompile(`(?i)(jobgether|jobsora|jooble|remotive|weworkremotely|remoteok|weekday|hirist|instahyre|cutshort|foundit|monsterindia|timesjobs|naukri|indeed|glassdoor|ziprecruiter|simplyhired|adzuna|careerbuilder|staffing|manpower|randstad|adecco|teamlease|quesscorp|recruit(er|ers|ment|ing)|placements?|jobboard|jobsite)`)
+// The second group is the shape that got through the first. A firm can hire
+// for other companies without any of the words above appearing in its name:
+// "APAC Talent Attraction" is Cielo, an RPO, and it was filed as an employer
+// with 98 roles that belong to its clients. These name the business model
+// instead — talent as a service, outsourced hiring, a managed workforce.
+//
+// Deliberately not here: "consulting" and "solutions" on their own. Capco,
+// Deloitte and QAD are consultancies and are exactly the employers this
+// directory is for, so a word that common rejects more real companies than
+// staffing firms.
+var aggregatorBoardRe = regexp.MustCompile(`(?i)(` +
+	`jobgether|jobsora|jooble|remotive|weworkremotely|remoteok|weekday|hirist|` +
+	`instahyre|cutshort|foundit|monsterindia|timesjobs|naukri|indeed|glassdoor|` +
+	`ziprecruiter|simplyhired|adzuna|careerbuilder|staffing|manpower|randstad|` +
+	`adecco|teamlease|quesscorp|recruit(er|ers|ment|ing)|placements?|jobboard|jobsite` +
+	`|talent(attraction|acquisition|partners|network|pool|supply)` +
+	`|talent\s+(attraction|acquisition|partners|network|pool|supply)` +
+	`|\brpo\b|\bbpo\b|outsourc|workforce|headhunt|manpower|contingentwork` +
+	`)`)
 
 // maxBoardRoles rejects a board so large it cannot belong to one employer.
 //
@@ -626,100 +473,6 @@ func companyNameFromBoard(title, slug string) string {
 		}
 	}
 	return slugDisplayName(slug)
-}
-
-// boardHitsFor runs one search and returns the distinct boards it found,
-// plus the source that should be stamped onto whatever gets stored — the
-// provider actually asked to answer, except for the free path, where the
-// worker itself reports which engine actually served it (DDG can silently
-// fall through to SearXNG worker-side, and the stored label should say so).
-//
-// source is one of "exa", "tavily" (pinned, no fallback — the daily targets
-// need to know which provider actually answered), "ddg", "searxng" (the free
-// pair, same reasoning), or "paid" (the old Exa-then-Tavily fallback, still
-// used by the manual and multi-city entry points, which are not part of the
-// daily-target system).
-func boardHitsFor(query string, numResults int, source string) ([]boardHit, string) {
-	var results []searchResult
-	var actualSource string
-	var err error
-
-	switch source {
-	case "exa", "tavily":
-		results, err = searchWithProvider(source, query, boardSearchDomains, numResults)
-		actualSource = source
-	case "ddg", "searxng":
-		var engine string
-		results, engine, err = FreeWebSearch(query, numResults, source)
-		actualSource = engine
-		if actualSource == "" {
-			actualSource = source
-		}
-	default:
-		results, err = WebSearch(query, boardSearchDomains, numResults)
-		actualSource = boardSearchSource
-	}
-
-	if err != nil {
-		log.Printf("board discovery: search failed for %q via %s: %v", query, source, err)
-		return nil, actualSource
-	}
-
-	// scanForATS is free for every provider but Workday, whose job-site id is
-	// not in the URL: it probes the live API for up to five candidate ids,
-	// and each probe can paginate. One search returns many postings from the
-	// same employer, so without memoising, twenty results from one tenant
-	// mean twenty identical probes and a cron tick that runs for minutes.
-	workdayProbe := map[string]string{}
-	scan := func(u string) (string, string) {
-		m := workdayLinkRe.FindStringSubmatch(u)
-		if m == nil {
-			return scanForATS(u)
-		}
-		key := m[1] + ":" + m[2]
-		slug, done := workdayProbe[key]
-		if !done {
-			_, slug = scanForATS(u)
-			workdayProbe[key] = slug
-		}
-		if slug == "" {
-			return "", ""
-		}
-		return "workday", slug
-	}
-
-	seen := map[string]bool{}
-	var hits []boardHit
-	for _, r := range results {
-		// The same regexes that read a board link out of a careers page read
-		// it out of a search result, because both are just the URL.
-		provider, slug := scan(r.URL)
-		if provider == "" || slug == "" || !boardSlugIsAdmissible(slug) {
-			continue
-		}
-		key := provider + ":" + strings.ToLower(slug)
-		if seen[key] {
-			continue
-		}
-		seen[key] = true
-
-		// The canonical board address is the better careers URL — it is the
-		// board's front page rather than whichever posting the search
-		// happened to return. But a provider we have no canonical form for
-		// must not lose the URL entirely: the search result is already a
-		// verified page on that board.
-		url := boardURL(provider, slug)
-		if url == "" {
-			url = r.URL
-		}
-		hits = append(hits, boardHit{
-			Provider: provider,
-			Slug:     slug,
-			Title:    r.Title,
-			URL:      url,
-		})
-	}
-	return hits, actualSource
 }
 
 // boardURL is the public, human-facing address of a board — used as the
@@ -1036,6 +789,7 @@ func resolveCompanyWebsite(name string) string {
 	}
 	if err != nil {
 		log.Printf("board discovery: website lookup failed for %q: %v", name, err)
+		LogFailedRequest("website_lookup", name, err.Error())
 		return ""
 	}
 	for _, r := range results {
@@ -1048,253 +802,217 @@ func resolveCompanyWebsite(name string) string {
 	return ""
 }
 
-// DiscoverFromBoards runs one board search and stores the companies behind
-// the boards it finds, along with their open roles.
-// schedulerReserveFraction is the share of the monthly search budget that only
-// the scheduled rotation may spend.
-//
-// The manual endpoint is open to any signed-in user, and a per-user rate limit
-// does not bound what several accounts spend together: the budget is one
-// shared pot, so enough of them draining it would stop the rotation for the
-// rest of the month — the directory quietly stops growing, and nothing in the
-// product says why. A reserve makes that impossible without needing an
-// authorisation system: manual runs get the first three quarters, the
-// scheduler always has the last.
-//
-// This is not a substitute for admin-only, which remains the real fix and is
-// still listed as a gap. It is the part that can be done without one.
-const schedulerReserveFraction = 4
+// admitOutcome is what the directory decided about one candidate board.
+type admitOutcome int
 
-// schedulerReserve is the number of searches held back for the rotation. A
-// policy number derived from configuration alone — no usage lookup — so it
-// stays testable and cannot fail closed on a database hiccup.
-func schedulerReserve() int {
-	total := 0
-	for _, p := range searchProviders {
-		if os.Getenv(p.envKey) != "" {
-			total += providerBudget(p)
-		}
+const (
+	admitStored      admitOutcome = iota // new company, saved with its roles
+	admitAttached                        // board belonged to a company already here
+	admitRejected                        // failed one of the admission guards
+	admitBudgetSpent                     // needed a metered lookup the caller would not allow
+)
+
+// admitBoard decides whether one candidate board becomes a company, and is the
+// only place that decision is made.
+//
+// Candidates reach it from two directions — the scheduled search rotation and
+// a bulk import of slugs found elsewhere — and the whole point is that the
+// route in changes nothing about the judgement. Every guard the directory
+// relies on lives here: the shared-board and marketplace name rules, the board
+// we already hold, the board's own API answering at all, the role ceiling that
+// says one employer does not have 2,000 openings, and the requirement that it
+// hires in India. Evidence, not the caller, decides.
+//
+// allowLookup gates the one metered call in the path. The rotation lets it run
+// against its budget; a bulk import passes a func returning false, so importing
+// five hundred boards spends nothing and simply skips whatever cannot be named
+// for free.
+func admitBoard(hit boardHit, source string, allowLookup func() bool) (*models.Company, []models.Job, admitOutcome) {
+	name := companyNameFromBoard(hit.Title, hit.Slug)
+	if sharedBoardRe.MatchString(name) || sharedBoardRe.MatchString(hit.Slug) {
+		log.Printf("board discovery: skipping %q — looks like a fund or talent-network board", name)
+		return nil, nil, admitRejected
 	}
-	return total / schedulerReserveFraction
-}
-
-// ManualDiscoveryBudget reports how many searches a user-triggered run may
-// still spend, and how many are held back for the scheduler.
-func ManualDiscoveryBudget() (spendable int, reserved int) {
-	reserved = schedulerReserve()
-	return SearchBudgetRemaining() - reserved, reserved
-}
-
-// DiscoverFromBoardsManual is the user-triggered entry point. It refuses to
-// spend into the scheduler's reserve; the rotation calls DiscoverFromBoards
-// directly and is not subject to it.
-func DiscoverFromBoardsManual(query string, limit int) ([]models.Company, error) {
-	if spendable, reserved := ManualDiscoveryBudget(); spendable <= limit {
-		return nil, fmt.Errorf(
-			"manual discovery is paused: %d searches left this month and %d of them are reserved for the scheduled rotation",
-			SearchBudgetRemaining(), reserved)
-	}
-	return discoverFromBoards(query, limit, schedulerReserve(), "paid")
-}
-
-// mayStartLookup decides whether another company-website search may begin.
-//
-// Two separate ceilings, and the run stops at whichever comes first:
-//
-//   - lookups against limit. This is the one that was wrong: the loop used to
-//     stop on companies *saved*, but a candidate that is rejected after its
-//     website lookup — no site found, or a domain we already hold — has spent
-//     a search all the same. With 25 board hits a "5 company" run could spend
-//     26 searches, five times what the schedule was budgeted for.
-//   - the remaining budget against floor, so a manual run cannot eat into the
-//     scheduler's reserve part-way through, having passed the check on entry.
-func mayStartLookup(lookups, limit, remaining, floor int) bool {
-	return lookups < limit && remaining > floor
-}
-
-// DiscoverFromBoards is the scheduled entry point: it may spend the whole
-// remaining budget, because the rotation is what the budget is for.
-//
-// source is "exa", "tavily", "ddg" or "searxng" to pin one provider (see
-// boardHitsFor), or "paid" for the old Exa-then-Tavily fallback used by the
-// manual and multi-city entry points.
-func DiscoverFromBoards(query string, limit int, source string) ([]models.Company, error) {
-	return discoverFromBoards(query, limit, 0, source)
-}
-
-// discoverFromBoards runs one search and stores the companies behind the
-// boards it finds. floor is the budget level it will not spend past — zero
-// for the rotation, the scheduler's reserve for a manual run.
-func discoverFromBoards(query string, limit, floor int, source string) ([]models.Company, error) {
-	if limit <= 0 || limit > maxNewCompaniesPerRun {
-		limit = maxNewCompaniesPerRun
-	}
-	// One search to find boards. Everything after it may well be free — a
-	// company whose board page or own domain names its website costs nothing
-	// — so this asks only for the board search, not for the whole lookup
-	// allowance on top of it.
-	//
-	// It used to require limit+floor up front, which was right when every
-	// company cost a search and wrong the moment they stopped: with a handful
-	// of credits left, a run that would have spent one and resolved five
-	// companies for free refused to start at all.
-	//
-	// The lookups keep their own guard. mayStartLookup is checked immediately
-	// before each metered one, which is the only place that can know whether
-	// it is actually needed.
-	switch source {
-	case "exa", "tavily":
-		// Pinned to its own provider, so it is that provider's own monthly
-		// budget on the line — not the combined figure, which would let Exa
-		// keep searching after its own 800 were spent just because Tavily's
-		// were not.
-		if remaining := providerBudgetRemainingByName(source); remaining <= floor {
-			return nil, fmt.Errorf("%s search budget nearly spent (%d left) — skipping discovery", source, remaining)
-		}
-	case "paid":
-		if remaining := SearchBudgetRemaining(); remaining <= floor {
-			return nil, fmt.Errorf("search budget nearly spent (%d left, %d reserved) — skipping discovery",
-				remaining, floor)
-		}
+	if aggregatorBoardRe.MatchString(name) || aggregatorBoardRe.MatchString(hit.Slug) {
+		log.Printf("board discovery: skipping %q — looks like a job marketplace or staffing board", name)
+		return nil, nil, admitRejected
 	}
 
-	hits, actualSource := boardHitsFor(query, boardResultsPerQuery, source)
-	if len(hits) == 0 {
-		return nil, nil
+	// Cheapest disqualifier first: a board we already have.
+	var existing int64
+	config.DB.Model(&models.Company{}).
+		Where("ats_type = ? AND lower(ats_slug) = lower(?)", hit.Provider, hit.Slug).
+		Count(&existing)
+	if existing > 0 {
+		return nil, nil, admitRejected
 	}
 
-	var saved []models.Company
-	lookups := 0
-	for _, hit := range hits {
-		if len(saved) >= limit {
-			break
-		}
+	// Then the board's own roles, which are free to read and settle both
+	// remaining questions: is it live, and does it hire in India.
+	jobs, err := FetchATSJobs("", hit.Provider, hit.Slug)
+	if err != nil || len(jobs) == 0 {
+		return nil, nil, admitRejected
+	}
+	if len(jobs) > maxBoardRoles {
+		log.Printf("board discovery: skipping %q — %d roles on one board is a marketplace, not an employer",
+			name, len(jobs))
+		return nil, nil, admitRejected
+	}
+	area := firstIndianLocation(jobs)
+	if area == "" {
+		return nil, nil, admitRejected // hiring, but not here
+	}
 
-		name := companyNameFromBoard(hit.Title, hit.Slug)
-		if sharedBoardRe.MatchString(name) || sharedBoardRe.MatchString(hit.Slug) {
-			log.Printf("board discovery: skipping %q — looks like a fund or talent-network board", name)
-			continue
-		}
-		if aggregatorBoardRe.MatchString(name) || aggregatorBoardRe.MatchString(hit.Slug) {
-			log.Printf("board discovery: skipping %q — looks like a job marketplace or staffing board", name)
-			continue
-		}
+	if dup := findDuplicateCompany(name, ""); dup != nil {
+		// Same business, found earlier without its board.
+		attachBoardTo(dup, hit)
+		return nil, nil, admitAttached
+	}
 
-		// Cheapest disqualifier first: a board we already have.
-		var existing int64
-		config.DB.Model(&models.Company{}).
-			Where("ats_type = ? AND lower(ats_slug) = lower(?)", hit.Provider, hit.Slug).
-			Count(&existing)
-		if existing > 0 {
-			continue
+	// Two free ways to name the company's site, in the order this pipeline
+	// takes everywhere: the board page the company published, then its own
+	// domain when the slug is also its domain label. Only when neither answers
+	// does this reach the search.
+	website := websiteFromBoardPage(hit.URL, hit.Slug)
+	if website == "" {
+		website = guessCompanyWebsite(hit.Provider, hit.Slug)
+	}
+	if website == "" {
+		if !allowLookup() {
+			return nil, nil, admitBudgetSpent
 		}
+		website = resolveCompanyWebsite(name)
+	}
+	domain := extractDomain(website)
+	if domain == "" {
+		log.Printf("board discovery: skipping %q — no company website found", name)
+		return nil, nil, admitRejected
+	}
+	if dup := findDuplicateCompany(name, domain); dup != nil {
+		// Reached only when the name did not match but the domain does — the
+		// company was stored earlier under a different name. This used to just
+		// skip, which threw away the board it had just paid a search to find,
+		// so the row stayed boardless and every later rotation repeated the
+		// same wasted lookup. 73 of the directory's companies sat at zero roles
+		// in exactly this state.
+		attachBoardTo(dup, hit)
+		return nil, nil, admitAttached
+	}
 
-		// Then the board's own roles, which are free to read and settle both
-		// remaining questions: is it live, and does it hire in India.
-		jobs, err := FetchATSJobs("", hit.Provider, hit.Slug)
-		if err != nil || len(jobs) == 0 {
-			continue
-		}
-		if len(jobs) > maxBoardRoles {
-			log.Printf("board discovery: skipping %q — %d roles on one board is a marketplace, not an employer",
-				name, len(jobs))
-			continue
-		}
-		area := firstIndianLocation(jobs)
-		if area == "" {
-			continue // hiring, but not here
-		}
+	company := models.Company{
+		Name:       name,
+		Slug:       slugify(name),
+		Website:    website,
+		Domain:     domain,
+		Area:       area,
+		CareersURL: hit.URL,
+		ATSType:    hit.Provider,
+		ATSSlug:    hit.Slug,
+		Source:     source,
+	}
+	now := time.Now()
+	company.ATSCheckedAt = &now
 
-		if dup := findDuplicateCompany(name, ""); dup != nil {
-			// Same business, found earlier without its board.
-			attachBoardTo(dup, hit)
+	if lat, lng, geoErr := geocodeArea(area); geoErr == nil {
+		company.Lat = lat
+		company.Lng = lng
+	}
+
+	result := config.DB.Clauses(clause.OnConflict{
+		Columns:   []clause.Column{{Name: "domain"}},
+		DoNothing: true,
+	}).Create(&company)
+	if result.Error != nil {
+		log.Printf("board discovery: failed to save %q: %v", name, result.Error)
+		return nil, nil, admitRejected
+	}
+	if result.RowsAffected == 0 {
+		return nil, nil, admitRejected // domain already present
+	}
+	return &company, jobs, admitStored
+}
+
+// BoardRef is one candidate board named by something outside the rotation.
+type BoardRef struct {
+	Provider string `json:"provider"`
+	Slug     string `json:"slug"`
+}
+
+// ImportResult reports what a bulk import did, in the terms the guards use.
+type ImportResult struct {
+	Submitted int      `json:"submitted"`
+	Stored    int      `json:"stored"`
+	Attached  int      `json:"attached"`
+	Rejected  int      `json:"rejected"`
+	Unnamed   int      `json:"unnamed"`
+	Companies []string `json:"companies"`
+}
+
+// ImportBoards admits a list of boards someone else found.
+//
+// The rotation is one search at a time and its ceiling is arithmetic: measured
+// over September it spent 2.02 searches per company stored, so a month of
+// searching lands around 400 companies however fast the cron runs. Boards
+// found in bulk elsewhere — a script sweeping one provider, an index, a list —
+// do not have that ceiling, and there is no reason the directory should refuse
+// them just because they did not arrive through a paid query.
+//
+// What does not change is admission: every candidate goes through admitBoard,
+// the same guards in the same order. The only difference is that no metered
+// lookup may run, so a company whose site cannot be named for free is counted
+// in Unnamed and left for the rotation, which can afford to look it up. That
+// is what keeps a five-hundred-board import free.
+func ImportBoards(refs []BoardRef, source string) ImportResult {
+	if source == "" {
+		source = "import"
+	}
+	out := ImportResult{Submitted: len(refs)}
+	seen := make(map[string]bool, len(refs))
+
+	for _, ref := range refs {
+		provider := strings.ToLower(strings.TrimSpace(ref.Provider))
+		slug := strings.TrimSpace(ref.Slug)
+		if provider == "" || slug == "" {
+			out.Rejected++
 			continue
 		}
-
-		// Two free ways to name the company's site, in the order this pipeline
-		// takes everywhere: the board page the company published, then its own
-		// domain when the slug is also its domain label. Only when neither
-		// answers does this reach the search, the one metered call in the loop.
-		website := websiteFromBoardPage(hit.URL, hit.Slug)
-		if website == "" {
-			website = guessCompanyWebsite(hit.Provider, hit.Slug)
+		key := provider + "/" + strings.ToLower(slug)
+		if seen[key] {
+			continue // the same board listed twice is one board
 		}
-		if website == "" {
-			// The metered step. Everything above this line is free, so the
-			// count that matters is of lookups started — not of companies
-			// stored, and not of hits examined. The budget check sits here
-			// rather than at the top of the iteration for the same reason: a
-			// run that has spent its lookups can still store every company it
-			// can name for nothing.
-			if !mayStartLookup(lookups, limit, SearchBudgetRemaining(), floor) {
-				log.Printf("board discovery: stopping after %d website lookups (limit %d, budget %d, reserved %d)",
-					lookups, limit, SearchBudgetRemaining(), floor)
-				break
+		seen[key] = true
+
+		hit := boardHit{
+			Provider: provider,
+			Slug:     slug,
+			URL:      boardURL(provider, slug),
+			Title:    slug,
+		}
+		company, jobs, outcome := admitBoard(hit, source, func() bool { return false })
+		switch outcome {
+		case admitStored:
+			out.Stored++
+			out.Companies = append(out.Companies, company.Name)
+			for i := range jobs {
+				jobs[i].CompanyID = company.ID
 			}
-			lookups++
-			website = resolveCompanyWebsite(name)
-		}
-		domain := extractDomain(website)
-		if domain == "" {
-			log.Printf("board discovery: skipping %q — no company website found", name)
-			continue
-		}
-		if dup := findDuplicateCompany(name, domain); dup != nil {
-			// Reached only when the name did not match but the domain does —
-			// the company was stored earlier under a different name. This
-			// used to just skip, which threw away the board it had just paid
-			// a search to find, so the row stayed boardless and every later
-			// rotation repeated the same wasted lookup. 73 of the directory's
-			// companies sat at zero roles in exactly this state.
-			attachBoardTo(dup, hit)
-			continue
-		}
-
-		company := models.Company{
-			Name:       name,
-			Slug:       slugify(name),
-			Website:    website,
-			Domain:     domain,
-			Area:       area,
-			CareersURL: hit.URL,
-			ATSType:    hit.Provider,
-			ATSSlug:    hit.Slug,
-			Source:     actualSource,
-		}
-		now := time.Now()
-		company.ATSCheckedAt = &now
-
-		if lat, lng, geoErr := geocodeArea(area); geoErr == nil {
-			company.Lat = lat
-			company.Lng = lng
-		}
-
-		result := config.DB.Clauses(clause.OnConflict{
-			Columns:   []clause.Column{{Name: "domain"}},
-			DoNothing: true,
-		}).Create(&company)
-		if result.Error != nil {
-			log.Printf("board discovery: failed to save %q: %v", name, result.Error)
-			continue
-		}
-		if result.RowsAffected == 0 {
-			continue // domain already present
-		}
-		saved = append(saved, company)
-
-		// The roles are already in hand, so store them now rather than
-		// leaving the company at zero until the next tick.
-		for i := range jobs {
-			jobs[i].CompanyID = company.ID
-		}
-		if n, jerr := replaceJobsForCompany(company.ID, jobs); jerr != nil {
-			log.Printf("board discovery: failed to store roles for %q: %v", name, jerr)
-		} else {
-			log.Printf("board discovery: %s (%s/%s) -> %d roles", name, hit.Provider, hit.Slug, n)
+			if n, err := replaceJobsForCompany(company.ID, jobs); err != nil {
+				log.Printf("board import: failed to store roles for %q: %v", company.Name, err)
+			} else {
+				log.Printf("board import: %s (%s/%s) -> %d roles", company.Name, provider, slug, n)
+			}
+		case admitAttached:
+			out.Attached++
+		case admitBudgetSpent:
+			out.Unnamed++
+		default:
+			out.Rejected++
 		}
 	}
 
-	return saved, nil
+	log.Printf("board import: %d submitted -> %d stored, %d attached, %d rejected, %d unnamed",
+		out.Submitted, out.Stored, out.Attached, out.Rejected, out.Unnamed)
+	return out
 }
 
 // attachBoardTo gives an existing company the board just discovered for it.
@@ -1358,79 +1076,6 @@ func firstIndianLocation(jobs []models.Job) string {
 	return ""
 }
 
-// RunDiscoveryRotation is invoked on a schedule and works through the seed
-// queries one per tick, then re-syncs the roles of everything already stored.
-func RunDiscoveryRotation() {
-	if len(boardSeedQueries) == 0 {
-		return
-	}
-
-	// Only one instance runs this tick. The cron scheduler lives inside the
-	// API process, so scaling to two containers would otherwise mean two
-	// discovery runs per interval: double the metered searches, and every
-	// job board fetched twice.
-	//
-	// The lease covers the whole interval rather than part of it, and is not
-	// released when the run finishes. Instance ticks are not aligned: if A
-	// runs at :00 and B's schedule fires at :55, a lease that expired at :55
-	// would let B run the identical query — the rotation index is derived
-	// from the clock, so B lands on the same seed. A TTL this long does not
-	// lock A out of its own next tick, because AcquireCronLease re-takes a
-	// lease the same holder already has. Shutdown releases it explicitly so
-	// a redeploy does not idle the next tick.
-	if !AcquireCronLease(DiscoveryLeaseName, discoveryLeaseTTL) {
-		log.Printf("board discovery rotation: another instance holds the lease, skipping")
-		return
-	}
-
-	idx := int((time.Now().Unix() / int64(discoveryIntervalSeconds)) % int64(len(boardSeedQueries)))
-	query := boardSeedQueries[idx]
-
-	// Exa and Tavily both run every tick now, as two independent sources
-	// rather than a fallback pair — each against its own budget, each with
-	// its own best-effort daily target.
-	runRotationSource(query, "exa", exaDailyTarget)
-	runRotationSource(query, "tavily", tavilyDailyTarget)
-}
-
-// runRotationSource runs one source's board search for this tick, unless
-// that source has already met its own best-effort daily target — the target
-// is a ceiling on how hard a source tries today, not a promise the day owes
-// it a number. Shared by RunDiscoveryRotation and RunFreeDiscoveryRotation
-// so all four sources are gated the same way.
-func runRotationSource(query, source string, dailyTarget int) {
-	if found := companiesFoundToday(source); found >= dailyTarget {
-		return
-	}
-	saved, err := DiscoverFromBoards(query, maxNewCompaniesPerRun, source)
-	if err != nil {
-		log.Printf("board discovery rotation (%s) failed for %q: %v", source, query, err)
-		return
-	}
-	log.Printf("board discovery rotation: %s %q -> %d new companies | today: %d/%d | search budget left: %d",
-		source, query, len(saved), companiesFoundToday(source), dailyTarget, SearchBudgetRemaining())
-}
-
-// RunFreeDiscoveryRotation triggers the 100% free DuckDuckGo + SearXNG
-// pipeline via ai-worker. Same shape as RunDiscoveryRotation: both engines
-// run every tick as independent sources, each with its own daily target.
-func RunFreeDiscoveryRotation() {
-	if len(boardSeedQueries) == 0 {
-		return
-	}
-
-	if !AcquireCronLease(FreeDiscoveryLeaseName, freeDiscoveryLeaseTTL) {
-		log.Printf("free discovery rotation: another instance holds the lease, skipping")
-		return
-	}
-
-	idx := int((time.Now().Unix() / int64(freeDiscoveryIntervalSeconds)) % int64(len(boardSeedQueries)))
-	query := boardSeedQueries[idx]
-
-	runRotationSource(query, "ddg", ddgDailyTarget)
-	runRotationSource(query, "searxng", searxngDailyTarget)
-}
-
 // JobSyncLeaseName is the cron lease for the hourly role refresh.
 const JobSyncLeaseName = "job-sync"
 
@@ -1450,35 +1095,3 @@ func RunJobSync() {
 	SyncAllCompanyJobs()
 }
 
-// RunMultiCityDiscovery triggers discovery queries across major Indian tech hub cities
-// (Bengaluru, Mumbai, Gurgaon/Delhi, Hyderabad, Pune, Chennai, Noida).
-// It allows an operator or admin to actively sweep locations on demand while respecting
-// remaining search budget guards.
-func RunMultiCityDiscovery(cities []string, limitPerCity int) (map[string]int, error) {
-	if limitPerCity <= 0 || limitPerCity > maxNewCompaniesPerRun {
-		limitPerCity = maxNewCompaniesPerRun
-	}
-	if len(cities) == 0 {
-		cities = []string{"Bengaluru", "Mumbai", "Gurgaon", "Hyderabad", "Pune", "Chennai", "Noida", "Delhi"}
-	}
-
-	results := make(map[string]int)
-	for _, city := range cities {
-		if SearchBudgetRemaining() <= schedulerReserve() {
-			log.Printf("multi-city discovery: stopping sweep early, search budget floor reached (%d remaining)", SearchBudgetRemaining())
-			break
-		}
-		query := fmt.Sprintf("software engineer jobs in %s, India", city)
-		saved, err := DiscoverFromBoards(query, limitPerCity, "paid")
-		if err != nil {
-			log.Printf("multi-city discovery: failed for city %q: %v", city, err)
-			results[city] = 0
-			continue
-		}
-		results[city] = len(saved)
-		log.Printf("multi-city discovery: %s -> %d new companies discovered", city, len(saved))
-		time.Sleep(1 * time.Second)
-	}
-
-	return results, nil
-}

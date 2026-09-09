@@ -56,8 +56,6 @@ Ye module candidate interview sessions, questions, speech processing aur AI eval
   - **Kya karta hai**: Job description aur candidate profile ke basis pe dynamic, contextual interview questions generate karta hai.
 - `evaluation_service.go`:
   - **Kya karta hai**: Candidate ke interview answers ko score karta hai (technical accuracy, communication, confidence).
-- `radar_service.go`:
-  - **Kya karta hai**: Candidate skill matrix (Radar chart) calculations provide karta hai.
 - `github_service.go` & `github_commits.go`:
   - **Kya karta hai**: Candidate ke public GitHub repositories aur commits ko analyze karke real technical contribution metrics nikalta hai.
 

@@ -62,9 +62,9 @@ func TestLiveAutoMigrateCoreModels(t *testing.T) {
 func TestLiveListCompaniesAcrossFilters(t *testing.T) {
 	liveDB(t)
 	cases := []struct {
-		name                   string
-		sector, stage, area, q string
-		hiring                 bool
+		name                                 string
+		sector, stage, area, q, field, level string
+		hiring                               bool
 	}{
 		{name: "default"},
 		{name: "hiring only", hiring: true},
@@ -74,20 +74,43 @@ func TestLiveListCompaniesAcrossFilters(t *testing.T) {
 		{name: "unknown sector", sector: UnknownFacetValue},
 		{name: "matches nothing", sector: "NoSuchSectorXYZ"},
 		{name: "combined", area: "Pune", stage: UnknownFacetValue, hiring: true},
+		{name: "field", field: "Engineering"},
+		{name: "level", level: "Senior"},
+		{name: "field and level", field: "Engineering", level: "Senior"},
+		// The two buckets that exist only as a COALESCE default. They match no
+		// stored value, so a filter written without that default returns zero
+		// rows for both while the chips advertise thousands.
+		{name: "default field bucket", field: "Other"},
+		{name: "default level bucket", level: "Unspecified"},
+		{name: "facet with area", field: "Engineering", area: "Bengaluru", hiring: true},
 	}
 	for _, c := range cases {
-		rows, total, err := ListCompanies(c.sector, c.stage, c.area, c.q, c.hiring, 1, 5)
+		byFacet := c.field != "" || c.level != ""
+		rows, total, err := ListCompanies(c.sector, c.stage, c.area, c.q, c.field, c.level, c.hiring, 1, 5)
 		if err != nil {
 			t.Errorf("ListCompanies(%s): %v", c.name, err)
 			continue
 		}
 		t.Logf("ListCompanies(%s): %d rows, total %d", c.name, len(rows), total)
 		for _, r := range rows {
-			// The badge and the sort key are the same column now, so a row
-			// whose count disagrees with its own field is a bug in the write
-			// path rather than in the query.
-			if r.JobCount != int64(r.OpenRoles) {
-				t.Errorf("%s: job_count %d != open_roles %d", r.Name, r.JobCount, r.OpenRoles)
+			switch {
+			case byFacet:
+				// Under a facet the badge counts that bucket, so it is a subset
+				// of the company's roles — and never zero, because a company
+				// with no matching role should not have been listed at all.
+				if r.JobCount <= 0 {
+					t.Errorf("%s: listed under %s/%s with job_count %d", r.Name, c.field, c.level, r.JobCount)
+				}
+				if r.JobCount > int64(r.OpenRoles) {
+					t.Errorf("%s: bucket count %d exceeds its own open_roles %d", r.Name, r.JobCount, r.OpenRoles)
+				}
+			default:
+				// The badge and the sort key are the same column now, so a row
+				// whose count disagrees with its own field is a bug in the write
+				// path rather than in the query.
+				if r.JobCount != int64(r.OpenRoles) {
+					t.Errorf("%s: job_count %d != open_roles %d", r.Name, r.JobCount, r.OpenRoles)
+				}
 			}
 			if r.Lat == nil || r.Lng == nil {
 				t.Errorf("%s: listing returned no coordinates", r.Name)
@@ -110,7 +133,7 @@ func TestLiveTotalOpenRoles(t *testing.T) {
 	if err != nil {
 		t.Fatalf("TotalOpenRolesFast: %v", err)
 	}
-	joined, err := TotalOpenRoles("", "", "", "")
+	joined, err := TotalOpenRoles("", "", "", "", "", "")
 	if err != nil {
 		t.Fatalf("TotalOpenRoles: %v", err)
 	}

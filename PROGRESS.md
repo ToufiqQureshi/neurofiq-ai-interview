@@ -1,485 +1,279 @@
 # Progress Log
 
-## 2026-09-08
-- **Playwright MCP Server Configuration**: Registered `@playwright/mcp@latest` in global Antigravity MCP config (`~/.gemini/config/mcp_config.json`) alongside project `.mcp.json`. Added the `-y` (`--yes`) flag to the `npx` argument array to prevent headless stdio process blocking on interactive package installation prompts.
+---
 
-## 2026-09-07
-- **Free Discovery Pipeline Production Integration**: Migrated the 100% free DuckDuckGo + txtai semantic search pipeline into the production Go and Python microservices. Exa/Tavily discovery is now throttled to 1h intervals (`backend-go/main.go`), while the free discovery rotates seed queries every 3 minutes.
-- **100% Free Company Extraction Script**: Created `extract_100_bengaluru_companies.py` to scrape 100 Bengaluru tech companies with ATS boards using DuckDuckGo search (`ddgs`), completely bypassing paid APIs (Exa/Tavily). Includes dynamic delay and name cleaning, successfully generating `bangalore_100_tech_companies_ats.csv`.
-- **Crawler & Scraper Purge (Common Crawl, IndianStartupMap, NSE)**: Completely removed all legacy batch scrapers and offline candidate queues (`slug_source_nse.go`, `slug_source_register.go`, `slug_harvest_schedule.go`, `slug_harvest.go`, `candidate_queue.go`, `models.BoardCandidate`, `models.HarvestState`, `startupindia_tech_companies.csv`). Removed startup register and NSE collection crons from `main.go`.
-- **Search & Scraping Consolidation (Exa, Tavily & Firecrawl)**: Standardized company and ATS board discovery strictly onto **Exa** (primary) and **Tavily** (fallback) via `search_provider.go` with domain filtering across 10 major ATS platforms. Consolidated dynamic JavaScript careers page scraping onto **Firecrawl** (`FetchRenderedPage` in `scrape_service.go`). Updated `/api/pipeline/health` to monitor search budget and scraping quotas directly.
-- **Test Suite & Build Verification**: Cleaned up `live_db_test.go` and `hostlimit_test.go`, verified clean Go build (`go build .`), and passed all services unit tests (`go test -v ./services`).
-- **Custom Production Glass Popover Dropdowns (`CustomDropdown.tsx`, `CompanyMap.tsx`)**: Replaced native browser `<select>` dropdowns ("All sectors", "All stages") with custom Linear/Stripe-style floating glassmorphic popover dropdowns with outside-click detection, keyboard `Escape` dismissal, rotating chevrons, active checkmark badges, and dark/light support.
-- **Company Description Metadata Extraction & Fallback Engine (`enrichment.go`, `company_controller.go`)**: Implemented root-domain fallback scraper (`fetchSiteMetaWithFallback`) extracting clean 1-2 sentence descriptions from `<meta name="description">`, `og:description`, and `twitter:description`. Created high-concurrency batch worker `EnrichAllPendingCompanies` (`POST /api/admin/enrich-companies`). Added smart frontend description fallback with `line-clamp-2 min-h-[34px]` ensuring uniform card heights.
-- **Exa Multi-Location Board Discovery Engine (`board_discovery.go`, `company_controller.go`)**: Implemented `RunMultiCityDiscovery` enabling automated and manual discovery sweeps across major Indian tech hubs (Bengaluru, Mumbai, Gurgaon/Delhi, Hyderabad, Pune, Chennai, Noida) with 1s pacing and `schedulerReserve()` search budget safeguards. Updated `POST /api/admin/run-discovery?sweep=true` to trigger multi-city discovery.
-- **CI Fixes (TypeScript & Go Formatting)**: Fixed TypeScript TS1484 error in `CustomDropdown.tsx` by using type-only import for `type ReactNode` per `verbatimModuleSyntax`. Cleaned and formatted all Go files (`company_controller.go`, `directory_counters.go`, `enrichment.go`, `job_facets.go`, `job_service.go`) via `gofmt -w .` ensuring 100% compliance with GitHub Actions CI.
-- **Global Jobs Portal Scope & Work Type Filters (`job_service.go`, `company_controller.go`, `JobsPortal.tsx`)**: Extended `ListGlobalJobs` to support `work_type` (`Remote` vs `On-site`) and `scope` (`tech` vs `non-tech` role partitioning). Added interactive Tech / Non-Tech scope toggle and mapped preference filters to API parameters.
-- **CI Test Fix (`job_facets.go`, `job_facets_test.go`)**: Resolved `go test -race ./...` CI failure in `TestClassifyLevelAdmitsWhenUnknown` and `TestClassifyLevelManagerIsNotSeniority`. Cleaned up overly broad `Mid` keywords ("engineer", "developer", "product manager") that were overriding unadorned titles and managers. Restored explicit seniority rung markers (`sde 2`, `sde ii`, `mid-level`, ` ii`), keeping generic titles as `Unspecified`.
-- **Startup Register Cursor Pagination (`slug_source_register.go`)**: Added persistent `registerCursorSource` in `HarvestState` to paginate forward across ticks through accelerator portfolios rather than repeatedly reading the first 25 entries.
-- **Linter & Build Integrity**: Fixed unused helper warning in `enrichment.go`, verified clean Go build (`server.exe`), `go test ./services`, and `go vet ./...`.
+## 2026-09-09 — Discovery moved out of Go; Job Map roughly doubled
 
-## 2026-09-05
-- **Job Map UI Spacing & Layout Polish (`CompanyMap.tsx`)**: Fixed crammed UI elements touching browser edges by introducing generous container padding (`p-4 sm:p-6 lg:p-8 max-w-[1600px] mx-auto`). Cleaned up vertical rhythm: added subtle divider under header, comfortable spacing (`gap-2.5`) for Tech Hub chips, uniform pill padding (`py-2.5 px-4`) across search & dropdown filters, and grouped `FIELD` / `LEVEL` facets into a dedicated rounded card (`rounded-2xl p-4 shadow-2xs`) with distinct count badges.
-- **3-Tier Job Seniority Classification Algorithm (`job_facets.go`, `directory_counters.go`)**: Solved the "Unspecified (2,812)" jobs bottleneck where ~40% of jobs had unknown levels due to ATS scrapers importing raw recruiter titles. Adopted the industry-standard Radford/Levels.fyi IC framework: standalone IC titles ("Software Engineer", "Product Designer", "Product Manager") without prefixes map to Mid-level (IC2, 2-4 yrs); added sales/bizdev junior tokens (`analyst`, `coordinator`, `assistant`, `bdr`, `sdr`) and executive lead tokens (`head`, `group product manager`, `partner`). Reclassified all 7,459 active jobs via batch cursor pagination (`WHERE id > lastID`). Results: Mid roles surged from 90 to 1,396, Junior grew from 236 to 717, and Unspecified dropped from 2,812 down to 1,517.
-- **2-Tier In-Memory Caching & HTTP Cache-Control (`company_controller.go`)**: Eliminated repeated Supabase PostgreSQL queries on browser refresh. Added thread-safe in-memory cache using `sync.RWMutex` (60s TTL for `/api/companies`, 30s TTL for `/api/companies/stats`) with automatic query parameter keying and invalidation hooks. Added HTTP headers `Cache-Control: public, max-age=60, stale-while-revalidate=120` and `X-Cache: HIT/MISS`. Subsequent requests drop from ~300ms to 2.4ms with 0 database queries on cache hits.
-- **Go Workspace Configuration (`go.work`)**: Configured root `go.work` linking `./backend-go` at Go 1.25.0, enabling `gopls` language server and `go vet` to resolve multi-module dependencies cleanly.
-- **Codebase Dead Code & Logic Audit (`gopls` / `deadcode`)**: Conducted whole-program static analysis across `backend-go` using Go analysis tools and `deadcode -test`. Removed unused legacy helpers (`RequireOK` in `httputil.go`, `SummarizeHistory` in `github_commits.go`, unused `fmt` imports) resulting in 0 unreachable functions.
-- **Critical Bug Fix - Global Jobs Route (`GET /api/jobs`)**: Resolved missing router entry in `main.go`. The frontend Jobs Portal was previously receiving 404s when querying global positions because `controllers.HandleGetGlobalJobs` and `services.ListGlobalJobs` were disconnected at the Gin router level. Registered `r.GET("/api/jobs", controllers.HandleGetGlobalJobs)`, restoring search and pagination across 7,400+ active roles.
-- **Common Crawl Purge**: Removed Common Crawl entirely (`slug_source_commoncrawl.go` deleted, tests/crons/flags cleaned up) and purged 11,994 junk candidates from Supabase DB to protect against foreign job clutter and ATS 429 throttling.
-- **Fast 2m/3m Ingestion Cadence**: Set IndianStartupMap collection to `@every 3m` and candidate admission to `@every 2m`, ensuring newly discovered Indian tech companies are evaluated and admitted rapidly.
-- **Services Architecture Guide**: Documented all 38 files in `backend-go/services/` inside `backend-go/services/README.md` across 5 clear architectural domains (Discovery, Jobs & ATS, Directory, AI Interviews, Infrastructure).
-- **Compilation & Verification**: `go vet ./...` clean, all unit tests passing (`services 1.259s`), and `server.exe` running with 100% green pipeline health (`/api/pipeline/health`).
+**602 → 1,189 companies. 8,387 → 15,704 jobs.** Two threads ran through the day:
+the Job Map directory page, and where companies actually come from.
 
-## 2026-09-04
-- **Email Integration**: Integrated Resend API in Go backend (`ats_controller.go`) for automated magic link delivery, replacing placeholder text response.
-- **Enterprise UI Revamp**: Completely redesigned the React Landing Page (`LandingPage.tsx`) with a premium B2B SaaS aesthetic (dark mode, glassmorphic layout, glowing borders) shifting focus to recruiters and hiring managers.
-- **Production Infrastructure**: Dockerized the entire platform by creating `Dockerfile`s for Go, Python, and React (Nginx), and authored a root `docker-compose.yml` encapsulating Postgres and all microservices for 1-click deployment.
+### The directory page: four bugs, all found by driving it
 
-## 2026-09-03
-- **Slug harvesting: boards without paying a search for each one (`slug_harvest.go`, `slug_source_commoncrawl.go`, `slug_source_register.go`)**: Discovery costs 2.02 metered searches per company — 293 of Exa's 800 monthly calls bought 145 companies in September, capping the month at roughly 400 however fast the cron runs. But boards are public pages a crawler has already indexed, so the list can be read instead of rediscovered: one Common Crawl index yields 13,501 slugs across the eight readable providers for ~20 requests and no metered call. Admission is unchanged — a harvested slug is a candidate that must pass the same gate a search hit does (`FetchATSJobs`, `maxBoardRoles`, `firstIndianLocation`, `boardRowIsAdmissible`, dedupe). Two sources feed one gate: Common Crawl for jobs, the startup register for the sector/stage/coordinates no board API reports.
-- **Bug in the first run: the page walk stopped on the first CDX error.** Requesting pages back to back had Common Crawl answer 504, and a 504 was treated as "no more pages" — 748 Greenhouse slugs collected where a paced walk finds 3,954, and zero for the host whose *first* page failed. A 400 is genuinely the end of the walk; a 5xx is the index saying it is busy. Now separated, with three retries and a 2s gap between pages.
-- **`looksIndian` strengthened for harvest scale.** Added the 36 states and UTs, because boards write "Mumbai MH" and "Kutch - Gujarat" and those were read as not-Indian — which rejects the whole company when they are its only Indian roles. Added a foreign-marker rule for the opposite failure: "Bangalore, Mexico" is a real row and passed the city test. A foreign country now disqualifies a location only when nothing in it names India or an Indian state, so "Bengaluru, Karnataka, India; Pleasanton, United States" still counts. Measured against 30,000 real board postings: 0.1% false negatives before the states, 0.37% carrying a foreign marker.
-- **Talent-pool postings are not vacancies.** The harvest's first run surfaced Affinidi's "Be Part of our Talent Community" as that company's only Indian role. It is a posting by every structural measure — own id, own apply URL, a location — so nothing upstream rejected it. `looksLikeRoleTitle` now matches the phrase, narrowly enough that "Talent Acquisition Specialist" and "Application Security Engineer" survive.
-- **`findDuplicateCompany` does not scale to a harvest.** It reads the whole companies table per call, which is free at five calls a tick and a table scan per candidate at 13,501. The harvest builds the same index once (`directoryIndex`) and updates it as the run goes, so two candidates for one business inside a single run cannot both be written.
-- **Live ATS Feed Engine & Global Search API (`GET /api/jobs`)**: Added high-performance PostgreSQL query in Go backend (`services.ListGlobalJobs`) searching 3,550+ active jobs across 212 verified hiring companies with intelligent tech synonyms (`Golang` -> `Go/Backend`, `AI/ML` -> `Data/Machine Learning`), location filtering, and pagination.
-- **Joblet.ai-Inspired Job Discovery Portal (`/jobs`)**: Built and launched an ultra-premium 3-column discovery portal featuring luxury editorial typography (`Fraunces` / `Newsreader` serif), subtle background grid lines, horizontal trending roles carousel, and real-time ATS verified feeds.
-- **On-Demand Floating Company Drawer (`CompanyDrawer.tsx`)**: Integrated on-demand `/api/companies/:id` fetching into fixed overlay drawer (`z-[999]`) showing live hiring counts, active role accordion, direct careers link, and instant AI mock interview CTA.
-- **Unified Multi-Modal Search Capsule (`UnifiedSearchCapsule.tsx`)**: Integrated text/keyword search, browser-native Voice Recognition (Web Speech API), and tech sub-hub location dropdown into a single floating capsule.
-- **Interactive Natural-Language Preference Filter (`PreferenceSentenceFilter.tsx`)**: Conversational sentence builder with dynamic dropdown highlights (*"I am a [Role] looking for [Experience] [WorkType] in [Location] ➔"*).
-- **1-Click AI Mock Interview CTA Integration**: Linked real company job cards directly to Neurofiq's tailored AI mock interview engine (FastAPI + DeepSeek) passing pre-filled role and company context (`/dashboard?practice_job=...&company=...`).
-- **Phase 1: B2B Enterprise UI Revamp**: Rebuilt the interview session page (`InterviewSession.tsx`) into a 2-panel "Studio" layout featuring a Monaco Editor for live-coding, an anti-cheat tab-switch monitor, and a persistent Picture-in-Picture (PiP) camera view replacing the old text boxes.
-- **Phase 2: Live Audio Streaming via WebSocket Gateway**: Ripped out the browser's native `SpeechRecognition` API. Built a secure Go WebSocket Gateway (`ws_controller.go`) that pipes raw WebM audio from React (`MediaRecorder`) directly to Deepgram (Nova-2), and streams JSON transcripts back to the browser for instant subtitles.
-- **Phase 3: Go ↔ Python gRPC Pipeline**: Established an internal microservice streaming architecture. Defined shared Protobufs (`interview.proto`), built a Python gRPC server alongside FastAPI, and implemented a Go gRPC client that passes Deepgram's final transcripts to the LLM and forwards AI responses back to the React UI.
+Audited `/directory` in a real browser rather than by reading the code.
 
-## 2026-09-02
-- Formatted entire Go codebase with `gofmt -w .` to resolve GitHub Actions CI lint failure (`gofmt -l .`).
-- Merged `job-map-data-integrity` into `main` and pushed to GitHub: encompasses pan-India role attribution guards, whole-word location matching, boot/cron `ReapplyGuards` cleanup, homepage-based metadata enrichment, and Profile Radar (`/radar`) feature.
-- Installed and activated `claude-mem` v13.23.1 with Antigravity CLI lifecycle hooks, MCP integration, and background worker daemon.
+Working already: Grid/2D/3D toggle, all six Tech Hub pills, search, sector and
+stage dropdowns, hiring-only toggle, Load more, map clustering, stats strip.
 
-## 2026-09-01
-- Created **Production Checklist & High-Scale Architecture Guide (`PRODUCTION_CHECKLIST.md`)**: comprehensive roadmap covering Redis caching, PgBouncer connection pooling, Asynq background task queues, distributed token-bucket rate limiting, PostgreSQL read replicas, and Prometheus/Sentry observability for scaling to millions of users.
-- Built **Floating Company Inspector Drawer (`CompanyDrawer.tsx`)** inspired by BangaloreStartupMap / Airbnb: clicking any startup pin slides in a rich details card on the right containing company bio, funding stage, direct career/website links, active job roles, and 1-Click AI Mock Interview CTA.
-- Optimized Map Layout & Above-the-Fold Viewport: shifted stat cards to Grid-only mode so 2D and 3D map views load immediately visible with zero vertical scroll required.
-- Added **Interactive Open Roles Popup Accordion / Toggle (`CompanyJobList.tsx`)** to both 2D Leaflet and 3D MapLibre popups: candidates can click on `[ 💼 N open roles ▼ ]` directly on any map marker to expand the list of active job postings with 1-Click AI Mock Interview triggers and direct career application links.
-- Cleaned up Map controls: removed duplicate internal 2D/3D toggle from MapLibre canvas, establishing the top-right header `[ ⊞ Grid | 🌐 2D Map | ✨ 3D Map ]` switcher as the single source of truth.
-- Added 3-Way Directory View Switcher (`[ ⊞ Grid | 🌐 2D Map | ✨ 3D Map ]`) allowing candidates and recruiters to toggle between classic Grid Cards, standard 2D Leaflet map, and GPU-accelerated MapLibre GL 3D perspective.
-- Integrated **MapLibre GL (`maplibre-gl`) WebGL 3D Map Engine** (`MapLibreCompanyMap.tsx`) with 55° camera tilt perspective, 3D compass navigation, 2D/3D angle toggle, and city boundary locking.
-- Implemented Strict City Boundary Locking & Zoom Clamping: configured `maxBounds` with `[lng, lat]` format and `minZoom` per Tech Hub so users cannot pan outside or zoom out beyond the chosen urban tech corridor.
-- Built Dead Jobs Auto-Pruner (`PruneDeadJobs` & `POST /api/jobs/prune-dead`) with concurrent HTTP link validation, automatically scanning active job URLs and purging 404/410/expired postings from the database.
-- Implemented BangaloreStartupMap-style precision tech sub-hub geocoding across major Indian tech clusters (HSR Layout, Koramangala, Indiranagar, Bellandur, Whitefield, EGL Domlur, Electronic City, Cyber City, BKC, Powai, Hinjawadi, etc.), eliminating single-point marker stacking.
-- Configured Leaflet MarkerCluster with dynamic city-zoom unclustering (`disableClusteringAtZoom={11}`, `maxClusterRadius={25}`) to display individual circular company logo pins across urban neighborhoods.
-- Added live "Clean Dead Jobs" instant action button on directory header with feedback toasts.
-- Implemented Pan-India Tech Hub filter switcher (All Hubs, Bengaluru, Delhi NCR, Mumbai, Hyderabad, Pune) with instant viewport flying and dynamic cluster zoom.
-- Upgraded Leaflet map to 3D-styled CartoDB/OpenStreetMap tiles and added 1-Click "🎯 Practice AI Mock Interview" action within map popups and job listings.
-- Review pass on the board-discovery branch, six fixes: `resolveCompanyWebsite` fallback to `WebSearch`, link scan department filters, empty read retry guards, and rate-limit controls for `POST /api/companies/discover`.
+Broken, and fixed:
 
-## 2026-08-31
-- **Email + Password Authentication & Bcrypt Password Hashing**: Implemented `/auth/register` and `/auth/login` endpoints in Go with `bcrypt.GenerateFromPassword` and `bcrypt.CompareHashAndPassword`, setting session cookies on registration and login.
-- **Candidate Onboarding Flow (`/onboarding`)**: Created a 3-step interactive onboarding wizard (`Onboarding.tsx`) allowing candidates to select their Experience Level (Fresher, Mid-Level, Senior), College/Company, Target Role, Tech Stack badges, LinkedIn profile, and Interview Goals.
-- **Database Schema & Route Guarding**: Updated `models.User` in Go with `PasswordHash`, `FullName`, `ExperienceLevel`, `TargetRole`, `TechStack`, `LinkedInURL`, `IsOnboarded`, and nullable `GithubID`. Configured `ProtectedRoute` in React to automatically redirect un-onboarded candidates to `/onboarding`.
-- **Automated Playwright E2E Test Suite**: Ran full browser verification covering signup -> onboarding wizard -> dashboard landing -> logout -> direct dashboard login with 100% pass rate.
-- **Company Directory Stats Endpoint**: Registered `GET /api/companies/stats` before `GET /api/companies/:id` in `main.go` to provide global directory metrics (total companies, hiring companies, open jobs, fresh postings).
-- Configured Free Claude Code proxy (`http://127.0.0.1:8082/admin`) with OpenRouter API integration and set default routing model to `openrouter/z-ai/glm-5.3-flash`.
-- Configured OpenCode (`~/.config/opencode/opencode.json`) with OpenRouter API integration for GLM models (`z-ai/glm-5.3-flash` and `z-ai/glm-5.2`).
-- Merged the launch-hardening branch, minus the recruiter invite funnel: sharing
-  is candidate-owned, so a recruiter minting invite links was the wrong
-  direction. Removed 1,118 lines across 8 files plus its wiring; the share slug
-  and public report page were untouched and the invite was already optional at
-  submit, so nothing in the candidate path depended on it.
-- Found the real reason the directory carried dead companies. Of the 26 stored
-  with no careers page at all, 62% were D2C and 88% were pre-Series-A: the
-  discovery agent was returning small Shopify storefronts, which have no careers
-  page because they do not hire. Three fixes: a post-hook on the discovery agent
-  that drops aggregator URLs (LinkedIn, Crunchbase, Tracxn) and duplicate hosts
-  and raises so Agno retries when a run yields nothing usable; agent instructions
-  that ask for companies which actually employ people; and — the part that is a
-  guarantee rather than a request — a gate in Go that refuses to store a company
-  whose careers page cannot be resolved. Purged the 26 already stored.
-- Added Darwinbox, common across Indian employers. Its board is a POST search
-  endpoint that answers a bare client with a bot-check page, so the request
-  carries the headers a browser sends from the careers page; that keeps it on
-  the free path instead of costing a rendered scrape. Verified against five
-  tenants: 24, 77 and 54 roles, one genuinely empty board, and one 403 no header
-  set clears (the check is on the TLS fingerprint).
-- Repaired PROGRESS.md. Bytes 684–10038 were UTF-16LE inside an otherwise UTF-8
-  file — 2,364 interleaved NULs, which is why git had been treating it as binary.
-- Configured Playwright MCP server (`@playwright/mcp`) in `.agents/mcp_config.json` and `.mcp.json` with `-y` auto-confirm flag to prevent stdio process hanging.
+1. **FIELD and LEVEL chips filtered nothing.** Clicking "Engineering 3210" lit
+   the chip and left all 630 companies on screen. `field`/`level` never reached
+   `buildURL()`, were missing from the effect's dependencies, and
+   `/api/companies` did not accept them at all. Added them end to end: an
+   `EXISTS` subquery in `ListCompanies` (opt-in, so the common no-facet path is
+   still the single-table scan it was designed to be), matching
+   `COALESCE(NULLIF(jobs.field,''),'Other')` exactly as `JobFacets` counts — the
+   "Other" and "Unspecified" buckets exist only as that default, so any other
+   spelling would match nothing while the chip advertised thousands. Verified:
+   630 → 504 companies for Engineering, 360 for Engineering+Senior.
 
-## 2026-08-27
-- Restricted GitHub repository fetch limit to 3 repos max inside Go backend service.
-- Implemented `/auth/me` endpoint in Go and global `AuthContext` in React to fix session loss on browser refresh.
-- Added `ProtectedRoute` in React to prevent unauthorized access to dashboard routes without login.
-- Added IP-based rate limiting (5 req/sec) to the Go backend API routes for abuse prevention.
-- Generated a formal Production Readiness Checklist for future deployment planning.
+2. **An expanded card could not be closed.** The footer carrying the toggle got
+   `hidden` when the card opened, so the only control that would collapse it
+   disappeared — along with the Website link. Footer now stays; the button reads
+   "Hide roles" with a rotated chevron.
 
-- Performed full-repo ponytail audit to reduce bloat
-- Cleaned up redundant auth checks in backend Go controllers
-- Compressed repetitive React useEffect fetch promise chains using optional chaining
-- Removed dead mock link code from InterviewSession frontend
+3. **The badge disagreed with the list.** A card said "40 open" and then listed
+   3, because the roles inside were filtered by the chips while the badge came
+   from `companies.open_roles`. Under a facet the badge is now a correlated
+   count of that bucket.
 
+4. **404px of horizontal overflow on a phone.** `main` is `flex-1`, which
+   defaults to `min-width:auto` — its content's intrinsic width. The tech-hub
+   pill row is wider than 375px, so the whole page scrolled sideways instead of
+   that one row scrolling inside its own `overflow-x-auto`. `min-w-0` on `main`
+   fixed it; overflow went 404px → 0, desktop unchanged.
 
-- Transitioned hardcoded URLs to Environment Variables (VITE_API_URL and FRONTEND_URL)
-- Hardened cookie security with HttpOnly, Secure (in production), and SameSite=Lax flags
-- Verified Python API is protected by INTERNAL_SECRET dynamic check, preventing unauthorized DeepSeek quota usage
+### Why discovery was slow — three findings, in the order they mattered
 
-- Decision: Deferred Razorpay billing integration (Step 13) to Phase 2, focusing purely on core functionality first.
-- Redesigned InterviewSession UI to feature a side-by-side 'Google Meet' style layout integrating the camera preview prominently alongside the AI question visualizer.
-- Updated AI Worker schema (AnalysisResult) to capture 3-5 line 'code_snippets' and 'file_references', enabling context-aware and deeply technical interview questions.
-- Updated Architecture docs to emphasize production-grade scaling decisions (in-memory processing, Go concurrency, ETags, decoupled Postgres).
+**Quoted phrases were halving Exa's yield.** The ATS-dorking query shape
+(`site:jobs.lever.co "Bengaluru" "Software Engineer" India`) is a *Google*
+technique. Measured on one slot: the dork form returned 47 results and 23
+distinct companies; the same slot as a plain sentence returned 100 and 45,
+including 28 companies the dork form never surfaced. Dropping `site:` alone
+changed nothing — the quotes are what did the damage. Exa and the free keyword
+engines now each get the syntax they actually read.
 
+**Every "domain-specific" query was searching all 15 domains.** Exa's own docs
+say not to put `site:` in the query and to use `includeDomains` instead. The
+code did both — `site:X` in the text, and the full `boardSearchDomains` list in
+the parameter. So the rotation's domain axis did nothing for Exa, and the same
+well-linked companies dominated every tick. Scoped `includeDomains` to the one
+host the slot targets; confirmed at the wire with a temporary log:
+`includeDomains=[keka.com]`, not fifteen.
 
-## 2026-08-28 (Job Map feature + security/QA/UI audit)
+**The daily cap, not the cadence, was the throttle.** The directory went 743 →
+744 in an hour with the cron at 4 minutes. The logs showed only the free engines
+ticking: `tavily … today: 31/30` — both paid sources had met their daily target
+by early afternoon and returned silently for the rest of the day. Raised, and
+the rotation resumed immediately (`today: 74/400`). Also removed a fixed
+five-company-per-tick storage cap that discarded results already paid for, and
+raised `boardResultsPerQuery` 25 → 100 (Exa's own ceiling; the same one credit
+buys either).
 
-- Built the **Job Map** (/directory) - an automatic startup + real-jobs directory, replacing the disabled Job Map sidebar placeholder. A Go cron (@every 6h + one run at startup) rotates 24 seed queries through an Agno discovery_agent (DeepSeek + DuckDuckGo + structured output), upserts companies deduped by domain, geocodes them via free Nominatim/OSM, and exposes them on a public /api/companies. Frontend has a grid + Leaflet map toggle with clustering and filters. No data is scraped from bangalorestartupmap.com - it was inspiration only.
-- **Real job listings, not just careers links**: services.DetectATS finds a company Greenhouse/Lever board with pure HTTP (regex the careers page for an embedded board link, else verify a slug guess against the API) - deliberately NOT via the LLM, which is unreliable and costs tokens per company. SyncJobsForCompany then pulls live roles from the official public Greenhouse/Lever JSON APIs, dedupes on (company_id, url), and drops closed postings. Verified live: Razorpay -> 20 real roles, re-sync idempotent (no dupes); Zerodha correctly detected as having no ATS.
-- Gave the two **candidate-facing** Agno agents (questions_agent, evaluation_agent) hiring-manager instructions so they sound like a real interviewer; left the two internal agents alone to avoid paying tokens for persona nobody reads. Verified live with a generated question that referenced the candidate actual adapter-pattern code.
-- **Security/correctness audit - 10 findings, all fixed**: OAuth CSRF state was a hardcoded literal (zero protection) -> now crypto/rand + session-bound, one-time use; INTERNAL_SECRET fell back to a source-visible default -> now fails closed; OAuth redirect hardcoded to localhost -> now FRONTEND_URL; background goroutine had no recover() (one bad repo could crash the process for every user) -> added; camera kept streaming after toggle-off -> fixed the async race; PYTHON_WORKER_URL fallback still pointed at the dead port 8000 in 4 files -> 8001; **TOCTOU race let users exceed the 3-repo limit** -> now a per-user Postgres advisory lock, verified with a 6-way concurrency test (exactly 3 succeeded); global rate limiter -> per-IP; status endpoint reported DB errors as processing (frontend polled forever) -> now distinguishes them; getDefaultBranch ignored HTTP status -> now checks it.
-- **Bonus bug caught while testing** (not in the audit): the new pending-placeholder row wrote an empty string into analysis_json, a jsonb column that Postgres rejects - EVERY analyze request would have failed. Fixed to "null".
-- **UI/UX pass** (desktop + 390px mobile, live and logged in): removed a duplicate NeuroFIQ logo in the mobile sidebar; added the missing dimmed backdrop + tap-to-close; fixed the landing page Voice mode card overflowing on mobile; hid the empty Strengths block on skipped questions in the report; relabeled the misleading Dashboard Connected Repos stat to Repos Interviewed; fixed Job Map logos silently falling back to a generic globe (Google favicon endpoint returns a 16x16 placeholder that still decodes, so onError never fired -> now also checks naturalWidth); fixed the map showing only the first page of companies and not fitting the viewport to its pins.
-- Verified throughout with go build ./..., go vet ./..., tsc -b, and live in-browser testing against the real logged-in app.
+### Search left Go
 
-## 2026-08-29 (Job Map: 4 more ATS platforms)
+Tested SearXNG self-hosted on Railway behind a residential proxy against the
+paid API: **51 distinct companies from one query walked five pages, versus 45
+for one Exa call.** Free, and deeper. The catch is pacing — five pages back to
+back put every upstream engine into CAPTCHA within ~13 requests and the instance
+returned nothing for minutes; the same five pages 6–10s apart tripped nothing.
 
-- Added **SmartRecruiters, Ashby, Workable and Keka** to the ATS job-sync pipeline (Greenhouse + Lever were already there). Same pattern: regex the careers page HTML for an embedded board link, else guess the slug and verify against the provider API. No new deps, no DB change, no frontend change.
-- **Keka finding**: their official developer API is partner-gated, but every Keka-hosted careers portal exposes `<slug>.keka.com/careers/api/jobs/default/active` publicly with no auth - found it by watching the network tab on a real Keka careers page. The read path has to be public because visitors are not logged in; the gated API is for HR admins writing data.
-- **Bug found and fixed**: the Greenhouse regex missed regional boards. Groww uses `job-boards.eu.greenhouse.io`, which the old `(?:boards|job-boards)\.greenhouse\.io` pattern did not match. Now allows an optional region segment.
-- **Bug found and fixed**: the periodic sync only queried companies where `ats_type != ''`, so any company whose detection failed once was never re-checked. That meant adding new ATS providers would have had zero effect on existing rows - only newly-discovered companies would benefit. Renamed to `SyncAllCompanyJobs` and it now re-detects companies with no ATS on every tick, and logs a summary line.
-- Added a validity filter: rows missing title or url are dropped before upsert, so a provider shape change cannot write junk rows.
-- **Verified end-to-end against live boards** (throwaway companies, cleaned up after): Swiggy 75 (SmartRecruiters), Freshworks 100 (SmartRecruiters), Ramp 138 (Ashby), Meesho 48 (Lever), Groww 5 (Greenhouse), plus a Keka board parsing multi-location correctly. Re-sync on each was idempotent - no duplicate rows.
-- **Verified on the real directory**: after restart, re-detection found 3 companies that previously showed no jobs. Jupiter -> 12 real roles via Keka, Turtlemint and Upstox via SmartRecruiters. Confirmed in the browser UI with departments and locations rendering.
-- **Not verified**: Workable. Its widget endpoint responds 200 and returns a well-formed empty array, and the v3 POST endpoint returns '{"total":0,"results":[]}' - but none of ~20 sampled slugs had active postings, so the parse path has never seen real data. Implemented per the documented shape; treat as unproven until a live Workable board with jobs is found.
-- PhonePe now returns 404 from Greenhouse (previously had a board). Correctly detected as no-ATS - not a bug.
+So discovery is now `scripts/discover_companies.py`, and Go no longer searches.
 
-## 2026-08-29 (Workday + Firecrawl/Jina + credit guards)
+Removed from Go: `RunDiscoveryRotation`, `RunFreeDiscoveryRotation`,
+`runRotationSource`, `DiscoverFromBoards`, `DiscoverFromBoardsManual`,
+`discoverFromBoards`, `boardHitsFor`, `RunMultiCityDiscovery`, the seed
+query/city/role tables, daily targets, the scheduler reserve, `mayStartLookup`,
+both cron schedules, the startup discovery run, `POST /api/admin/run-discovery`,
+`POST /api/companies/discover` and its rate limiter, and eight tests.
+`board_discovery.go` went 1,688 → ~1,000 lines.
 
-- Added **Workday** support (7th ATS). Slug stored as `tenant:region:site`; the site id isn't in the URL so detection probes the common ones. Verified: BrowserStack -> 32 real roles, idempotent re-sync.
-- Added `services/scrape_service.go` - **Firecrawl primary, Jina Reader fallback**, both hosted so we never run headless Chrome ourselves. Auto-switches to Jina on budget-exceeded or any Firecrawl error. Usage tracked per month+provider in a new `scrape_usages` table and logged each sync.
-- `DetectATS` is now **three tiers, cheapest first**: plain HTTP -> hosted render (costs a credit) -> slug guess. Tier 2 only runs when tier 1 finds nothing.
+Kept in Go, deliberately — this is the half that was working:
 
-## 2026-08-28 (Job Map feature + security/QA/UI audit)
+- **`admitBoard`**, extracted from the old rotation loop so one function is the
+  only place a company is judged. Fund and marketplace names, a board we already
+  hold, the board's own API answering at all, the 2,000-role ceiling, hiring in
+  India, duplicate detection by name and by domain.
+- **`ImportBoards`** and `POST /api/admin/import-boards`, the way boards found
+  anywhere else get in. No metered lookup is allowed on this path, so an import
+  of hundreds of boards is free; a company whose site cannot be named for free
+  is reported as `unnamed` and left alone.
+- Hourly job sync, which is what actually produces the jobs — 1,189 companies'
+  boards re-read on a rotation, and the reason the role count moved as much as
+  it did.
 
-- Built the **Job Map** (/directory) - an automatic startup + real-jobs directory, replacing the disabled Job Map sidebar placeholder. A Go cron (@every 6h + one run at startup) rotates 24 seed queries through an Agno discovery_agent (DeepSeek + DuckDuckGo + structured output), upserts companies deduped by domain, geocodes them via free Nominatim/OSM, and exposes them on a public /api/companies. Frontend has a grid + Leaflet map toggle with clustering and filters. No data is scraped from bangalorestartupmap.com - it was inspiration only.
-- **Real job listings, not just careers links**: services.DetectATS finds a company Greenhouse/Lever board with pure HTTP (regex the careers page for an embedded board link, else verify a slug guess against the API) - deliberately NOT via the LLM, which is unreliable and costs tokens per company. SyncJobsForCompany then pulls live roles from the official public Greenhouse/Lever JSON APIs, dedupes on (company_id, url), and drops closed postings. Verified live: Razorpay -> 20 real roles, re-sync idempotent (no dupes); Zerodha correctly detected as having no ATS.
-- Gave the two **candidate-facing** Agno agents (questions_agent, evaluation_agent) hiring-manager instructions so they sound like a real interviewer; left the two internal agents alone to avoid paying tokens for persona nobody reads. Verified live with a generated question that referenced the candidate actual adapter-pattern code.
-- **Security/correctness audit - 10 findings, all fixed**: OAuth CSRF state was a hardcoded literal (zero protection) -> now crypto/rand + session-bound, one-time use; INTERNAL_SECRET fell back to a source-visible default -> now fails closed; OAuth redirect hardcoded to localhost -> now FRONTEND_URL; background goroutine had no recover() (one bad repo could crash the process for every user) -> added; camera kept streaming after toggle-off -> fixed the async race; PYTHON_WORKER_URL fallback still pointed at the dead port 8000 in 4 files -> 8001; **TOCTOU race let users exceed the 3-repo limit** -> now a per-user Postgres advisory lock, verified with a 6-way concurrency test (exactly 3 succeeded); global rate limiter -> per-IP; status endpoint reported DB errors as processing (frontend polled forever) -> now distinguishes them; getDefaultBranch ignored HTTP status -> now checks it.
-- **Bonus bug caught while testing** (not in the audit): the new pending-placeholder row wrote an empty string into analysis_json, a jsonb column that Postgres rejects - EVERY analyze request would have failed. Fixed to "null".
-- **UI/UX pass** (desktop + 390px mobile, live and logged in): removed a duplicate NeuroFIQ logo in the mobile sidebar; added the missing dimmed backdrop + tap-to-close; fixed the landing page Voice mode card overflowing on mobile; hid the empty Strengths block on skipped questions in the report; relabeled the misleading Dashboard Connected Repos stat to Repos Interviewed; fixed Job Map logos silently falling back to a generic globe (Google favicon endpoint returns a 16x16 placeholder that still decodes, so onError never fired -> now also checks naturalWidth); fixed the map showing only the first page of companies and not fitting the viewport to its pins.
-- Verified throughout with go build ./..., go vet ./..., tsc -b, and live in-browser testing against the real logged-in app.
+The split: **Python finds companies, Go decides which are real and keeps their
+jobs fresh.**
 
-## 2026-08-29 (Job Map: 4 more ATS platforms)
+### Two guards added after looking at what came in
 
-- Added **SmartRecruiters, Ashby, Workable and Keka** to the ATS job-sync pipeline (Greenhouse + Lever were already there). Same pattern: regex the careers page HTML for an embedded board link, else guess the slug and verify against the provider API. No new deps, no DB change, no frontend change.
-- **Keka finding**: their official developer API is partner-gated, but every Keka-hosted careers portal exposes `<slug>.keka.com/careers/api/jobs/default/active` publicly with no auth - found it by watching the network tab on a real Keka careers page. The read path has to be public because visitors are not logged in; the gated API is for HR admins writing data.
-- **Bug found and fixed**: the Greenhouse regex missed regional boards. Groww uses `job-boards.eu.greenhouse.io`, which the old `(?:boards|job-boards)\.greenhouse\.io` pattern did not match. Now allows an optional region segment.
-- **Bug found and fixed**: the periodic sync only queried companies where `ats_type != ''`, so any company whose detection failed once was never re-checked. That meant adding new ATS providers would have had zero effect on existing rows - only newly-discovered companies would benefit. Renamed to `SyncAllCompanyJobs` and it now re-detects companies with no ATS on every tick, and logs a summary line.
-- Added a validity filter: rows missing title or url are dropped before upsert, so a provider shape change cannot write junk rows.
-- **Verified end-to-end against live boards** (throwaway companies, cleaned up after): Swiggy 75 (SmartRecruiters), Freshworks 100 (SmartRecruiters), Ramp 138 (Ashby), Meesho 48 (Lever), Groww 5 (Greenhouse), plus a Keka board parsing multi-location correctly. Re-sync on each was idempotent - no duplicate rows.
-- **Verified on the real directory**: after restart, re-detection found 3 companies that previously showed no jobs. Jupiter -> 12 real roles via Keka, Turtlemint and Upstox via SmartRecruiters. Confirmed in the browser UI with departments and locations rendering.
-- **Not verified**: Workable. Its widget endpoint responds 200 and returns a well-formed empty array, and the v3 POST endpoint returns '{"total":0,"results":[]}' - but none of ~20 sampled slugs had active postings, so the parse path has never seen real data. Implemented per the documented shape; treat as unproven until a live Workable board with jobs is found.
-- PhonePe now returns 404 from Greenhouse (previously had a board). Correctly detected as no-ATS - not a bug.
+Checked the companies the new path stored rather than assuming they were fine.
+Real ones were arriving (MongoDB, Altisource, QAD, Xoxoday, Softobiz) — and so
+were these:
 
-## 2026-08-29 (Workday + Firecrawl/Jina + credit guards)
+- **Staffing firms that never say so.** "APAC Talent Attraction" is Cielo, an
+  RPO, stored as an employer with 98 roles belonging to its clients. The guard
+  had `staffing|recruitment|placements` and no word for this. Added the
+  business-model shapes: `talent(attraction|acquisition|partners|network|pool)`,
+  `rpo`, `bpo`, `outsourc`, `workforce`, `headhunt`. Deliberately *not*
+  "consulting" or "solutions" — Capco, Deloitte and QAD are consultancies and
+  are exactly who this directory is for; a test pins those ten names as allowed.
+- **Re-registration numbers defeated dedupe.** `adeebaeservicespvtltd` and
+  `adeebaeservicespvtltd3` were two rows for one business under two domains. An
+  ATS appends a number when a slug is taken, so `normalizeCompanyName` now
+  strips a trailing 1–2 digits when ≥4 characters survive. The threshold started
+  at 6, which read well against the long slug that prompted it and then failed
+  `acme2` and `asapp-2` — where the real duplicates were. The test caught that,
+  not a re-read.
 
-- Added **Workday** support (7th ATS). Slug stored as `tenant:region:site`; the site id isn't in the URL so detection probes the common ones. Verified: BrowserStack -> 32 real roles, idempotent re-sync.
-- Added `services/scrape_service.go` - **Firecrawl primary, Jina Reader fallback**, both hosted so we never run headless Chrome ourselves. Auto-switches to Jina on budget-exceeded or any Firecrawl error. Usage tracked per month+provider in a new `scrape_usages` table and logged each sync.
-- `DetectATS` is now **three tiers, cheapest first**: plain HTTP -> hosted render (costs a credit) -> slug guess. Tier 2 only runs when tier 1 finds nothing.
-- **Credit guard**: added `ats_checked_at` + a 7-day recheck interval. Without it every 6h tick re-scraped all ~23 ATS-less companies = ~2,400 credits/month against a 1,000 free tier. One real run had already burned 20.
-- **Bug: discovery failure blocked job sync entirely.** `RunDiscoveryRotation` returned early on error so `SyncAllCompanyJobs` never ran - one flaky web search meant zero job refresh for the whole tick. The two halves are independent now.
-- **Bug: unchecked `Find()` error.** A failed query produced an empty slice and logged '0 companies checked' as if normal. Now reports the error and distinguishes it from a genuinely empty directory.
-- **Bug: no timeout on the ai-worker call.** A stuck worker held the startup sync for ~3 hours (22:16 -> 01:09 in the logs). Now a 3-minute client timeout.
-- **Bug: ai-worker crash** - 'str' object has no attribute 'model_dump'. With tools enabled Agno doesn't always return a parsed model; raw JSON and markdown-fenced JSON are both normalised now.
-- **Result**: 35 -> 54 open roles. Zypp Electric contributed 19 via a Keka board that **only Firecrawl found** - plain HTTP missed it. Last sync: '27 companies checked, 1 newly detected, 54 open roles'.
-- Honest note: Firecrawl mattered less than expected for detection - BrowserStack's Workday link was already visible to plain HTTP. The bigger win was adding Workday itself; Firecrawl mainly revealed which platform was missing.
-- **Still open (highest priority): Nominatim has no rate limit.** Their policy is 1 req/sec and we call it once per new company with no throttle - real IP-ban risk.
-- **Ponytail cleanup**: Removed 78.4 MB of compiled binaries (`backend-go.exe`, `tmp_server`), scratch files, dev logs, and unused frontend boilerplate assets. Created a comprehensive root `.gitignore` to prevent binaries, secrets, and build logs from being tracked in git.
+### Also today
 
-## 2026-08-29 (later: dedupe, hiring-only filter, careers-URL resolver)
+- `.seen_boards.json` removed. A local memory of boards already sent had grown
+  to 1,827 entries and was skipping all of them permanently — including ones the
+  directory had only *temporarily* turned away. Go already knows what it holds
+  and says so in `rejected`; a second memory can only disagree, and when it does
+  it hides boards.
+- Exa removed from the script entirely. SearXNG is the only source now.
+- Import is batched at 25. One 110-board push stored its companies and *still*
+  reported a dropped connection, because the work outran the server's 120s
+  `WriteTimeout` — indistinguishable from a failure.
+- `.claude/skills/verify/SKILL.md` added: how to build, launch and drive this
+  service, including the AutoMigrate wait and the rotation-index gotcha.
+- This file rewritten. It had 2,364 interleaved NUL bytes (git treated it as
+  binary) and duplicate sections — 2026-08-29 appeared five times.
 
-- **Tier 4 added - careers-page job extraction.** Companies with no supported ATS (the majority) now get their jobs pulled straight off their own careers page via Firecrawl LLM extraction, tagged `source: careers-page`. This was the real gap: 10 of 16 hiring companies use a custom portal. Verified on Doceree (19 real roles), Schoolnet (16), BYJU'S Exam Prep (15).
-- **Tier 0 added - `ResolveCareersURL`.** The agent often omits the careers URL or points it at the homepage, leaving the company permanently at zero jobs. Now probes /careers, /jobs, /careers/jobs etc on the company domain and verifies the page contains careers vocabulary. Free (plain HTTP). Recovered 4 companies.
-- **Duplicate companies merged.** Domain-only dedupe let BYJU'S through twice (byjus.com and byjusexamprep.com). Added `normalizeCompanyName` - strips parentheticals, legal suffixes, punctuation - so "BYJU'S Exam Prep (Gradeup)" and "BYJU'S Exam Prep" collapse to one key. Merged 2 existing dupes, keeping the row with more jobs.
-- **"Hiring only" toggle, default ON.** Checked bangalorestartupmap directly: they show 1,045 companies but have a ?hiring=1 filter reading "991 open roles across 95 companies" (9% hiring). Ours now reads "196 open roles across 16 companies" (31%). A directory full of empty cards is useless, so browsing everything is opt-out.
-- Companies now sort most-jobs-first. API returns `open_roles` alongside `total`.
-- **Nominatim rate limit added** - mutex-based 1.1s throttle. Their policy is 1 req/sec and we had none; this was the biggest outstanding production risk.
-- **Compound-area geocoding fallback.** "Noida/Gurugram, Delhi NCR" resolved to nothing, so Zypp Electric had no map pin despite having 19 jobs. Now falls back to simpler forms.
-- **Researched and rejected** (documented in the handoff doc so nobody redoes it): webclaw (self-hosted version doesn't render JS), Lightpanda (3MB RAM but missed the link Firecrawl found - tested in Docker), Crawl4AI (Playwright underneath = same RAM), TheirStack (200 jobs/month free), Google Maps (no careers URL, needs a card).
-- **Confirmed the reference site uses the same method we do**: ClickPost and Ctruh -> Keka, Bureau -> Ashby. Same ATS public APIs. No Naukri/Wellfound/Cutshort. The gap is scale, not method.
-- **Result: 27 companies / 54 roles -> 51 companies / 196 roles** over the day.
-- **Next up (priority order)**: swap DuckDuckGo for Serper (weakest link - it's why ~13 companies arrived with no careers URL), job field/level facets, retry failed extractions, follow "View Openings" links.
+### Known gaps, not fixed
 
-## 2026-08-29 (final: Exa search + job facets)
+- **Wrong websites on some companies**: `webleetechnologies` → `jobdials.com`,
+  `nreach` → `xoxoday.com`. The name/domain disagreement is visible and unchecked.
+- **Several companies sit at exactly 100 roles**, which looks like a board API
+  page limit being stored as a true count rather than a real number.
+- 82% of companies have `sector = Unknown` and 89% `stage = Unknown`, so those
+  two dropdowns work but reach very little.
+- 1,769 Firecrawl and 1,084 Jina failures logged, mostly rate limits on the
+  careers-page rendering tier.
 
-- **Swapped DuckDuckGo for Exa** as the discovery agent's primary search (`ExaTools(category="company")`). DuckDuckGo was returning blog posts and listicles *about* companies rather than the companies themselves - the reason ~13 companies had no usable careers URL. Measured on one query: 5 of 6 companies came back with a careers URL, and the companies were real funded businesses (Perfios, Plum, Jodo). First full run added **10 new companies in one cycle** vs 1-3 before.
-- DuckDuckGo is deliberately kept as a keyless fallback, so discovery degrades rather than stopping if the Exa key is missing or its credits run out.
-- Agent also got explicit instructions: careers URL is the highest-value field, return the company's own domain (never an aggregator or news article), skip anything unverifiable.
-- **Job facets added** (`services/job_facets.go`) - FIELD and LEVEL chips with live counts, matching the reference site. Derived from the title/department already stored: pure Go, no extra data, no LLM call. Clicking a chip filters the roles inside each company card and map popup.
-  - Bucket order matters: Data & AI is checked before Engineering, else "Data Engineer" lands in the wrong bucket.
-  - "Unspecified" is a real bucket (108 of 213), not a fallback bug - most titles say nothing about seniority, and guessing would be wrong more often than admitting we don't know.
-- **Deliberately did NOT add Tavily/Apify yet.** Both researched and viable (Apify's compass/crawler-google-places gives Google Maps data without a Google Cloud card), but adding three search providers at once makes it impossible to tell which one helped.
-- **Result: 51 companies / 196 roles -> 67 companies / 213 roles.** Hiring ratio 28% vs the reference site's 9%.
-- Next up: retry the extractions that returned 0 (Classplus, Physics Wallah), follow "View Openings" links on marketing-style careers pages, and a direct Exa lookup for careers URLs from Go (a lookup, not a judgment call - skips LLM tokens).
+### Current pipeline
 
-## 2026-08-29 (production hardening + shareable reports, recruiter side, commit-history questions)
+```
+every 2 min (Windows scheduled task "NeuroFIQ-Discovery")
+  └─ discover_companies.py
+       ├─ slot from the clock: provider × city × role (960 slots, ~32h to repeat)
+       ├─ SearXNG (self-hosted, residential proxy) — 4 pages, 6–10s apart
+       ├─ slugs out of the result URLs
+       └─ POST /api/admin/import-boards  (batches of 25)
+            └─ Go admitBoard() — every guard
+                 └─ company + its roles stored
+                      └─ hourly job sync keeps the roles current
+```
 
-Merged the open `fix/user-reliability-and-repo-choice` work and then took the
-whole codebase over the line for launch traffic. Verified with `go build ./...`,
-`go vet ./...`, `go test -race ./...`, `tsc -b`, `oxlint` and `vite build`.
+---
 
-### The one that mattered most: the extractor was blind to most languages
+## Before 2026-09-09 — condensed
 
-`processZip` scored only `.go/.py/.ts/.js` by suffix. **`.tsx` does not end in
-`.ts` and `.jsx` does not end in `.js`** — so a React + TypeScript repository
-contributed *zero* source files and the interview was generated from
-`package.json` alone. Java, Rust, Ruby, C#, Kotlin, Swift, PHP and C++ scored 0
-and were dropped entirely. The product's whole claim — "we read your actual
-code" — was silently failing for the majority of GitHub.
+The detail below was a dated log; it is summarised by theme because the dates
+had duplicated and reordered themselves.
 
-- Replaced the suffix checks with a 50-extension language table, plus manifest
-  and entrypoint tables and a bonus for files under a directory that names a
-  layer (`services/`, `controllers/`, `internal/`…).
-- **`break` → `continue` in the budget loop.** Files are sorted by score, so one
-  70k-char `main.go` sorted first, blew the 60k budget, and exited the loop with
-  *zero* snippets. Now oversized files are truncated to 8k (the head carries the
-  imports and entry points) and the budget fills with 8–10 files instead of 1–2.
-- Real language detection replaces the literal placeholder string
-  `"Auto-detected from files"` we were paying prompt tokens for.
-- Directory tree is now grouped by directory with file counts, instead of a flat
-  list truncated mid-path inside the first alphabetical folder.
-- Binary files, lockfiles, `node_modules/`, `vendor/`, `dist/` and generated
-  files are excluded before they reach the prompt.
-- Regression tests cover all of it, including the `.tsx` case that started this.
+### The product
 
-### Fixes to the merged PR
+An AI interviewer that reads a candidate's real GitHub repository and questions
+them on their own architecture, plus the **Job Map** — a self-maintaining
+directory of companies and their real open roles. Go orchestrator (Postgres,
+OAuth, billing, rate limiting, repo extraction), Python FastAPI + Agno for the
+LLM with no database access by rule, React 19 + Vite + Tailwind v4 front end.
 
-- **The question cache was deleted, not replaced.** The lookup was removed but
-  the write kept, so the cache was written and never read: every interview page
-  load — including a refresh, and React StrictMode's dev double-mount — was a
-  fresh DeepSeek call and five more rows in `questions_bank`. Restored the read
-  path, keyed on a fingerprint of the analysis JSON so re-analysing a repo
-  correctly invalidates its questions.
-- **The retry path bypassed the free-tier limit.** The `failed → pending` branch
-  committed without counting existing rows, and the count query excludes failed
-  ones — so three good analyses plus one failure could be retried into a fourth
-  live slot, and every further failure raised the ceiling again. The count now
-  runs before both branches. Same TOCTOU class the advisory lock was added for;
-  the lock was still there, the check just wasn't.
-- **The SSRF guard was written but never called.** `allowedPublicURL` and
-  friends had no callers anywhere in the branch while `fetchText` still fetched
-  LLM-supplied URLs on `http.DefaultClient`. Now wired — see below.
-- Restored ~300 lines of stripped comments (the advisory-lock rationale, the
-  goroutine `recover()` note, why Exa beat DuckDuckGo, why the internal secret
-  fails closed) and every explanatory line in `.env.example`.
-- `_ = config.DB.Save(&user).Error` was silently discarding a failed write; logs
-  again. `extractor_service.go` was left on `http.DefaultClient` while the other
-  two worker callers were migrated. `/auth/logout` shipped with no caller —
-  there is now a Sign out button.
+### Job Map, how it got here
 
-### Security
+- Started as an LLM asking which companies exist, then hunting for a careers
+  page on each answer. Two stacked guesses; mostly returned 2-person shops that
+  do not hire. That agent is gone.
+- Replaced by **board-first discovery**: every hiring company puts roles on a
+  public ATS board, and the slug in `jobs.lever.co/Sprinto` is the same slug the
+  board's API takes. One search yields a company provably hiring with its roles
+  one free call away, and no model anywhere in the path.
+- **Ten ATS readers** on official public JSON APIs: Greenhouse, Lever,
+  SmartRecruiters, Ashby, Workable, Keka, Darwinbox, Workday, Recruitee,
+  Freshteam, Personio, Gem. Keka and Darwinbox matter most for Indian employers.
+  Darwinbox needs browser headers or it answers with a bot-check page.
+- **Roles, cheapest first**: known board → its JSON API; else resolve
+  `/careers`; else regex the page for an embedded board link; else link-scan for
+  per-role postings; else a rendered read (Jina, then Firecrawl); else LLM
+  extraction. Jina runs before Firecrawl everywhere — when the paid one went
+  first, an unset key took the whole free path down with it.
+- **Common Crawl harvest** was built and later removed: one index yielded 13,501
+  slugs across eight providers for ~20 requests and no metered call. Removed in
+  favour of board search, though the arithmetic it recorded is what proved the
+  point later — 2.02 searches per company stored caps a month at ~400 companies
+  however fast the cron runs.
 
-- **SSRF, properly.** All third-party fetching goes through one client whose
-  dialer `Control` hook rejects loopback, private, link-local, CGNAT and
-  cloud-metadata addresses. The check runs *after* DNS resolution, on the
-  address actually being dialled, so it also defeats DNS rebinding and a 302 to
-  `169.254.169.254` — which a URL-string check does not. Every URL we fetch
-  comes from an LLM's web search, so this is not theoretical.
-- **ATS slugs are validated.** A slug scraped by regex was interpolated straight
-  into `https://<slug>.keka.com/…`; `evil.example.com/x?` would have sent the
-  request somewhere else entirely.
-- **Session cookies are now encrypted, not just signed.** The cookie carries the
-  user's GitHub OAuth token; signing proves we issued it but leaves the contents
-  readable by anyone holding it.
-- **Gin trusted no proxies before.** It trusted *all* of them, so any client
-  could set `X-Forwarded-For` and choose its own `ClientIP` — the exact key the
-  rate limiter uses. Now configured via `TRUSTED_PROXIES`, defaulting to trusting
-  nothing.
-- **`/api/interviews/submit` was an open LLM proxy.** No cap on `qa_list` length
-  or answer size, and no check that the questions were ones we issued. Now
-  bounded at 5 questions / 6k chars, validated against `questions_bank`, gated on
-  the user owning a completed analysis, and capped at 20 interviews/day.
-- The zipball download is bounded (120 MB) and so is decompression (200 MB): the
-  old unbounded `io.ReadAll` was an out-of-memory kill switch any user could pull
-  by pointing us at a large monorepo, or a zip bomb.
+### Guards, each one bought with a real failure
 
-### Reliability under real traffic
+- An extraction once returned 295 "jobs" that were an alphabetical list of
+  professions from a careers-advice article. Three separate guards now stand in
+  that shape's way, and they are not interchangeable.
+- Jobgether, a marketplace on a Lever board, put 4,440 roles into the directory
+  under one company name — two thirds of everything stored. Those roles are
+  real; they belong to several hundred other employers.
+- `maxBoardRoles` was 400 and threw out Paytm Payments at 840 and WPP Media at
+  1,074. Between ~500 and 1,500 a role count does not separate an aggregator
+  from a large employer, so the ceiling sits above any real employer instead.
+- **An empty read is not "not hiring".** An ATS answers 200 with an empty array
+  while it is being reconfigured. Deleting a company's roles on the first empty
+  read made a hiring company look shut and flipped it back an hour later.
+  Listings now survive one empty read and clear on the second.
+- **A board is only accepted with evidence** — the company linked to it, or a
+  search returned it. Never from guessing a slug off a name: `jobs.lever.co/cred`
+  is CreditVidya, not CRED.
+- Vendor demo tenants (`salesdemo.keka.com`, 82 postings, one titled "HR Manager
+  (Sumit)") and talent-pool postings ("Be Part of our Talent Community") both
+  look exactly like real listings and needed their own rules.
+- `looksIndian` learned all 36 states and UTs — boards write "Mumbai MH" — plus
+  a foreign-marker rule, because "Bangalore, Mexico" is a real row.
 
-- **Timeouts everywhere.** All seven ATS fetchers, the careers-page fetch and
-  the GitHub calls were on `http.DefaultClient`, which has **no timeout**.
-  PROGRESS.md already records this costing a ~3-hour stall once; it was fixed
-  for the worker call only. Nothing uses the default client now.
-- **Graceful shutdown.** A deploy used to kill the process mid-request, losing
-  interview evaluations we had already paid the LLM for.
-- **Stale analyses are reclaimed.** A crash or deploy left rows stuck on
-  `pending` forever — a spinner that never resolves and a free slot the user
-  could not get back. Swept at boot and every 15 minutes.
-- **The rate limiter leaked memory.** One bucket per IP, never evicted, so any
-  attacker forging source addresses could grow the map without bound. Same for
-  the repo ETag cache, which held up to 100 repo records per user who ever
-  logged in. Both are now swept and capped.
-- **The job sync is bounded and single-instance.** It looped every company
-  serially with several network calls each: fine at 67 companies, not at a few
-  thousand, where the tick outruns the hour and cron starts the next one on top.
-  Now a pool of 8. And because the cron lives in the API process, two containers
-  meant two discovery runs an hour — double the LLM spend and every board
-  scraped twice. A `cron_leases` table with an expiring lease picks one.
-- DB pool limits (GORM's default is unlimited, which the Supabase pooler refuses
-  before Go stops asking), server read/write timeouts, a 1 MB request body cap,
-  and a per-user limiter on the endpoints that actually cost money — the per-IP
-  one never covered a single account grinding away under 5 req/s.
+### The interview product
 
-### Three features, in the order they matter
+- **The extractor was blind to most languages.** `processZip` scored files by
+  suffix on `.go/.py/.ts/.js` — and `.tsx` does not end in `.ts`. A React +
+  TypeScript repo contributed zero source files and the interview was generated
+  from `package.json` alone; Java, Rust, Ruby, C#, Kotlin, Swift, PHP and C++
+  were dropped entirely. The product's central claim was silently failing for
+  most of GitHub. Replaced with a 50-extension table plus manifest/entrypoint
+  handling. A `break` that should have been `continue` was also exiting the
+  budget loop with zero snippets whenever one large file sorted first.
+- Live-coding interview studio: Monaco editor, tab-switch monitor, PiP camera.
+- Audio moved off the browser's `SpeechRecognition` onto a Go WebSocket gateway
+  streaming WebM to Deepgram Nova-2, with a Go ↔ Python gRPC pipeline behind it.
+- LLM output is always a Pydantic schema via Agno's `output_schema` — never
+  markdown fences parsed out of a response.
 
-1. **Public shareable reports.** A finished report was the only artifact this
-   product creates that anyone wants to send to somebody, and it died behind the
-   login. `POST /api/reports/:id/share` mints an unguessable slug; `/r/:slug`
-   renders score, assessment and a "generated from this repository" mark to
-   anyone. The candidate's raw answers are deliberately withheld. Revoking
-   clears the slug so the old link 404s immediately.
-2. **The recruiter side.** Nobody pays to be interviewed; companies pay for
-   signal. Recruiters mint invite links (`/invite/:token`), candidates redeem
-   them by taking the *same* interview on their own repo, and the recruiter gets
-   them back ranked by score with the full report. Redemption is a single
-   conditional UPDATE, so two candidates racing a single-use link cannot both
-   get in.
-3. **Commit-history questions.** We downloaded the whole zipball and threw the
-   history away — `CommitStats` was hardcoded to `{1, 1}`. Two extra GitHub calls
-   now give real commit and contributor counts plus the substantive commits, with
-   merge/bump/typo noise filtered and recurring subjects ranked first because a
-   repeated subject line is where somebody changed their mind. The analysis agent
-   turns those into `history_observations` and the question agent spends exactly
-   one of the five on them. No other product can ask "you rewrote this three
-   times in one week — what did the first two get wrong?"
+### Security and reliability
 
-Plus: each question now carries the `file_reference` and `code_snippet` it was
-built from, and the interview UI shows that code beside the question — the data
-was already in the payload and the UI was throwing it away.
+- Ten-finding audit, all fixed: OAuth CSRF state was a hardcoded literal, now
+  crypto/rand and session-bound; `INTERNAL_SECRET` fell back to a source-visible
+  default, now fails closed; a TOCTOU race let users exceed the 3-repo limit,
+  now a per-user Postgres advisory lock verified with a 6-way concurrency test;
+  a background goroutine had no `recover()`, so one bad repo could kill the
+  process for every user.
+- Every background goroutine carries its own `recover()` — Gin's `Recovery()`
+  does not cover goroutines you spawn.
+- Per-IP rate limiting, `HttpOnly`/`Secure`/`SameSite=Lax` cookies, and
+  environment-variable URLs throughout.
 
-### Frontend
+### Directory and front end
 
-- **The webcam turned on during text interviews.** `CameraPreview` was rendered
-  unconditionally; only the voice visualiser was gated. Someone who chose "Start
-  Text Interview" got a camera permission prompt anyway. Now voice-only, and the
-  text pane shows the code under discussion instead.
-- The interview page swallowed the server's error text (`.then(res => res.json())`
-  with no `res.ok` check), so the new, useful 400s — "analysis is still running",
-  "retry analyzing this repository" — all rendered as one generic line.
-- StrictMode double-mount guard on the question fetch: in dev it was billing two
-  LLM calls per page load.
-- Sign out, a recruiter nav group that only hiring accounts see, and the GitHub
-  mark extracted into one shared component instead of being redefined per page.
+- Grid / 2D Leaflet / 3D MapLibre views, tech-hub switcher, sub-hub geocoding
+  across Indian tech clusters, marker clustering, company drawer.
+- Job seniority classification rebuilt on the Radford/Levels.fyi IC framework;
+  reclassified 7,459 jobs and cut "Unspecified" from 2,812 to 1,517.
+- Two-tier in-memory cache with `Cache-Control` headers: repeat directory
+  requests drop from ~300ms to 2.4ms with zero database queries.
+- `companies.open_roles` is a maintained counter, so the listing sorts and
+  filters without aggregating a join on every request.
 
-### CI
+### Known gaps carried forward
 
-There was no `.github/` directory and not one test in the repository. Added a
-workflow running gofmt/build/vet/`go test -race`, a byte-compile of the worker
-(whose errors otherwise only surface as a failed analysis in production), and
-`npm ci` + lint + `tsc -b` + build. Go tests cover the extractor's language
-coverage and budget packing, repo-name and ATS-slug validation, the SSRF IP
-predicate, invite redemption, and the job facet buckets.
-
- # #   2 0 2 6 - 0 9 - 0 2 
- -   M o v e d   ' C l e a n   D e a d   J o b s '   l o g i c   f r o m   a   f r o n t e n d - t r i g g e r e d   A P I   r o u t e   t o   a n   a u t o m a t i c   b a c k e n d   c r o n   j o b   r u n n i n g   e v e r y   1 2   h o u r s .  
- -  
- I m p l e m e n t e d  
- G o  
- b a c k e n d  
- b r i d g e  
- / a p i / r a d a r / a n a l y z e  
- t o  
- p r o x y  
- r e q u e s t s  
- t o  
- P y t h o n  
- a i - w o r k e r  
- -  
- C o n n e c t e d  
- R e a c t  
- R a d a r . t s x  
- t o  
- r e a l  
- b a c k e n d  
- / a p i / r a d a r / a n a l y z e  
- a n d  
- m a p p e d  
- d a t a  
- -  
- C o m p l e t e l y  
- r e d e s i g n e d  
- R a d a r . t s x  
- w i t h  
- p r e m i u m  
- g l a s s m o r p h i c  
- U I  
- a n i m a t e d  
- S V G  
- p r o g r e s s  
- r i n g s  
- a n d  
- d y n a m i c  
- s k i l l  
- p i l l s .  
- -  
- P i v o t e d  
- R a d a r  
- f e a t u r e  
- f r o m  
- J o b  
- M a t c h e r  
- t o  
- P r o f i l e  
- O p t i m i z e r  
- a c r o s s  
- P y t h o n  
- A I  
- W o r k e r  
- G o  
- B a c k e n d  
- a n d  
- R e a c t  
- F r o n t e n d  
- p e r  
- u s e r  
- r e q u e s t .  
- -  
- U p g r a d e d  
- P r o f i l e  
- O p t i m i z e r  
- U I  
- t o  
- a  
- V e r c e l / L i n e a r  
- i n s p i r e d  
- D a r k  
- M o d e  
- B e n t o  
- B o x  
- d e s i g n  
- w i t h  
- t e r m i n a l  
- s c a n n i n g  
- a n i m a t i o n s .  
- -  
- A d d e d  
- L i n k e d I n  
- L o g i n  
- W a l l  
- d e t e c t i o n  
- i n  
- A I  
- w o r k e r  
- s c r a p e r  
- t o  
- r e t u r n  
- g r a c e f u l  
- e r r o r  
- i n  
- U I  
- i n s t e a d  
- o f  
- a  
- g e n e r i c  
- c r a s h .  
- 
-## 2026-09-07
-- Refactored Python AI worker into modular FastAPI structure (feature_interview, feature_radar, feature_discovery)
-- Successfully switched to OpenRouter for deepseek-chat bypassing 402 Insufficient Balance errors
-- Implemented BeautifulSoup HTML cleaner in Python worker to reduce tokens for scraped profiles
+- Filters are exact-match against a fixed dropdown.
+- `jobs` and `scrape_usages` have no migration file and exist only via
+  AutoMigrate.
+- Board discovery stores no sector or stage, and companies are never re-enriched
+  after first discovery — stage and description stay frozen at first-seen values.
