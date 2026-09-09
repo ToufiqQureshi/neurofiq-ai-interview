@@ -279,188 +279,71 @@ func applyAreaFilter(db *gorm.DB, area string, prefix string) *gorm.DB {
 	return db.Where(strings.Join(clauses, " OR "), vals...)
 }
 
-// techSubHub represents a real, defined startup corridor in an Indian tech city
-type techSubHub struct {
-	Name string
-	Lat  float64
-	Lng  float64
+// cityCentroids is where a company goes on the map when geocodeArea could not
+// place it. Most specific name first, since an area string naming a suburb
+// usually names its city too ("Gurgaon, Delhi NCR" is Gurgaon).
+var cityCentroids = []struct {
+	match    string
+	lat, lng float64
+}{
+	{"gurgaon", 28.4595, 77.0266},
+	{"gurugram", 28.4595, 77.0266},
+	{"noida", 28.5355, 77.3910},
+	{"navi mumbai", 19.0330, 73.0297},
+	{"thane", 19.2183, 72.9781},
+	{"bengaluru", 12.9538, 77.6309},
+	{"bangalore", 12.9538, 77.6309},
+	{"mumbai", 19.0760, 72.8777},
+	{"delhi", 28.6139, 77.2090},
+	{"ncr", 28.6139, 77.2090},
+	{"hyderabad", 17.4435, 78.3772},
+	{"pune", 18.5204, 73.8567},
+	{"chennai", 13.0827, 80.2707},
+	{"kolkata", 22.5726, 88.3639},
+	{"ahmedabad", 23.0225, 72.5714},
+	{"jaipur", 26.9124, 75.7873},
+	{"indore", 22.7196, 75.8577},
+	{"kochi", 9.9312, 76.2673},
+	{"coimbatore", 11.0168, 76.9558},
+	{"chandigarh", 30.7333, 76.7794},
 }
 
-var bangaloreTechHubs = []techSubHub{
-	{Name: "HSR Layout (Startup Corridor)", Lat: 12.9121, Lng: 77.6446},
-	{Name: "Koramangala (VC & Unicorn Hub)", Lat: 12.9352, Lng: 77.6245},
-	{Name: "Indiranagar (100ft / 12th Main)", Lat: 12.9784, Lng: 77.6408},
-	{Name: "Outer Ring Road (Bellandur / Ecospace)", Lat: 12.9260, Lng: 77.6762},
-	{Name: "Domlur (Embassy GolfLinks EGL)", Lat: 12.9610, Lng: 77.6387},
-	{Name: "Whitefield (ITPL & EPIP Zone)", Lat: 12.9698, Lng: 77.7500},
-	{Name: "CBD (MG Road / Church Street)", Lat: 12.9756, Lng: 77.6066},
-	{Name: "JP Nagar & Jayanagar", Lat: 12.9063, Lng: 77.5857},
-	{Name: "Electronic City Phase 1", Lat: 12.8452, Lng: 77.6602},
-	{Name: "Hebbal (Manyata Tech Park)", Lat: 13.0458, Lng: 77.6200},
-}
-
-var delhiNCRTechHubs = []techSubHub{
-	{Name: "DLF Cyber City / Cyber Hub Gurgaon", Lat: 28.4907, Lng: 77.0898},
-	{Name: "Golf Course Road Gurgaon", Lat: 28.4414, Lng: 77.1065},
-	{Name: "Udyog Vihar Phase 1-5 Gurgaon", Lat: 28.5085, Lng: 77.0817},
-	{Name: "Sohna Road Gurgaon", Lat: 28.4125, Lng: 77.0425},
-	{Name: "Sector 62 Institutional Area Noida", Lat: 28.6279, Lng: 77.3749},
-	{Name: "Noida Expressway (Sector 125/142)", Lat: 28.5448, Lng: 77.3331},
-	{Name: "Sector 16/18 Film City Noida", Lat: 28.5708, Lng: 77.3160},
-	{Name: "Okhla Phase 3 / South Delhi", Lat: 28.5355, Lng: 77.2718},
-	{Name: "Connaught Place / Central Delhi", Lat: 28.6315, Lng: 77.2167},
-}
-
-var mumbaiTechHubs = []techSubHub{
-	{Name: "BKC (Bandra Kurla Complex)", Lat: 19.0657, Lng: 72.8687},
-	{Name: "Andheri East (MIDC & Chakala)", Lat: 19.1136, Lng: 72.8697},
-	{Name: "Lower Parel & Worli Corporate Hub", Lat: 18.9986, Lng: 72.8278},
-	{Name: "Powai (Hiranandani & IIT Bombay)", Lat: 19.1176, Lng: 72.9060},
-	{Name: "Navi Mumbai (Airoli & Mahape)", Lat: 19.0330, Lng: 73.0297},
-	{Name: "Thane West IT Parks", Lat: 19.2183, Lng: 72.9781},
-}
-
-var puneTechHubs = []techSubHub{
-	{Name: "Hinjawadi Phase 1 & 2 Rajiv Gandhi Tech Park", Lat: 18.5912, Lng: 73.7389},
-	{Name: "Kharadi (EON Free Zone & WTC)", Lat: 18.5516, Lng: 73.9520},
-	{Name: "Baner & Balewadi High Street", Lat: 18.5590, Lng: 73.7868},
-	{Name: "Kalyani Nagar & Koregaon Park", Lat: 18.5529, Lng: 73.9014},
-	{Name: "Magarpatta Cybercity Hadapsar", Lat: 18.5158, Lng: 73.9272},
-}
-
-var hyderabadTechHubs = []techSubHub{
-	{Name: "HITEC City & Cyber Towers", Lat: 17.4504, Lng: 78.3808},
-	{Name: "Gachibowli & Financial District", Lat: 17.4401, Lng: 78.3489},
-	{Name: "Madhapur Tech Corridor", Lat: 17.4483, Lng: 78.3915},
-	{Name: "Kondapur", Lat: 17.4646, Lng: 78.3582},
-	{Name: "Jubilee Hills & Banjara Hills", Lat: 17.4319, Lng: 78.4073},
-}
-
-// fallbackCoordsForArea provides realistic, high-precision tech-subhub coordinates
-// modeled after BangaloreStartupMap and Delhi/Mumbai tech ecosystems.
+// fallbackCoordsForArea puts a pin on a company the geocoder could not place.
+//
+// This is a display fallback, not a measurement: it runs only where Lat/Lng are
+// nil, i.e. where the pipeline has no real position. So it answers the only
+// question it can honestly answer — which city — and scatters the pin across
+// that city rather than claiming a street.
+//
+// It used to carry ~50 hand-typed sub-neighbourhood coordinates (HSR Layout,
+// DLF Cyber City, Hinjawadi...) and pick one by hashing the company name. That
+// is a guess wearing four decimal places: a company hashed onto Koramangala has
+// no more to do with Koramangala than with Whitefield, and the precision only
+// made the guess harder to spot. The city is the part that came from the data.
+//
+// The hash stays, because two things still depend on it: the same company must
+// land on the same pin every request, and pins must not stack on one point.
+// The offset is now city-scale (~±4km) instead of the old ~±300m, which is what
+// "somewhere in this city" actually looks like.
 func fallbackCoordsForArea(name, area string) (*float64, *float64) {
 	norm := strings.ToLower(area)
 
-	// Deterministic hash based on company name
+	baseLat, baseLng := 12.9538, 77.6309 // Bengaluru, the directory's centre of mass
+	for _, c := range cityCentroids {
+		if strings.Contains(norm, c.match) {
+			baseLat, baseLng = c.lat, c.lng
+			break
+		}
+	}
+
+	// Deterministic per company, so a pin does not move between requests.
 	h := 0
 	for i := 0; i < len(name); i++ {
 		h = (h*31 + int(name[i])) % 10000
 	}
 
-	var baseLat, baseLng float64
-
-	switch {
-	// Specific Bengaluru sub-neighborhoods
-	case strings.Contains(norm, "hsr"):
-		baseLat, baseLng = 12.9121, 77.6446
-	case strings.Contains(norm, "koramangala"):
-		baseLat, baseLng = 12.9352, 77.6245
-	case strings.Contains(norm, "indiranagar"):
-		baseLat, baseLng = 12.9784, 77.6408
-	case strings.Contains(norm, "whitefield"):
-		baseLat, baseLng = 12.9698, 77.7500
-	case strings.Contains(norm, "bellandur") || strings.Contains(norm, "outer ring"):
-		baseLat, baseLng = 12.9260, 77.6762
-	case strings.Contains(norm, "domlur") || strings.Contains(norm, "egl"):
-		baseLat, baseLng = 12.9610, 77.6387
-	case strings.Contains(norm, "electronic city"):
-		baseLat, baseLng = 12.8452, 77.6602
-	case strings.Contains(norm, "bengaluru") || strings.Contains(norm, "bangalore"):
-		// Distribute across authentic Bangalore startup corridors
-		hub := bangaloreTechHubs[h%len(bangaloreTechHubs)]
-		baseLat, baseLng = hub.Lat, hub.Lng
-
-	// Specific Delhi NCR sub-neighborhoods
-	case strings.Contains(norm, "cyber city") || strings.Contains(norm, "dlf"):
-		baseLat, baseLng = 28.4907, 77.0898
-	case strings.Contains(norm, "golf course"):
-		baseLat, baseLng = 28.4414, 77.1065
-	case strings.Contains(norm, "udyog vihar"):
-		baseLat, baseLng = 28.5085, 77.0817
-	case strings.Contains(norm, "sohna"):
-		baseLat, baseLng = 28.4125, 77.0425
-	case strings.Contains(norm, "noida 62") || strings.Contains(norm, "sector 62"):
-		baseLat, baseLng = 28.6279, 77.3749
-	case strings.Contains(norm, "noida 125") || strings.Contains(norm, "expressway"):
-		baseLat, baseLng = 28.5448, 77.3331
-	case strings.Contains(norm, "noida 16") || strings.Contains(norm, "sector 16") || strings.Contains(norm, "sector 18"):
-		baseLat, baseLng = 28.5708, 77.3160
-	case strings.Contains(norm, "noida"):
-		noidaHubs := []techSubHub{
-			{Name: "Sector 62", Lat: 28.6279, Lng: 77.3749},
-			{Name: "Expressway Sector 125", Lat: 28.5448, Lng: 77.3331},
-			{Name: "Sector 16/18 Film City", Lat: 28.5708, Lng: 77.3160},
-			{Name: "Sector 142 Advant Navis", Lat: 28.5042, Lng: 77.4147},
-		}
-		hub := noidaHubs[h%len(noidaHubs)]
-		baseLat, baseLng = hub.Lat, hub.Lng
-	case strings.Contains(norm, "gurgaon") || strings.Contains(norm, "gurugram"):
-		gurgaonHubs := []techSubHub{
-			{Name: "DLF Cyber City", Lat: 28.4907, Lng: 77.0898},
-			{Name: "Golf Course Road", Lat: 28.4414, Lng: 77.1065},
-			{Name: "Udyog Vihar", Lat: 28.5085, Lng: 77.0817},
-			{Name: "Sohna Road", Lat: 28.4125, Lng: 77.0425},
-		}
-		hub := gurgaonHubs[h%len(gurgaonHubs)]
-		baseLat, baseLng = hub.Lat, hub.Lng
-	case strings.Contains(norm, "delhi") || strings.Contains(norm, "ncr"):
-		hub := delhiNCRTechHubs[h%len(delhiNCRTechHubs)]
-		baseLat, baseLng = hub.Lat, hub.Lng
-
-	// Specific Mumbai sub-neighborhoods
-	case strings.Contains(norm, "bkc"):
-		baseLat, baseLng = 19.0657, 72.8687
-	case strings.Contains(norm, "andheri"):
-		baseLat, baseLng = 19.1136, 72.8697
-	case strings.Contains(norm, "lower parel") || strings.Contains(norm, "worli"):
-		baseLat, baseLng = 18.9986, 72.8278
-	case strings.Contains(norm, "powai"):
-		baseLat, baseLng = 19.1176, 72.9060
-	case strings.Contains(norm, "navi mumbai"):
-		baseLat, baseLng = 19.0330, 73.0297
-	case strings.Contains(norm, "thane"):
-		baseLat, baseLng = 19.2183, 72.9781
-	case strings.Contains(norm, "mumbai"):
-		hub := mumbaiTechHubs[h%len(mumbaiTechHubs)]
-		baseLat, baseLng = hub.Lat, hub.Lng
-
-	// Specific Pune sub-neighborhoods
-	case strings.Contains(norm, "hinjawadi") || strings.Contains(norm, "hinjewadi"):
-		baseLat, baseLng = 18.5912, 73.7389
-	case strings.Contains(norm, "kharadi"):
-		baseLat, baseLng = 18.5516, 73.9520
-	case strings.Contains(norm, "baner"):
-		baseLat, baseLng = 18.5590, 73.7868
-	case strings.Contains(norm, "magarpatta"):
-		baseLat, baseLng = 18.5158, 73.9272
-	case strings.Contains(norm, "pune"):
-		hub := puneTechHubs[h%len(puneTechHubs)]
-		baseLat, baseLng = hub.Lat, hub.Lng
-
-	// Specific Hyderabad sub-neighborhoods
-	case strings.Contains(norm, "hitec") || strings.Contains(norm, "cyberabad"):
-		baseLat, baseLng = 17.4504, 78.3808
-	case strings.Contains(norm, "gachibowli"):
-		baseLat, baseLng = 17.4401, 78.3489
-	case strings.Contains(norm, "madhapur"):
-		baseLat, baseLng = 17.4483, 78.3915
-	case strings.Contains(norm, "hyderabad"):
-		hub := hyderabadTechHubs[h%len(hyderabadTechHubs)]
-		baseLat, baseLng = hub.Lat, hub.Lng
-
-	case strings.Contains(norm, "chennai"):
-		baseLat, baseLng = 13.0827, 80.2707
-	default:
-		hub := bangaloreTechHubs[h%len(bangaloreTechHubs)]
-		baseLat, baseLng = hub.Lat, hub.Lng
-	}
-
-	// Office park micro-jitter (~150-300 meters) so pins within the same tech park do not overlap
-	jitterLat := (float64((h%40)-20) / 7000.0)
-	jitterLng := (float64(((h*7)%40)-20) / 7000.0)
-
-	lat := baseLat + jitterLat
-	lng := baseLng + jitterLng
+	lat := baseLat + float64((h%80)-40)/1000.0
+	lng := baseLng + float64(((h*7)%80)-40)/1000.0
 	return &lat, &lng
 }
 
