@@ -296,25 +296,32 @@ func looksLikeSlugFallback(name string) bool {
 	return trimmed == strings.ToLower(trimmed)
 }
 
-// RunEnrichment fills description and sector for companies that have neither.
-func RunEnrichment() {
+// enrichPending fills description and sector for companies that have neither.
+//
+// limit of 0 means every pending company, which is what the on-demand sweep
+// asks for; the cron passes a batch size so one tick cannot walk the whole
+// table. Returns how many gained something and how many were tried.
+func enrichPending(limit, concurrency int) (updated, tried int, err error) {
+	query := config.DB.
+		Where("(coalesce(description, '') = '' OR coalesce(sector, '') = '' OR sector = 'Unknown') AND (coalesce(website, '') <> '' OR coalesce(domain, '') <> '')")
+	if limit > 0 {
+		query = query.Limit(limit)
+	}
 	var pending []models.Company
-	if err := config.DB.
-		Where("(coalesce(description, '') = '' OR coalesce(sector, '') = '' OR sector = 'Unknown') AND (coalesce(website, '') <> '' OR coalesce(domain, '') <> '')").
-		Limit(enrichBatchSize).
-		Find(&pending).Error; err != nil {
-		log.Printf("enrichment: could not load companies: %v", err)
-		return
+	if err := query.Find(&pending).Error; err != nil {
+		return 0, 0, err
 	}
 	if len(pending) == 0 {
-		return
+		return 0, 0, nil
 	}
 
 	var (
-		mu      sync.Mutex
-		updated int
-		wg      sync.WaitGroup
-		sem     = make(chan struct{}, 8)
+		mu sync.Mutex
+		wg sync.WaitGroup
+		// Every goroutine here carries its own recover(): Gin's Recovery()
+		// does not cover goroutines we spawn, and one panic would take the
+		// process down mid-sweep.
+		sem = make(chan struct{}, concurrency)
 	)
 	for _, c := range pending {
 		wg.Add(1)
@@ -337,52 +344,29 @@ func RunEnrichment() {
 	}
 	wg.Wait()
 
-	log.Printf("enrichment: %d of %d companies gained a description or sector", updated, len(pending))
+	return updated, len(pending), nil
 }
 
-// EnrichAllPendingCompanies sweeps every company in the directory missing descriptions
-// or sector classification using concurrent workers.
+// RunEnrichment is the scheduled pass: one bounded batch, logging its own
+// result because no caller is waiting on it.
+func RunEnrichment() {
+	updated, tried, err := enrichPending(enrichBatchSize, 8)
+	if err != nil {
+		log.Printf("enrichment: could not load companies: %v", err)
+		return
+	}
+	if tried == 0 {
+		return
+	}
+	log.Printf("enrichment: %d of %d companies gained a description or sector", updated, tried)
+}
+
+// EnrichAllPendingCompanies sweeps every company missing a description or
+// sector, for the endpoint that asks for it and waits on the count.
 func EnrichAllPendingCompanies(concurrency int) (int, error) {
 	if concurrency <= 0 {
 		concurrency = 12
 	}
-	var pending []models.Company
-	if err := config.DB.
-		Where("(coalesce(description, '') = '' OR coalesce(sector, '') = '' OR sector = 'Unknown') AND (coalesce(website, '') <> '' OR coalesce(domain, '') <> '')").
-		Find(&pending).Error; err != nil {
-		return 0, err
-	}
-	if len(pending) == 0 {
-		return 0, nil
-	}
-
-	var (
-		mu      sync.Mutex
-		updated int
-		wg      sync.WaitGroup
-		sem     = make(chan struct{}, concurrency)
-	)
-
-	for _, c := range pending {
-		wg.Add(1)
-		go func(company models.Company) {
-			defer wg.Done()
-			defer func() {
-				if r := recover(); r != nil {
-					log.Printf("enrichment: recovered while enriching %q: %v", company.Name, r)
-				}
-			}()
-			sem <- struct{}{}
-			defer func() { <-sem }()
-
-			if EnrichCompany(company) {
-				mu.Lock()
-				updated++
-				mu.Unlock()
-			}
-		}(c)
-	}
-	wg.Wait()
-
-	return updated, nil
+	updated, _, err := enrichPending(0, concurrency)
+	return updated, err
 }

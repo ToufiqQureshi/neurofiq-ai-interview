@@ -250,32 +250,29 @@ func RunBlockingStartupRepairs() {
 // scheduled pass finishes whatever is left.
 func RunStartupRepairs() {
 	deadline := time.Now().Add(2 * time.Minute)
-	total := 0
-	for time.Now().Before(deadline) {
-		n, err := BackfillJobFacets(2000)
-		if err != nil {
-			log.Printf("startup repair: job facet backfill failed: %v", err)
-			break
-		}
-		if n == 0 {
-			break
-		}
-		total += n
-	}
-	if total > 0 {
-		log.Printf("startup repair: classified %d jobs into field/level buckets", total)
-	}
+	drainFacetBackfill("startup repair", func() bool { return time.Now().Before(deadline) })
 }
 
 // RunFacetBackfill finishes any classification the boot pass did not reach,
 // and reclassifies rows whenever the bucket rules change.
 func RunFacetBackfill() {
+	pass := 0
+	drainFacetBackfill("job facet backfill", func() bool {
+		pass++
+		return pass <= 25
+	})
+}
+
+// drainFacetBackfill runs batches until the table is classified or keepGoing
+// says to stop — a deadline at boot, a pass count on the schedule. Either way
+// the run that stops early leaves the rest for the next one.
+func drainFacetBackfill(label string, keepGoing func() bool) {
 	total := 0
-	for pass := 0; pass < 25; pass++ {
+	for keepGoing() {
 		n, err := BackfillJobFacets(2000)
 		if err != nil {
-			log.Printf("job facet backfill failed: %v", err)
-			return
+			log.Printf("%s: job facet backfill failed: %v", label, err)
+			break
 		}
 		if n == 0 {
 			break
@@ -283,6 +280,6 @@ func RunFacetBackfill() {
 		total += n
 	}
 	if total > 0 {
-		log.Printf("job facet backfill: classified %d jobs", total)
+		log.Printf("%s: classified %d jobs into field/level buckets", label, total)
 	}
 }
