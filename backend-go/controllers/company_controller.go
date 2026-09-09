@@ -1,10 +1,10 @@
 package controllers
 
 import (
+	"encoding/csv"
 	"fmt"
 	"net/http"
 	"strconv"
-	"strings"
 	"sync"
 	"time"
 
@@ -14,34 +14,61 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-type cachedDirectoryResponse struct {
-	data      gin.H
+// ttlCache is a keyed in-memory cache whose entries expire on their own.
+//
+// The directory endpoints had one of these each, written out twice: the same
+// RLock, check-the-expiry, RUnlock, then Lock-and-store. The single-valued one
+// is just this with an empty key.
+//
+// Entries are dropped by InvalidateDirectoryCache rather than swept, because
+// the key space is the filter dropdowns crossed with a page number — bounded
+// by what the UI can ask for, not by what a caller can invent.
+type ttlCache[V any] struct {
+	mu      sync.RWMutex
+	ttl     time.Duration
+	entries map[string]ttlEntry[V]
+}
+
+type ttlEntry[V any] struct {
+	value     V
 	expiresAt time.Time
 }
 
+func newTTLCache[V any](ttl time.Duration) *ttlCache[V] {
+	return &ttlCache[V]{ttl: ttl, entries: make(map[string]ttlEntry[V])}
+}
+
+func (c *ttlCache[V]) get(key string) (V, bool) {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	if e, ok := c.entries[key]; ok && time.Now().Before(e.expiresAt) {
+		return e.value, true
+	}
+	var zero V
+	return zero, false
+}
+
+func (c *ttlCache[V]) put(key string, value V) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.entries[key] = ttlEntry[V]{value: value, expiresAt: time.Now().Add(c.ttl)}
+}
+
+func (c *ttlCache[V]) clear() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.entries = make(map[string]ttlEntry[V])
+}
+
 var (
-	dirCacheMu sync.RWMutex
-	dirCache   = make(map[string]cachedDirectoryResponse)
-
-	statsCacheMu   sync.RWMutex
-	statsCacheData *services.DirectoryStats
-	statsCacheAt   time.Time
-)
-
-const (
-	dirCacheTTL   = 60 * time.Second
-	statsCacheTTL = 30 * time.Second
+	dirCache   = newTTLCache[gin.H](60 * time.Second)
+	statsCache = newTTLCache[services.DirectoryStats](30 * time.Second)
 )
 
 // InvalidateDirectoryCache purges the cached company results when new data is written.
 func InvalidateDirectoryCache() {
-	dirCacheMu.Lock()
-	dirCache = make(map[string]cachedDirectoryResponse)
-	dirCacheMu.Unlock()
-
-	statsCacheMu.Lock()
-	statsCacheData = nil
-	statsCacheMu.Unlock()
+	dirCache.clear()
+	statsCache.clear()
 }
 
 func HandleGetCompanies(c *gin.Context) {
@@ -59,15 +86,10 @@ func HandleGetCompanies(c *gin.Context) {
 		sector, stage, area, q, field, level, hiringOnly, page, pageSize)
 
 	// Check RAM cache first to avoid hitting database on frequent refreshes
-	dirCacheMu.RLock()
-	cached, ok := dirCache[cacheKey]
-	fresh := ok && time.Now().Before(cached.expiresAt)
-	dirCacheMu.RUnlock()
-
-	if fresh {
+	if cached, ok := dirCache.get(cacheKey); ok {
 		c.Header("Cache-Control", "public, max-age=60, stale-while-revalidate=120")
 		c.Header("X-Cache", "HIT")
-		c.JSON(http.StatusOK, cached.data)
+		c.JSON(http.StatusOK, cached)
 		return
 	}
 
@@ -101,13 +123,7 @@ func HandleGetCompanies(c *gin.Context) {
 		},
 	}
 
-	// Store in RAM cache
-	dirCacheMu.Lock()
-	dirCache[cacheKey] = cachedDirectoryResponse{
-		data:      resp,
-		expiresAt: time.Now().Add(dirCacheTTL),
-	}
-	dirCacheMu.Unlock()
+	dirCache.put(cacheKey, resp)
 
 	c.Header("Cache-Control", "public, max-age=60, stale-while-revalidate=120")
 	c.Header("X-Cache", "MISS")
@@ -126,12 +142,7 @@ func HandleGetPipelineHealth(c *gin.Context) {
 
 // HandleGetDirectoryStats backs the count strip above the Job Map grid.
 func HandleGetDirectoryStats(c *gin.Context) {
-	statsCacheMu.RLock()
-	cached := statsCacheData
-	fresh := cached != nil && statsCacheAt.Add(statsCacheTTL).After(time.Now())
-	statsCacheMu.RUnlock()
-
-	if fresh {
+	if cached, ok := statsCache.get(""); ok {
 		c.Header("Cache-Control", "public, max-age=30")
 		c.Header("X-Cache", "HIT")
 		c.JSON(http.StatusOK, cached)
@@ -144,10 +155,7 @@ func HandleGetDirectoryStats(c *gin.Context) {
 		return
 	}
 
-	statsCacheMu.Lock()
-	statsCacheData = &stats
-	statsCacheAt = time.Now()
-	statsCacheMu.Unlock()
+	statsCache.put("", stats)
 
 	c.Header("Cache-Control", "public, max-age=30")
 	c.Header("X-Cache", "MISS")
@@ -282,14 +290,20 @@ func HandleExportFailures(c *gin.Context) {
 	c.Writer.Header().Set("Content-Type", "text/csv")
 	c.Writer.Header().Set("Content-Disposition", "attachment;filename=failed_requests.csv")
 
-	c.Writer.Write([]byte("ID,Provider,Query,Reason,CreatedAt\n"))
+	// encoding/csv rather than hand-built rows. The quote doubling here was
+	// done for two of the five columns, so a provider name carrying a quote
+	// and any value carrying a newline — a Reason is an error string, which
+	// often does — wrote a row that no reader could parse back.
+	w := csv.NewWriter(c.Writer)
+	defer w.Flush()
+	w.Write([]string{"ID", "Provider", "Query", "Reason", "CreatedAt"})
 	for _, f := range failures {
-		// Escape quotes and commas for CSV
-		query := strings.ReplaceAll(f.Query, "\"", "\"\"")
-		reason := strings.ReplaceAll(f.Reason, "\"", "\"\"")
-
-		record := fmt.Sprintf("%d,\"%s\",\"%s\",\"%s\",\"%s\"\n",
-			f.ID, f.Provider, query, reason, f.CreatedAt.Format(time.RFC3339))
-		c.Writer.Write([]byte(record))
+		w.Write([]string{
+			strconv.FormatUint(uint64(f.ID), 10),
+			f.Provider,
+			f.Query,
+			f.Reason,
+			f.CreatedAt.Format(time.RFC3339),
+		})
 	}
 }
