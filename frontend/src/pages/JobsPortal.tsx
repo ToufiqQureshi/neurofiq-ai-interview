@@ -15,6 +15,7 @@ import { PreferenceSentenceFilter } from '../components/PreferenceSentenceFilter
 import { JobListingCard, type JobCardData } from '../components/JobListingCard';
 import { AiMatchSummaryCard } from '../components/AiMatchSummaryCard';
 import CompanyDrawer from '../components/CompanyDrawer';
+import CompanyLogo from '../components/CompanyLogo';
 
 interface Company {
   id: string;
@@ -240,17 +241,12 @@ export function JobsPortal() {
                 className="min-w-[280px] sm:min-w-[320px] snap-start bg-paper dark:bg-zinc-900/90 border border-line hover:border-accent/50 rounded-2xl p-4 shadow-xs hover:shadow-md transition-all cursor-pointer flex flex-col justify-between gap-3 group"
               >
                 <div className="flex items-start gap-3">
-                  {j.companyDomain ? (
-                    <img
-                      src={`https://www.google.com/s2/favicons?domain=${j.companyDomain}&sz=128`}
-                      alt={j.companyName}
-                      className="w-9 h-9 rounded-xl border border-line object-contain bg-white flex-shrink-0 p-1"
-                    />
-                  ) : (
-                    <div className="w-9 h-9 rounded-xl bg-accent-soft text-accent font-bold text-xs flex items-center justify-center font-mono">
-                      {j.companyName.slice(0, 2)}
-                    </div>
-                  )}
+                  <CompanyLogo
+                    domain={j.companyDomain}
+                    name={j.companyName}
+                    className="w-9 h-9 rounded-xl"
+                    fallbackClassName="bg-accent-soft text-accent"
+                  />
                   <div className="min-w-0 flex-1">
                     <span className="text-[11px] font-semibold text-ink-faint truncate block">
                       {j.companyName}
