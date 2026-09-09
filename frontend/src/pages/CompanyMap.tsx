@@ -1,8 +1,7 @@
 import { useEffect, useState } from 'react';
-import { Search, LayoutGrid, Briefcase, ExternalLink, ChevronDown, Sparkles, MapPin, Globe } from 'lucide-react';
+import { Search, LayoutGrid, Briefcase, ExternalLink, ChevronDown, Sparkles, MapPin } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import MapLibreCompanyMap from '../components/MapLibreCompanyMap';
-import LeafletCompanyMap from '../components/LeafletCompanyMap';
 import { CustomDropdown } from '../components/CustomDropdown';
 
 interface Company {
@@ -257,7 +256,7 @@ export function CompanyMap() {
   const [companies, setCompanies] = useState<Company[]>([]);
   const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(true);
-  const [view, setView] = useState<'grid' | 'map2d' | 'map3d'>('map3d');
+  const [view, setView] = useState<'grid' | 'map3d'>('map3d');
   // The directory is a map of the ecosystem, not a jobs board, so the
   // default view is the whole thing and "Hiring only" is the overlay you
   // reach for. This used to default the other way, back when the aim was to
@@ -376,14 +375,6 @@ export function CompanyMap() {
               }`}
             >
               <LayoutGrid className="w-3.5 h-3.5" /> Grid
-            </button>
-            <button
-              onClick={() => setView('map2d')}
-              className={`flex items-center gap-1.5 px-3.5 py-1.5 rounded-full text-xs font-semibold transition-all ${
-                view === 'map2d' ? 'bg-ink text-white shadow-sm' : 'text-ink-soft hover:text-ink'
-              }`}
-            >
-              <Globe className="w-3.5 h-3.5 text-emerald-500" /> 2D Map
             </button>
             <button
               onClick={() => setView('map3d')}
@@ -537,8 +528,6 @@ export function CompanyMap() {
       {/* Map View vs Grid View */}
       {view === 'map3d' ? (
         <MapLibreCompanyMap companies={companies} selectedHub={selectedHub} />
-      ) : view === 'map2d' ? (
-        <LeafletCompanyMap companies={companies} selectedHub={selectedHub} />
       ) : (
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
           {loading && companies.length === 0 ? (
