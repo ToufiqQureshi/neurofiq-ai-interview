@@ -402,12 +402,39 @@ func fetchText(url string) (string, error) {
 	return string(body), err
 }
 
-// atsGet calls one of the applicant-tracking APIs we support. The host is
-// ours to choose, but the slug inside the URL came out of a regex over
-// scraped HTML — so it is validated before it can steer the request
-// somewhere else entirely.
-func atsGet(url string) (*http.Response, error) {
-	return SafeExternalGet(url)
+// fetchATSJSON reads one board's public JSON feed into R.
+//
+// Every provider below answered the same four questions in its own copy of the
+// same twelve lines: is the slug a real board identifier, did the GET succeed,
+// did the board answer 200, and does its body parse. Only the URL and the
+// response type ever differed, and those are the two things passed in here.
+// What each provider does with its parsed rows — the field mapping in
+// FetchATSJobs — stays per-provider, because that part genuinely differs.
+//
+// The url argument is built by the caller and so already carries the slug, but
+// nothing is sent before validATSSlug has passed: a bad slug returns here with
+// the request unmade. The host is ours to choose; the slug came out of a regex
+// over scraped HTML, which is what that check is for.
+func fetchATSJSON[R any](provider, slug, url string) (R, error) {
+	var parsed R
+	if !validATSSlug(slug) {
+		return parsed, fmt.Errorf("invalid %s slug %q", provider, slug)
+	}
+	resp, err := SafeExternalGet(url)
+	if err != nil {
+		return parsed, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return parsed, &HTTPStatusError{Status: resp.StatusCode, URL: provider + "/" + slug}
+	}
+	// Capped like the POST-based readers already were: the constant exists so
+	// a misbehaving endpoint cannot stream us out of memory, and there was no
+	// reason the plain-GET boards were exempt from it.
+	if err := json.NewDecoder(io.LimitReader(resp.Body, maxATSResponseBytes)).Decode(&parsed); err != nil {
+		return parsed, err
+	}
+	return parsed, nil
 }
 
 // validATSSlug accepts only the shape a real board identifier takes. Without
@@ -428,81 +455,28 @@ func validATSSlug(slug string) bool {
 }
 
 func fetchGreenhouseJobs(slug string) ([]greenhouseJob, error) {
-	if !validATSSlug(slug) {
-		return nil, fmt.Errorf("invalid greenhouse slug %q", slug)
-	}
-	resp, err := atsGet("https://boards-api.greenhouse.io/v1/boards/" + slug + "/jobs")
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		return nil, &HTTPStatusError{Status: resp.StatusCode, URL: "greenhouse/" + slug}
-	}
-	var parsed greenhouseResponse
-	if err := json.NewDecoder(resp.Body).Decode(&parsed); err != nil {
-		return nil, err
-	}
-	return parsed.Jobs, nil
+	parsed, err := fetchATSJSON[greenhouseResponse](
+		"greenhouse", slug, "https://boards-api.greenhouse.io/v1/boards/"+slug+"/jobs")
+	return parsed.Jobs, err
 }
 
 func fetchLeverJobs(slug string) ([]leverJob, error) {
-	if !validATSSlug(slug) {
-		return nil, fmt.Errorf("invalid lever slug %q", slug)
-	}
-	resp, err := atsGet("https://api.lever.co/v0/postings/" + slug + "?mode=json")
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		return nil, &HTTPStatusError{Status: resp.StatusCode, URL: "lever/" + slug}
-	}
-	var parsed []leverJob
-	if err := json.NewDecoder(resp.Body).Decode(&parsed); err != nil {
-		return nil, err
-	}
-	return parsed, nil
+	return fetchATSJSON[[]leverJob](
+		"lever", slug, "https://api.lever.co/v0/postings/"+slug+"?mode=json")
 }
 
 func fetchAshbyJobs(slug string) ([]ashbyJob, error) {
-	if !validATSSlug(slug) {
-		return nil, fmt.Errorf("invalid ashby slug %q", slug)
-	}
-	resp, err := atsGet("https://api.ashbyhq.com/posting-api/job-board/" + slug)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		return nil, &HTTPStatusError{Status: resp.StatusCode, URL: "ashby/" + slug}
-	}
-	var parsed ashbyResponse
-	if err := json.NewDecoder(resp.Body).Decode(&parsed); err != nil {
-		return nil, err
-	}
-	return parsed.Jobs, nil
+	parsed, err := fetchATSJSON[ashbyResponse](
+		"ashby", slug, "https://api.ashbyhq.com/posting-api/job-board/"+slug)
+	return parsed.Jobs, err
 }
 
 func fetchSmartRecruitersJobs(slug string) ([]smartRecruitersJob, error) {
-	if !validATSSlug(slug) {
-		return nil, fmt.Errorf("invalid smartrecruiters slug %q", slug)
-	}
 	// limit=100 is the API's max page size; without it you silently get
 	// only the first 10 roles.
-	resp, err := atsGet("https://api.smartrecruiters.com/v1/companies/" + slug + "/postings?limit=100")
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		return nil, &HTTPStatusError{Status: resp.StatusCode, URL: "smartrecruiters/" + slug}
-	}
-	var parsed smartRecruitersResponse
-	if err := json.NewDecoder(resp.Body).Decode(&parsed); err != nil {
-		return nil, err
-	}
-	return parsed.Content, nil
+	parsed, err := fetchATSJSON[smartRecruitersResponse](
+		"smartrecruiters", slug, "https://api.smartrecruiters.com/v1/companies/"+slug+"/postings?limit=100")
+	return parsed.Content, err
 }
 
 // browserUserAgent is sent only where a board refuses a plain client. Our
@@ -579,65 +553,25 @@ func fetchDarwinboxJobs(slug string) ([]darwinboxJob, error) {
 }
 
 func fetchKekaJobs(slug string) ([]kekaJob, error) {
-	if !validATSSlug(slug) {
-		return nil, fmt.Errorf("invalid keka slug %q", slug)
-	}
 	// Keka's official developer API is partner-gated, but every Keka-hosted
 	// careers portal exposes this endpoint publicly — it's what the page
 	// itself calls to render its listings.
-	resp, err := atsGet("https://" + slug + ".keka.com/careers/api/jobs/default/active")
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		return nil, &HTTPStatusError{Status: resp.StatusCode, URL: "keka/" + slug}
-	}
-	var parsed []kekaJob
-	if err := json.NewDecoder(resp.Body).Decode(&parsed); err != nil {
-		return nil, err
-	}
-	return parsed, nil
+	return fetchATSJSON[[]kekaJob](
+		"keka", slug, "https://"+slug+".keka.com/careers/api/jobs/default/active")
 }
 
 func fetchWorkableJobs(slug string) ([]workableJob, error) {
-	if !validATSSlug(slug) {
-		return nil, fmt.Errorf("invalid workable slug %q", slug)
-	}
-	resp, err := atsGet("https://apply.workable.com/api/v1/widget/accounts/" + slug + "?details=true")
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		return nil, &HTTPStatusError{Status: resp.StatusCode, URL: "workable/" + slug}
-	}
-	var parsed workableResponse
-	if err := json.NewDecoder(resp.Body).Decode(&parsed); err != nil {
-		return nil, err
-	}
-	return parsed.Jobs, nil
+	parsed, err := fetchATSJSON[workableResponse](
+		"workable", slug, "https://apply.workable.com/api/v1/widget/accounts/"+slug+"?details=true")
+	return parsed.Jobs, err
 }
 
 // fetchRecruiteeJobs reads a company's Careers Site API — public JSON, no
 // key, documented at docs.recruitee.com/reference/intro-to-careers-site-api.
 func fetchRecruiteeJobs(slug string) ([]recruiteeOffer, error) {
-	if !validATSSlug(slug) {
-		return nil, fmt.Errorf("invalid recruitee slug %q", slug)
-	}
-	resp, err := atsGet("https://" + slug + ".recruitee.com/api/offers/")
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		return nil, &HTTPStatusError{Status: resp.StatusCode, URL: "recruitee/" + slug}
-	}
-	var parsed recruiteeResponse
-	if err := json.NewDecoder(resp.Body).Decode(&parsed); err != nil {
-		return nil, err
-	}
-	return parsed.Offers, nil
+	parsed, err := fetchATSJSON[recruiteeResponse](
+		"recruitee", slug, "https://"+slug+".recruitee.com/api/offers/")
+	return parsed.Offers, err
 }
 
 // fetchPersonioJobs reads a tenant's public XML feed. slug is stored as the
@@ -648,7 +582,9 @@ func fetchPersonioJobs(slug string) ([]personioPosition, error) {
 	if !validATSSlug(slug) {
 		return nil, fmt.Errorf("invalid personio slug %q", slug)
 	}
-	resp, err := atsGet("https://" + slug + "/xml")
+	// Not fetchATSJSON: Personio's feed is XML, and that one decoder line is
+	// the only thing this does differently.
+	resp, err := SafeExternalGet("https://" + slug + "/xml")
 	if err != nil {
 		return nil, err
 	}

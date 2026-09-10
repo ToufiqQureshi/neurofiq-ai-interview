@@ -59,13 +59,20 @@ func sendResendEmail(to string, magicLink string, jobTitle string) {
 	}
 }
 
-// Generate a random secure token for magic links
-func generateMagicToken() string {
+// generateMagicToken mints the token that admits a candidate to an interview.
+//
+// It reports its error rather than substituting anything, because the only
+// substitute available is a guess. This returned "fallback-token-" plus the
+// current time when crypto/rand failed — a credential an attacker can derive
+// from a timestamp, handed out precisely when the randomness source is the
+// thing that is broken. A failed invite is recoverable; a predictable one is
+// not, and nothing tells them apart afterwards.
+func generateMagicToken() (string, error) {
 	bytes := make([]byte, 16)
 	if _, err := rand.Read(bytes); err != nil {
-		return "fallback-token-" + time.Now().String()
+		return "", err
 	}
-	return hex.EncodeToString(bytes)
+	return hex.EncodeToString(bytes), nil
 }
 
 // POST /api/invites
@@ -93,7 +100,11 @@ func CreateInvite(c *gin.Context) {
 	// bare invite, and the candidate landing page only uses repo_full_name
 	// and token), so there is nothing to carry it in until this needs a
 	// dedicated field on the invite itself.
-	token := generateMagicToken()
+	token, err := generateMagicToken()
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to create invite"})
+		return
+	}
 
 	invite := models.InterviewInvite{
 		Token:          token,

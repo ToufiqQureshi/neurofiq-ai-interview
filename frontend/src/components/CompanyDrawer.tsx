@@ -1,21 +1,9 @@
 import { X, ExternalLink, Sparkles, MapPin, Briefcase } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import CompanyJobList from './CompanyJobList';
+import CompanyLogo from './CompanyLogo';
+import type { Company } from '../lib/types';
 
-interface Company {
-  id: string;
-  name: string;
-  description: string;
-  website: string;
-  domain: string;
-  sector: string;
-  stage: string;
-  area: string;
-  careers_url: string;
-  lat: number | null;
-  lng: number | null;
-  job_count: number;
-}
 
 interface CompanyDrawerProps {
   company: Company | null;
@@ -27,31 +15,19 @@ export default function CompanyDrawer({ company, onClose }: CompanyDrawerProps) 
 
   if (!company) return null;
 
-  const faviconUrl = company.domain
-    ? `https://www.google.com/s2/favicons?domain=${company.domain}&sz=128`
-    : '';
 
   return (
     <div className="fixed top-20 right-4 sm:right-6 z-[999] w-84 sm:w-96 max-h-[calc(100vh-6rem)] bg-paper/95 dark:bg-zinc-900/95 backdrop-blur-xl border border-line rounded-2xl shadow-2xl flex flex-col overflow-hidden animate-fade-in transition-all">
       {/* Drawer Header */}
       <div className="p-4 border-b border-slate-100 flex items-start justify-between gap-3 bg-gradient-to-b from-slate-50/80 to-transparent">
         <div className="flex items-center gap-3 min-w-0">
-          <div className="w-12 h-12 rounded-xl bg-white border border-slate-200 shadow-sm flex items-center justify-center overflow-hidden shrink-0 p-1.5">
-            {faviconUrl ? (
-              <img
-                src={faviconUrl}
-                alt={company.name}
-                className="w-full h-full object-contain"
-                onError={e => {
-                  (e.currentTarget as HTMLElement).style.display = 'none';
-                }}
-              />
-            ) : (
-              <span className="font-bold text-lg text-slate-800 font-mono">
-                {company.name.charAt(0)}
-              </span>
-            )}
-          </div>
+          <CompanyLogo
+            domain={company.domain}
+            name={company.name}
+            className="w-12 h-12 rounded-xl"
+            fallbackClassName="bg-white border border-slate-200 text-slate-800"
+            fallbackTextClassName="text-lg"
+          />
           <div className="min-w-0 flex-1">
             <h3 className="font-bold text-base text-slate-900 truncate tracking-tight">
               {company.name}

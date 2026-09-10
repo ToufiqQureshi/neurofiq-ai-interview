@@ -126,3 +126,44 @@ func TestPersonioXMLUnmarshalsRealFeedShape(t *testing.T) {
 		t.Errorf("position 0 = %+v", parsed.Positions[0])
 	}
 }
+
+// A board slug reaches the readers from a regex over scraped HTML, so a slug
+// shaped to steer the request at another host has to be refused before
+// anything is sent. Every provider shares one helper now; this is the check
+// that the shared path still enforces what each hand-written copy used to.
+func TestEveryATSReaderRefusesAHostileSlug(t *testing.T) {
+	const hostile = "evil.example.com/x?"
+	readers := map[string]func(string) error{
+		"greenhouse":      func(s string) error { _, err := fetchGreenhouseJobs(s); return err },
+		"lever":           func(s string) error { _, err := fetchLeverJobs(s); return err },
+		"ashby":           func(s string) error { _, err := fetchAshbyJobs(s); return err },
+		"smartrecruiters": func(s string) error { _, err := fetchSmartRecruitersJobs(s); return err },
+		"keka":            func(s string) error { _, err := fetchKekaJobs(s); return err },
+		"workable":        func(s string) error { _, err := fetchWorkableJobs(s); return err },
+		"recruitee":       func(s string) error { _, err := fetchRecruiteeJobs(s); return err },
+		"personio":        func(s string) error { _, err := fetchPersonioJobs(s); return err },
+	}
+	for name, read := range readers {
+		err := read(hostile)
+		if err == nil {
+			t.Fatalf("%s accepted a hostile slug", name)
+		}
+		// Not just "an error": a network error would mean the request went
+		// out and the guard did not stop it.
+		if !strings.Contains(err.Error(), "invalid "+name+" slug") {
+			t.Fatalf("%s rejected for the wrong reason: %v", name, err)
+		}
+	}
+}
+
+// A reader that fails must hand back no rows, not a half-filled slice the
+// caller could mistake for a board with nothing on it.
+func TestFailedATSReadReturnsNoRows(t *testing.T) {
+	rows, err := fetchGreenhouseJobs("bad slug!")
+	if err == nil {
+		t.Fatal("expected an error")
+	}
+	if rows != nil {
+		t.Fatalf("expected no rows, got %d", len(rows))
+	}
+}

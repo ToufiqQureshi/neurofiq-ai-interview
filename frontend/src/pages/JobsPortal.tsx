@@ -15,21 +15,10 @@ import { PreferenceSentenceFilter } from '../components/PreferenceSentenceFilter
 import { JobListingCard, type JobCardData } from '../components/JobListingCard';
 import { AiMatchSummaryCard } from '../components/AiMatchSummaryCard';
 import CompanyDrawer from '../components/CompanyDrawer';
+import CompanyLogo from '../components/CompanyLogo';
+import { LOCATION_OPTIONS } from '../lib/locations';
+import type { Company } from '../lib/types';
 
-interface Company {
-  id: string;
-  name: string;
-  description: string;
-  website: string;
-  domain: string;
-  sector: string;
-  stage: string;
-  area: string;
-  careers_url: string;
-  lat: number | null;
-  lng: number | null;
-  job_count: number;
-}
 
 const SCOPE_OPTIONS = [
   { label: 'All Roles', value: '' },
@@ -60,16 +49,6 @@ const POPULAR_CATEGORIES = [
   { label: 'Security & QA', value: 'Security' },
 ];
 
-const SUB_HUBS = [
-  { name: 'Pan-India', query: '' },
-  { name: 'Bengaluru (HSR / Koramangala)', query: 'Bengaluru' },
-  { name: 'Mumbai (BKC / Andheri / Powai)', query: 'Mumbai' },
-  { name: 'Vasai-Virar (Palghar Suburbs)', query: 'Vasai' },
-  { name: 'Delhi NCR (Cyber City / Noida)', query: 'Delhi' },
-  { name: 'Hyderabad (Hitec City)', query: 'Hyderabad' },
-  { name: 'Pune (Hinjawadi)', query: 'Pune' },
-  { name: 'Remote Roles', query: 'Remote' },
-];
 
 export function JobsPortal() {
   const navigate = useNavigate();
@@ -105,7 +84,6 @@ export function JobsPortal() {
       .catch(err => console.error('Failed to load company by id:', err));
   };
 
-  const [totalLiveJobs, setTotalLiveJobs] = useState(3550);
 
   // Fetch Companies for Drawer & Global Directory Stats
   useEffect(() => {
@@ -140,7 +118,6 @@ export function JobsPortal() {
         .then(r => (r.ok ? r.json() : null))
         .then(d => {
           if (!isMounted || !d) return;
-          if (d.total) setTotalLiveJobs(d.total);
           const mappedJobs: JobCardData[] = (d.jobs || []).map((j: any) => ({
             id: j.id,
             title: j.title,
@@ -240,17 +217,12 @@ export function JobsPortal() {
                 className="min-w-[280px] sm:min-w-[320px] snap-start bg-paper dark:bg-zinc-900/90 border border-line hover:border-accent/50 rounded-2xl p-4 shadow-xs hover:shadow-md transition-all cursor-pointer flex flex-col justify-between gap-3 group"
               >
                 <div className="flex items-start gap-3">
-                  {j.companyDomain ? (
-                    <img
-                      src={`https://www.google.com/s2/favicons?domain=${j.companyDomain}&sz=128`}
-                      alt={j.companyName}
-                      className="w-9 h-9 rounded-xl border border-line object-contain bg-white flex-shrink-0 p-1"
-                    />
-                  ) : (
-                    <div className="w-9 h-9 rounded-xl bg-accent-soft text-accent font-bold text-xs flex items-center justify-center font-mono">
-                      {j.companyName.slice(0, 2)}
-                    </div>
-                  )}
+                  <CompanyLogo
+                    domain={j.companyDomain}
+                    name={j.companyName}
+                    className="w-9 h-9 rounded-xl"
+                    fallbackClassName="bg-accent-soft text-accent"
+                  />
                   <div className="min-w-0 flex-1">
                     <span className="text-[11px] font-semibold text-ink-faint truncate block">
                       {j.companyName}
@@ -369,19 +341,19 @@ export function JobsPortal() {
               <span>Tech Sub-Hubs</span>
             </h4>
             <div className="flex flex-col gap-1">
-              {SUB_HUBS.map(hub => (
+              {LOCATION_OPTIONS.map(hub => (
                 <button
-                  key={hub.name}
+                  key={hub.value}
                   type="button"
-                  onClick={() => setSelectedLocation(hub.query)}
+                  onClick={() => setSelectedLocation(hub.value)}
                   className={`text-left px-3 py-2 rounded-xl text-xs font-medium transition-colors flex items-center justify-between ${
-                    selectedLocation === hub.query
+                    selectedLocation === hub.value
                       ? 'bg-accent-soft text-accent font-semibold'
                       : 'text-ink-soft hover:bg-zinc-100 dark:hover:bg-zinc-800 hover:text-ink'
                   }`}
                 >
-                  <span className="truncate">{hub.name}</span>
-                  {selectedLocation === hub.query && (
+                  <span className="truncate">{hub.label}</span>
+                  {selectedLocation === hub.value && (
                     <CheckCircle2 className="w-3.5 h-3.5 text-accent flex-shrink-0" />
                   )}
                 </button>
@@ -428,7 +400,6 @@ export function JobsPortal() {
         {/* Right Column: AI Matcher & Copilot Sidebar (3 cols) */}
         <div className="lg:col-span-3">
           <AiMatchSummaryCard
-            totalJobsCount={totalLiveJobs}
             filteredCount={filteredJobs.length}
           />
         </div>

@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { Search, Mic, MicOff, MapPin, Sparkles, X, ChevronDown } from 'lucide-react';
+import { LOCATION_OPTIONS } from '../lib/locations';
 
 interface UnifiedSearchCapsuleProps {
   searchQuery: string;
@@ -11,16 +12,6 @@ interface UnifiedSearchCapsuleProps {
   onSelectPill?: (pill: string) => void;
 }
 
-const COMMON_LOCATIONS = [
-  { label: 'All India', value: '' },
-  { label: 'Bengaluru', value: 'Bengaluru' },
-  { label: 'Mumbai & Suburbs', value: 'Mumbai' },
-  { label: 'Vasai-Virar (Palghar)', value: 'Vasai' },
-  { label: 'Delhi NCR (Gurugram/Noida)', value: 'Delhi' },
-  { label: 'Hyderabad', value: 'Hyderabad' },
-  { label: 'Pune', value: 'Pune' },
-  { label: 'Remote / Pan-India', value: 'Remote' },
-];
 
 export function UnifiedSearchCapsule({
   searchQuery,
@@ -146,7 +137,13 @@ export function UnifiedSearchCapsule({
             <div className="flex items-center gap-2 truncate">
               <MapPin className="w-4 h-4 text-accent flex-shrink-0" />
               <span className="truncate font-medium">
-                {selectedLocation || 'All India & Remote'}
+                {/* The label, not the raw filter value: the menu offers
+                    "Bengaluru (HSR / Koramangala)" and the closed capsule used
+                    to answer "Bengaluru", so the control disagreed with itself
+                    about what had just been picked. */}
+                {LOCATION_OPTIONS.find(l => l.value === selectedLocation)?.label ||
+                  selectedLocation ||
+                  'All India & Remote'}
               </span>
             </div>
             <ChevronDown className="w-3.5 h-3.5 text-ink-faint flex-shrink-0" />
@@ -157,7 +154,7 @@ export function UnifiedSearchCapsule({
               <div className="px-3 py-1.5 text-[11px] font-mono uppercase text-ink-faint font-semibold tracking-wider">
                 Select Tech Hub
               </div>
-              {COMMON_LOCATIONS.map(loc => (
+              {LOCATION_OPTIONS.map(loc => (
                 <button
                   key={loc.label}
                   type="button"

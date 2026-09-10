@@ -49,10 +49,6 @@ type visitor struct {
 var (
 	ipLimiters   sync.Map // map[string]*visitor
 	writeLimiter sync.Map // map[userID]*visitor — the expensive endpoints
-	// discoveryLimiter is separate because discovery is not billed in the
-	// same units as everything else in the paid group: one call spends real
-	// searches out of a small monthly allowance the whole Job Map depends on.
-	discoveryLimiter sync.Map // map[userID]*visitor
 )
 
 func getLimiter(store *sync.Map, key string, r rate.Limit, burst int) *rate.Limiter {
@@ -354,80 +350,70 @@ func main() {
 	// Everything below is work on companies already stored — free, and
 	// unaffected by where they were found.
 
+	// mustSchedule registers one job or refuses to start. A schedule that
+	// silently failed to register is a background task nobody notices is
+	// missing until the data it maintains has already drifted.
+	mustSchedule := func(spec, name string, job func()) {
+		if _, err := scheduler.AddFunc(spec, func() { safely(name, job) }); err != nil {
+			log.Fatalf("Failed to schedule %s: %v", name, err)
+		}
+	}
+
 	// Job syncing stays hourly on its own schedule, so a closed posting drops
 	// off within the hour even between discovery runs.
-	if _, err := scheduler.AddFunc("@every 5m", func() {
-		safely("job sync", services.RunJobSync)
-	}); err != nil {
-		log.Fatalf("Failed to schedule job sync: %v", err)
-	}
+	mustSchedule("@every 5m", "job sync", services.RunJobSync)
 
 	// Enrichment reads each company's own homepage for the description and
 	// sector its card needs. One free GET per company, no metered search and
 	// no model, so it keeps its own schedule instead of competing with
 	// discovery for a budget. A bounded batch each hour works through the
 	// backlog without sweeping the table at once.
-	if _, err := scheduler.AddFunc("@every 1h", func() {
-		safely("enrichment", services.RunEnrichment)
-	}); err != nil {
-		log.Fatalf("Failed to schedule enrichment: %v", err)
-	}
+	mustSchedule("@every 1h", "enrichment", services.RunEnrichment)
+
 	// Says, on a schedule, whether roles are still arriving — and says it
 	// loudly when they are not. Every failure this catches is a quiet one: a
 	// throttled provider, a sync rotation falling behind.
-	if _, err := scheduler.AddFunc("@every 1h", func() {
-		safely("pipeline health", services.LogPipelineHealth)
-	}); err != nil {
-		log.Fatalf("Failed to schedule the pipeline health check: %v", err)
-	}
+	mustSchedule("@every 1h", "pipeline health", services.LogPipelineHealth)
+
 	// Finishes any job classification the boot pass did not reach, and
 	// reclassifies everything when the bucket rules change.
-	if _, err := scheduler.AddFunc("@every 12h", func() {
-		safely("job facet backfill", services.RunFacetBackfill)
-	}); err != nil {
-		log.Fatalf("Failed to schedule the job facet backfill: %v", err)
-	}
+	mustSchedule("@every 12h", "job facet backfill", services.RunFacetBackfill)
+
 	// Repairs the denormalised companies.open_roles from the jobs table. The
 	// counter is written by every path that writes roles; this is what makes a
 	// drift caused by a crash mid-write self-correcting rather than permanent.
-	if _, err := scheduler.AddFunc("@every 6h", func() {
-		safely("open-role recount", func() {
-			if n, err := services.RecountOpenRoles(); err != nil {
-				log.Printf("open-role recount failed: %v", err)
-			} else if n > 0 {
-				log.Printf("open-role recount: corrected %d companies", n)
-			}
-		})
-	}); err != nil {
-		log.Fatalf("Failed to schedule the open-role recount: %v", err)
-	}
+	mustSchedule("@every 6h", "open-role recount", func() {
+		if n, err := services.RecountOpenRoles(); err != nil {
+			log.Printf("open-role recount failed: %v", err)
+		} else if n > 0 {
+			log.Printf("open-role recount: corrected %d companies", n)
+		}
+	})
+
 	// Housekeeping: reclaim abandoned analyses and forget idle rate-limit
 	// buckets. Cheap, and it keeps a long-running process from drifting.
-	if _, err := scheduler.AddFunc("@every 15m", func() {
-		safely("housekeeping", func() {
-			services.ReclaimStaleAnalyses(30 * time.Minute)
-			sweepLimiters(&ipLimiters, time.Hour)
-			sweepLimiters(&writeLimiter, time.Hour)
-			sweepLimiters(&discoveryLimiter, 3*time.Hour)
-		})
-	}); err != nil {
-		log.Fatalf("Failed to schedule housekeeping: %v", err)
-	}
-	if _, err := scheduler.AddFunc("@every 12h", func() {
+	mustSchedule("@every 15m", "housekeeping", func() {
+		services.ReclaimStaleAnalyses(30 * time.Minute)
+		sweepLimiters(&ipLimiters, time.Hour)
+		sweepLimiters(&writeLimiter, time.Hour)
+	})
+
+	// One entry, not two: the prune deletes rows and recounts, the guard pass
+	// re-runs the admission rules over what is left. They share the same tick
+	// deliberately so they run in that order rather than interleaving their
+	// writes.
+	mustSchedule("@every 12h", "prune and guard backfill", func() {
 		safely("prune dead jobs", func() {
 			services.PruneDeadJobs()
 		})
-		// Re-run the admission rules over rows already stored. Every guard in
-		// services runs at insert and never again, so a rule added today
-		// leaves yesterday's violations in place — and clearing those has
-		// meant hand-written DELETEs against production, which is the one
-		// thing a self-maintaining directory must never need.
+		// Every guard in services runs at insert and never again, so a rule
+		// added today leaves yesterday's violations in place — and clearing
+		// those has meant hand-written DELETEs against production, which is
+		// the one thing a self-maintaining directory must never need.
 		safely("guard backfill", func() {
 			services.ReapplyGuards()
 		})
-	}); err != nil {
-		log.Fatalf("Failed to schedule dead job pruning: %v", err)
-	}
+	})
 	scheduler.Start()
 
 	// 9. Serve, and shut down cleanly.
@@ -524,20 +510,7 @@ func safely(name string, fn func()) {
 
 // allowedOrigins reads the browser origins permitted to call this API.
 func allowedOrigins() []string {
-	raw := os.Getenv("FRONTEND_URL")
-	if raw == "" {
-		return []string{"http://localhost:5173"}
-	}
-	var origins []string
-	for _, o := range strings.Split(raw, ",") {
-		if trimmed := strings.TrimSpace(strings.TrimRight(o, "/")); trimmed != "" {
-			origins = append(origins, trimmed)
-		}
-	}
-	if len(origins) == 0 {
-		return []string{"http://localhost:5173"}
-	}
-	return origins
+	return config.AllowedOrigins()
 }
 
 // trustedProxies returns the proxy addresses whose X-Forwarded-For we honour.

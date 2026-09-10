@@ -1,50 +1,17 @@
 import { useEffect, useState } from 'react';
-import { Search, LayoutGrid, Briefcase, ExternalLink, ChevronDown, Sparkles, MapPin, Globe } from 'lucide-react';
-import { useNavigate } from 'react-router-dom';
+import { Search, LayoutGrid, Briefcase, ExternalLink, ChevronDown, Sparkles, MapPin } from 'lucide-react';
 import MapLibreCompanyMap from '../components/MapLibreCompanyMap';
-import LeafletCompanyMap from '../components/LeafletCompanyMap';
+import CompanyJobList from '../components/CompanyJobList';
+import CompanyLogo from '../components/CompanyLogo';
 import { CustomDropdown } from '../components/CustomDropdown';
+import type { Company, TechHub } from '../lib/types';
 
-interface Company {
-  id: string;
-  name: string;
-  description: string;
-  website: string;
-  domain: string;
-  sector: string;
-  stage: string;
-  area: string;
-  careers_url: string;
-  lat: number | null;
-  lng: number | null;
-  job_count: number;
-}
 
 interface Facet {
   name: string;
   count: number;
 }
 
-interface Job {
-  id: string;
-  title: string;
-  department: string;
-  location: string;
-  url: string;
-}
-
-interface TechHub {
-  id: string;
-  name: string;
-  query: string;
-  lat: number;
-  lng: number;
-  zoom: number;
-  minZoom: number;
-  maxZoom: number;
-  bounds: [[number, number], [number, number]];
-  icon: string;
-}
 
 const TECH_HUBS: TechHub[] = [
   {
@@ -129,110 +96,6 @@ const TECH_HUBS: TechHub[] = [
 const PAGE_SIZE = 24;
 const MAP_PAGE_SIZE = 500;
 
-function CompanyLogo({ domain, name }: { domain: string; name: string }) {
-  const [failed, setFailed] = useState(false);
-  if (failed || !domain) {
-    return (
-      <div className="w-10 h-10 rounded-xl bg-paper border border-line flex items-center justify-center text-ink-soft text-xs font-mono font-bold uppercase flex-shrink-0 shadow-sm">
-        {name.slice(0, 2)}
-      </div>
-    );
-  }
-  return (
-    <img
-      src={`https://www.google.com/s2/favicons?domain=${domain}&sz=128`}
-      alt={name}
-      className="w-10 h-10 rounded-xl border border-line object-contain bg-white flex-shrink-0 p-1 shadow-sm"
-      onError={() => setFailed(true)}
-      onLoad={e => {
-        if (e.currentTarget.naturalWidth < 32) setFailed(true);
-      }}
-    />
-  );
-}
-
-// Lazily fetches and renders a company's real open roles with 1-Click Practice Mock Interview
-function JobList({
-  companyId,
-  companyName,
-  field,
-  level,
-}: {
-  companyId: string;
-  companyName: string;
-  field?: string;
-  level?: string;
-}) {
-  const [jobs, setJobs] = useState<Job[] | null>(null);
-  const [loading, setLoading] = useState(true);
-  const navigate = useNavigate();
-
-  useEffect(() => {
-    let cancelled = false;
-    const params = new URLSearchParams();
-    if (field) params.set('field', field);
-    if (level) params.set('level', level);
-    const qs = params.toString() ? `?${params.toString()}` : '';
-    fetch(`${import.meta.env.VITE_API_URL}/api/companies/${companyId}/jobs${qs}`, { credentials: 'include' })
-      .then(r => (r.ok ? r.json() : null))
-      .then(d => {
-        if (!cancelled) setJobs(d?.jobs || []);
-      })
-      .catch(() => {
-        if (!cancelled) setJobs([]);
-      })
-      .finally(() => {
-        if (!cancelled) setLoading(false);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [companyId, field, level]);
-
-  if (loading) return <p className="text-xs text-ink-faint py-2 font-mono">Loading open roles…</p>;
-  if (!jobs || jobs.length === 0) {
-    return <p className="text-xs text-ink-faint py-2">No open roles listed right now.</p>;
-  }
-
-  return (
-    <ul className="divide-y divide-line max-h-64 overflow-y-auto -mx-1 pr-1">
-      {jobs.map(j => (
-        <li key={j.id} className="py-2 px-1 rounded-lg hover:bg-paper/80 transition-colors">
-          <div className="flex items-start justify-between gap-2">
-            <div className="min-w-0 flex-1">
-              <p className="text-xs font-semibold text-ink truncate">{j.title}</p>
-              <p className="text-[10px] text-ink-faint truncate">
-                {[j.department, j.location].filter(Boolean).join(' · ')}
-              </p>
-            </div>
-            <div className="flex items-center gap-1.5 flex-shrink-0">
-              <button
-                onClick={e => {
-                  e.stopPropagation();
-                  navigate('/dashboard');
-                }}
-                title={`Practice AI Interview for ${j.title} at ${companyName}`}
-                className="px-2 py-0.5 rounded-full text-[10px] font-semibold bg-accent-soft text-accent hover:bg-accent hover:text-white transition-all flex items-center gap-1"
-              >
-                <Sparkles className="w-2.5 h-2.5" /> Practice
-              </button>
-              <a
-                href={j.url}
-                target="_blank"
-                rel="noreferrer"
-                title="Open live career posting"
-                className="p-1 rounded text-ink-faint hover:text-ink hover:bg-line transition-colors"
-              >
-                <ExternalLink className="w-3 h-3" />
-              </a>
-            </div>
-          </div>
-        </li>
-      ))}
-    </ul>
-  );
-}
-
 interface DirectoryStats {
   companies: number;
   hiring_companies: number;
@@ -257,7 +120,7 @@ export function CompanyMap() {
   const [companies, setCompanies] = useState<Company[]>([]);
   const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(true);
-  const [view, setView] = useState<'grid' | 'map2d' | 'map3d'>('map3d');
+  const [view, setView] = useState<'grid' | 'map3d'>('map3d');
   // The directory is a map of the ecosystem, not a jobs board, so the
   // default view is the whole thing and "Hiring only" is the overlay you
   // reach for. This used to default the other way, back when the aim was to
@@ -376,14 +239,6 @@ export function CompanyMap() {
               }`}
             >
               <LayoutGrid className="w-3.5 h-3.5" /> Grid
-            </button>
-            <button
-              onClick={() => setView('map2d')}
-              className={`flex items-center gap-1.5 px-3.5 py-1.5 rounded-full text-xs font-semibold transition-all ${
-                view === 'map2d' ? 'bg-ink text-white shadow-sm' : 'text-ink-soft hover:text-ink'
-              }`}
-            >
-              <Globe className="w-3.5 h-3.5 text-emerald-500" /> 2D Map
             </button>
             <button
               onClick={() => setView('map3d')}
@@ -537,8 +392,6 @@ export function CompanyMap() {
       {/* Map View vs Grid View */}
       {view === 'map3d' ? (
         <MapLibreCompanyMap companies={companies} selectedHub={selectedHub} />
-      ) : view === 'map2d' ? (
-        <LeafletCompanyMap companies={companies} selectedHub={selectedHub} />
       ) : (
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
           {loading && companies.length === 0 ? (
@@ -589,7 +442,7 @@ export function CompanyMap() {
 
                 {expandedId === c.id && (
                   <div className="border-t border-line/40 pt-4 mt-2 bg-paper/50 rounded-b-2xl">
-                    <JobList companyId={c.id} companyName={c.name} field={field} level={level} />
+                    <CompanyJobList companyId={c.id} companyName={c.name} field={field} level={level} />
                   </div>
                 )}
                 {/* Stays visible while expanded: this row carries the only

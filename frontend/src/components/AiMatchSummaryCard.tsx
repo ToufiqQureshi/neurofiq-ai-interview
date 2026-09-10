@@ -3,11 +3,10 @@ import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 
 interface AiMatchSummaryCardProps {
-  totalJobsCount?: number;
   filteredCount?: number;
 }
 
-export function AiMatchSummaryCard({ totalJobsCount = 3318, filteredCount }: AiMatchSummaryCardProps) {
+export function AiMatchSummaryCard({ filteredCount }: AiMatchSummaryCardProps) {
   const navigate = useNavigate();
   const { user } = useAuth();
 
@@ -51,7 +50,7 @@ export function AiMatchSummaryCard({ totalJobsCount = 3318, filteredCount }: AiM
       <div className="grid grid-cols-2 gap-2 pt-1">
         <div className="p-2.5 rounded-xl bg-paper dark:bg-zinc-800/40 border border-line/60 text-center">
           <div className="text-base font-bold text-ink font-mono">
-            {filteredCount !== undefined ? filteredCount : totalJobsCount}
+            {filteredCount}
           </div>
           <div className="text-[10px] text-ink-faint uppercase font-medium mt-0.5">
             Active Openings

@@ -10,7 +10,6 @@ type User struct {
 	ID               string    `gorm:"type:uuid;default:gen_random_uuid();primaryKey" json:"id"`
 	GithubID         *int64    `gorm:"unique" json:"github_id,omitempty"`
 	GithubUsername   string    `json:"github_username"`
-	GoogleID         *string   `gorm:"unique" json:"google_id,omitempty"`
 	Email            string    `gorm:"unique" json:"email"`
 	PasswordHash     string    `json:"-"` // Never exposed in JSON responses
 	FullName         string    `json:"full_name"`

@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
+import { scoreBand } from '../lib/score';
 
 export function Dashboard() {
   const [reports, setReports] = useState<any[]>([]);
@@ -91,11 +92,9 @@ export function Dashboard() {
                   </div>
                 </div>
                 <span className={`lowercase px-3 py-1 rounded-full text-[11px] font-semibold ${
-                  report.overall_score >= 8 ? 'bg-pass-soft text-pass' :
-                  report.overall_score >= 5 ? 'bg-warn-soft text-warn' :
-                  'bg-crit-soft text-crit'
-                }`}>
-                  {report.overall_score >= 8 ? 'excellent' : report.overall_score >= 5 ? 'average' : 'needs review'}
+                  scoreBand(report.overall_score).chip
+                } ${scoreBand(report.overall_score).text}`}>
+                  {scoreBand(report.overall_score).label}
                 </span>
               </div>
             ))

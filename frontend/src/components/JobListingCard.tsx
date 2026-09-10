@@ -1,6 +1,7 @@
-import React, { useState } from 'react';
-import { Sparkles, ExternalLink, Bookmark, MapPin, Building2, Clock, CheckCircle2 } from 'lucide-react';
+import React from 'react';
+import { Sparkles, ExternalLink, MapPin, Building2, Clock, CheckCircle2 } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
+import CompanyLogo from './CompanyLogo';
 
 export interface JobCardData {
   id: string;
@@ -15,29 +16,19 @@ export interface JobCardData {
   experienceLevel?: string;
   workType?: string;
   postedDate?: string;
-  isBookmarked?: boolean;
 }
 
 interface JobListingCardProps {
   job: JobCardData;
-  onBookmarkToggle?: (jobId: string) => void;
   onSelectCompany?: (companyId: string) => void;
 }
 
 export function JobListingCard({
   job,
-  onBookmarkToggle,
   onSelectCompany,
 }: JobListingCardProps) {
   const navigate = useNavigate();
-  const [logoFailed, setLogoFailed] = useState(false);
-  const [bookmarked, setBookmarked] = useState(job.isBookmarked || false);
 
-  const handleBookmark = (e: React.MouseEvent) => {
-    e.stopPropagation();
-    setBookmarked(!bookmarked);
-    if (onBookmarkToggle) onBookmarkToggle(job.id);
-  };
 
   const handlePracticeInterview = (e: React.MouseEvent) => {
     e.stopPropagation();
@@ -52,18 +43,13 @@ export function JobListingCard({
       {/* Top Bar: Company Logo, Title & Bookmark */}
       <div className="flex items-start gap-3.5">
         {/* Company Logo */}
-        {job.companyDomain && !logoFailed ? (
-          <img
-            src={`https://www.google.com/s2/favicons?domain=${job.companyDomain}&sz=128`}
-            alt={job.companyName}
-            className="w-11 h-11 rounded-xl border border-line object-contain bg-white flex-shrink-0 p-1 shadow-xs"
-            onError={() => setLogoFailed(true)}
-          />
-        ) : (
-          <div className="w-11 h-11 rounded-xl bg-accent-soft border border-line flex items-center justify-center text-accent text-sm font-bold uppercase flex-shrink-0 font-mono">
-            {job.companyName.slice(0, 2)}
-          </div>
-        )}
+        <CompanyLogo
+          domain={job.companyDomain}
+          name={job.companyName}
+          className="w-11 h-11 rounded-xl"
+          fallbackClassName="bg-accent-soft border border-line text-accent"
+          fallbackTextClassName="text-sm"
+        />
 
         {/* Title, Company & Tags */}
         <div className="min-w-0 flex-1">
@@ -105,19 +91,6 @@ export function JobListingCard({
           </div>
         </div>
 
-        {/* Bookmark Button */}
-        <button
-          type="button"
-          onClick={handleBookmark}
-          title={bookmarked ? 'Saved' : 'Save job'}
-          className={`p-1.5 rounded-xl border transition-all flex-shrink-0 ${
-            bookmarked
-              ? 'bg-accent-soft text-accent border-accent/40'
-              : 'text-ink-faint border-transparent hover:border-line hover:text-ink hover:bg-zinc-100 dark:hover:bg-zinc-800'
-          }`}
-        >
-          <Bookmark className={`w-4 h-4 ${bookmarked ? 'fill-current' : ''}`} />
-        </button>
       </div>
 
       {/* Bottom Bar: Action Triggers */}

@@ -79,10 +79,18 @@ func BackfillJobFacets(batch int) (int, error) {
 	if len(rows) == 0 {
 		return 0, nil
 	}
+	if err := writeFacetsFor(rows); err != nil {
+		return 0, err
+	}
+	return len(rows), nil
+}
 
-	// Grouped by the pair rather than updated row by row: a few hundred
-	// distinct (field, level) combinations exist across any number of jobs,
-	// so this is a handful of statements instead of thousands.
+// writeFacetsFor classifies a page of jobs and writes the result.
+//
+// Grouped by the (field, level) pair rather than updated row by row: a few
+// hundred distinct combinations exist across any number of jobs, so this is a
+// handful of statements instead of thousands.
+func writeFacetsFor(rows []models.Job) error {
 	type bucket struct{ field, level string }
 	byBucket := map[bucket][]string{}
 	for _, j := range rows {
@@ -93,10 +101,10 @@ func BackfillJobFacets(batch int) (int, error) {
 		if err := config.DB.Model(&models.Job{}).
 			Where("id IN ?", ids).
 			Updates(map[string]interface{}{"field": b.field, "level": b.level}).Error; err != nil {
-			return 0, err
+			return err
 		}
 	}
-	return len(rows), nil
+	return nil
 }
 
 // classifyJobs stamps the facet columns on rows about to be written, so the
@@ -133,19 +141,8 @@ func ReclassifyAllJobs(batchSize int) (int, error) {
 		if len(rows) == 0 {
 			break
 		}
-
-		type bucket struct{ field, level string }
-		byBucket := map[bucket][]string{}
-		for _, j := range rows {
-			b := bucket{ClassifyField(j.Title, j.Department), ClassifyLevel(j.Title)}
-			byBucket[b] = append(byBucket[b], j.ID)
-		}
-		for b, ids := range byBucket {
-			if err := config.DB.Model(&models.Job{}).
-				Where("id IN ?", ids).
-				Updates(map[string]interface{}{"field": b.field, "level": b.level}).Error; err != nil {
-				return totalUpdated, err
-			}
+		if err := writeFacetsFor(rows); err != nil {
+			return totalUpdated, err
 		}
 
 		totalUpdated += len(rows)

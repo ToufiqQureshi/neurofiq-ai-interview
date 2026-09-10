@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import { Target, AlertCircle, RefreshCw, Loader2, Share2, Check, Copy } from 'lucide-react';
 import { Link, useParams } from 'react-router-dom';
+import { scoreBand } from '../lib/score';
 
 export function Report() {
   const { sessionId } = useParams();
@@ -112,11 +113,7 @@ export function Report() {
         {/* Detailed Feedback Sections */}
         {detailedFeedback.map((item: any, idx: number) => {
           const score = Number(item.score) || 0;
-          const band = score >= 8
-            ? { stripe: 'bg-pass', chip: 'bg-pass-soft', text: 'text-pass' }
-            : score >= 5
-            ? { stripe: 'bg-warn', chip: 'bg-warn-soft', text: 'text-warn' }
-            : { stripe: 'bg-crit', chip: 'bg-crit-soft', text: 'text-crit' };
+          const band = scoreBand(score);
           return (
             <div key={idx} className="relative bg-surface border border-line rounded-xl overflow-hidden">
               <div className={`absolute left-0 top-0 bottom-0 w-1 ${band.stripe}`}></div>

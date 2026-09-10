@@ -1,68 +1,32 @@
 import { useEffect, useRef, useState } from 'react';
 import * as maplibregl from 'maplibre-gl';
 import 'maplibre-gl/dist/maplibre-gl.css';
-import { useNavigate } from 'react-router-dom';
 import { Sparkles, Compass } from 'lucide-react';
 import CompanyDrawer from './CompanyDrawer';
+import type { Company, TechHub } from '../lib/types';
 
-// Every pin and popup below is built with innerHTML for MapLibre's marker
-// API, and every value going into them — company name, description, job
-// title, department — comes from a scraped ATS board or LLM extraction, not
-// from this app. A job title containing a stray `<` is all it takes to break
-// out of the template. Escape on the way in rather than trusting the source.
+// Each pin below is built with innerHTML, because that is what MapLibre's
+// marker API takes, and the company name going into it comes from a scraped
+// ATS board or an LLM extraction rather than from this app. A name containing
+// a stray `<` is all it takes to break out of the template. Escape on the way
+// in rather than trusting the source.
 function escapeHtml(value: unknown): string {
   return String(value ?? '').replace(/[&<>"']/g, (ch) => (
     { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[ch] as string
   ));
 }
 
-// Scraped URLs are only ever used as href/src here, never executed — but a
-// javascript: or data: URL in an href is a click away from running. Only
-// http(s) is a legitimate destination for a company site or job posting.
-function safeUrl(value: unknown): string {
-  const s = String(value ?? '').trim();
-  return /^https?:\/\//i.test(s) ? s : '';
-}
 
-interface Company {
-  id: string;
-  name: string;
-  description: string;
-  website: string;
-  domain: string;
-  sector: string;
-  stage: string;
-  area: string;
-  careers_url: string;
-  lat: number | null;
-  lng: number | null;
-  job_count: number;
-}
-
-interface TechHub {
-  id: string;
-  name: string;
-  query: string;
-  lat: number;
-  lng: number;
-  zoom: number;
-  minZoom: number;
-  maxZoom: number;
-  bounds: [[number, number], [number, number]];
-  icon: string;
-}
 
 interface MapLibreCompanyMapProps {
   companies: Company[];
   selectedHub: TechHub;
-  onSelectHub?: (hub: TechHub) => void;
 }
 
 export default function MapLibreCompanyMap({ companies, selectedHub }: MapLibreCompanyMapProps) {
   const mapContainerRef = useRef<HTMLDivElement>(null);
   const mapRef = useRef<maplibregl.Map | null>(null);
   const markersRef = useRef<maplibregl.Marker[]>([]);
-  const navigate = useNavigate();
   const [selectedCompany, setSelectedCompany] = useState<Company | null>(null);
   const [isStyleLoaded, setIsStyleLoaded] = useState(false);
 
@@ -181,136 +145,25 @@ export default function MapLibreCompanyMap({ companies, selectedHub }: MapLibreC
         </div>
       `;
 
-      // Interactive Popup
-      const popupHtml = `
-        <div class="p-3 font-sans max-w-[280px]">
-          <div class="flex items-center gap-2.5 mb-2">
-            <div class="w-8 h-8 rounded-lg bg-slate-100 border border-slate-200 flex items-center justify-center overflow-hidden shrink-0">
-              ${
-                faviconUrl
-                  ? `<img src="${escapeHtml(faviconUrl)}" alt="${safeName}" class="w-6 h-6 object-contain" />`
-                  : `<span class="font-bold text-xs text-slate-700">${initial}</span>`
-              }
-            </div>
-            <div class="min-w-0 flex-1">
-              <h4 class="font-bold text-sm text-slate-900 leading-tight truncate">${safeName}</h4>
-              <span class="text-[11px] text-slate-500 flex items-center gap-1 font-mono mt-0.5">
-                📍 ${escapeHtml(c.area)}
-              </span>
-            </div>
-          </div>
-          <p class="text-xs text-slate-600 leading-relaxed mb-3 line-clamp-2">${escapeHtml(c.description) || 'Indian tech startup.'}</p>
-          <div class="flex items-center gap-1.5 flex-wrap mb-3">
-            <span class="text-[10px] font-mono px-2 py-0.5 rounded-full bg-slate-100 text-slate-700 font-semibold border border-slate-200">${escapeHtml(c.sector) || 'Tech'}</span>
-            <span class="text-[10px] font-mono px-2 py-0.5 rounded-full bg-slate-100 text-slate-700 font-semibold border border-slate-200">${escapeHtml(c.stage) || 'Startup'}</span>
-            ${
-              hasJobs
-                ? `<button id="map-roles-toggle-${c.id}" class="text-[10px] font-mono px-2.5 py-0.5 rounded-full bg-emerald-50 text-emerald-700 hover:bg-emerald-100 font-semibold border border-emerald-200/80 cursor-pointer transition-colors flex items-center gap-1 shadow-sm">💼 ${c.job_count} open role${c.job_count > 1 ? 's' : ''} ▼</button>`
-                : ''
-            }
-          </div>
-
-          <div id="map-roles-container-${c.id}" style="display:none;" class="my-2 max-h-48 overflow-y-auto divide-y divide-slate-100 border-t border-b border-slate-100 py-1 font-sans">
-            <p class="text-[11px] text-slate-400 text-center py-2 animate-pulse">Loading live roles…</p>
-          </div>
-
-          <div class="flex items-center justify-between gap-2 pt-2 border-t border-slate-100">
-            ${
-              safeUrl(c.website)
-                ? `<a href="${escapeHtml(safeUrl(c.website))}" target="_blank" rel="noopener noreferrer" class="text-xs text-indigo-600 font-semibold hover:underline flex items-center gap-1">Website ↗</a>`
-                : '<span></span>'
-            }
-            <button id="map-practice-btn-${c.id}" class="px-3 py-1.5 rounded-xl bg-slate-900 hover:bg-black text-white text-[11px] font-semibold shadow-md transition-all flex items-center gap-1">
-              🎯 Practice Mock
-            </button>
-          </div>
-        </div>
-      `;
-
-      const popup = new maplibregl.Popup({
-        offset: 20,
-        closeButton: true,
-        closeOnClick: false,
-        className: 'custom-maplibre-popup',
-        maxWidth: '320px',
-      }).setHTML(popupHtml);
-
-      popup.on('open', () => {
-        const practiceBtn = document.getElementById(`map-practice-btn-${c.id}`);
-        if (practiceBtn) {
-          practiceBtn.onclick = () => {
-            navigate(`/repositories?company=${encodeURIComponent(c.id)}`);
-          };
-        }
-
-        const rolesToggle = document.getElementById(`map-roles-toggle-${c.id}`);
-        const rolesContainer = document.getElementById(`map-roles-container-${c.id}`);
-
-        if (rolesToggle && rolesContainer) {
-          rolesToggle.onclick = async () => {
-            if (rolesContainer.style.display === 'block') {
-              rolesContainer.style.display = 'none';
-              rolesToggle.innerHTML = `💼 ${c.job_count} open role${c.job_count > 1 ? 's' : ''} ▼`;
-            } else {
-              rolesContainer.style.display = 'block';
-              rolesToggle.innerHTML = `💼 Hide roles ▲`;
-
-              try {
-                const res = await fetch(`${import.meta.env.VITE_API_URL}/api/companies/${c.id}/jobs`, { credentials: 'include' });
-                const data = await res.json();
-                const jobs = data.jobs || [];
-
-                if (jobs.length === 0) {
-                  rolesContainer.innerHTML = `<p class="text-[11px] text-slate-400 text-center py-2">No active postings right now.</p>`;
-                } else {
-                  rolesContainer.innerHTML = jobs
-                    .map(
-                      (j: { id: string; title: string; department: string; location: string; url: string }) => `
-                      <div class="py-2 px-1 hover:bg-slate-50 transition-colors flex items-start justify-between gap-1.5">
-                        <div class="min-w-0 flex-1">
-                          <p class="text-xs font-semibold text-slate-800 truncate leading-tight">${escapeHtml(j.title)}</p>
-                          <p class="text-[10px] text-slate-400 font-mono truncate mt-0.5">${escapeHtml([j.department, j.location].filter(Boolean).join(' · '))}</p>
-                        </div>
-                        <div class="flex items-center gap-1 shrink-0">
-                          <button id="job-mock-btn-${j.id}" class="px-2 py-0.5 rounded-md text-[10px] font-semibold bg-indigo-50 text-indigo-700 hover:bg-indigo-600 hover:text-white transition-all shadow-sm">Mock</button>
-                          ${safeUrl(j.url) ? `<a href="${escapeHtml(safeUrl(j.url))}" target="_blank" rel="noopener noreferrer" class="text-slate-400 hover:text-slate-700 p-1 text-xs">↗</a>` : ''}
-                        </div>
-                      </div>
-                    `
-                    )
-                    .join('');
-
-                  // Wire up mock interview click handlers
-                  jobs.forEach((j: { id: string }) => {
-                    const btn = document.getElementById(`job-mock-btn-${j.id}`);
-                    if (btn) {
-                      btn.onclick = (e) => {
-                        e.stopPropagation();
-                        navigate(`/repositories?job=${encodeURIComponent(j.id)}`);
-                      };
-                    }
-                  });
-                }
-              } catch {
-                rolesContainer.innerHTML = `<p class="text-[11px] text-red-500 text-center py-2">Failed to load roles.</p>`;
-              }
-            }
-          };
-        }
-      });
-
+      // A pin opens the drawer, and only the drawer. There used to be a popup
+      // as well, opening at the same time on the same click: 115 lines of
+      // innerHTML that rendered the company's logo, name, area, description,
+      // sector, stage, website link and roles list — everything CompanyDrawer
+      // was already rendering behind it, down to a second fetch of the same
+      // /jobs endpoint CompanyJobList calls. Two views of one company, kept in
+      // step by hand, one of them assembled from strings and reachable only
+      // through getElementById.
       el.addEventListener('click', () => {
         setSelectedCompany(c);
       });
 
       const marker = new maplibregl.Marker({ element: el, anchor: 'center' })
         .setLngLat([c.lng as number, c.lat as number])
-        .setPopup(popup)
         .addTo(map);
 
       markersRef.current.push(marker);
     });
-  }, [companies, navigate, isStyleLoaded]);
+  }, [companies, isStyleLoaded]);
 
   const resetNorth = () => {
     const map = mapRef.current;

@@ -6,7 +6,6 @@ import (
 	"log"
 	"net/http"
 	"os"
-	"strings"
 	"time"
 
 	"github.com/gin-contrib/sessions"
@@ -20,9 +19,10 @@ import (
 	pb "github.com/ToufiqQureshi/neurofiq-ai-interview/backend-go/proto"
 )
 
-// wsAllowedOrigin mirrors main.go's allowedOrigins() default. It can't import
-// that function directly (package main), so this repeats the same
-// FRONTEND_URL parsing rather than trusting every Origin header.
+// wsAllowedOrigin answers from config.AllowedOrigins, the same list main sets
+// CORS from. It used to repeat that parsing here because it cannot import
+// package main — which left the socket gate and the browser gate agreeing only
+// as long as someone changed both.
 func wsAllowedOrigin(origin string) bool {
 	if origin == "" {
 		// No Origin header means no browser sent this request. That is not
@@ -31,16 +31,7 @@ func wsAllowedOrigin(origin string) bool {
 		// cross-site browser case.
 		return true
 	}
-	raw := os.Getenv("FRONTEND_URL")
-	if raw == "" {
-		raw = "http://localhost:5173"
-	}
-	for _, o := range strings.Split(raw, ",") {
-		if strings.TrimSpace(strings.TrimRight(o, "/")) == strings.TrimRight(origin, "/") {
-			return true
-		}
-	}
-	return false
+	return config.OriginAllowed(origin)
 }
 
 var upgrader = websocket.Upgrader{
