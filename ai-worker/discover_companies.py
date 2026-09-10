@@ -81,8 +81,12 @@ PROVIDERS = {
         "slug_re": re.compile(r"^https?://apply\.workable\.com/([^/?#]+)"),
     },
     "smartrecruiters": {
-        "hosts": ["careers.smartrecruiters.com"],
-        "slug_re": re.compile(r"^https?://careers\.smartrecruiters\.com/([^/?#]+)"),
+        # jobs.smartrecruiters.com is the platform's other public posting
+        # host -- "jobs.smartrecruiters.com/altisource/744...-role-title"
+        # carries the same company slug in the same position as
+        # careers.smartrecruiters.com/altisource.
+        "hosts": ["careers.smartrecruiters.com", "jobs.smartrecruiters.com"],
+        "slug_re": re.compile(r"^https?://(?:careers|jobs)\.smartrecruiters\.com/([^/?#]+)"),
     },
     # The backend's admission pipeline (discovery_boards.go / jobs_sync.go)
     # already speaks all six of these -- this script just never asked them
