@@ -84,6 +84,43 @@ PROVIDERS = {
         "hosts": ["careers.smartrecruiters.com"],
         "slug_re": re.compile(r"^https?://careers\.smartrecruiters\.com/([^/?#]+)"),
     },
+    # The backend's admission pipeline (discovery_boards.go / jobs_sync.go)
+    # already speaks all six of these -- this script just never asked them
+    # anything. Restricted to India's two ATS platforms most were missing
+    # before: Workday and Darwinbox are what large Indian employers actually
+    # run when they are not on one of the six above.
+    "darwinbox": {
+        "hosts": ["darwinbox.in", "darwinbox.com"],
+        "slug_re": re.compile(r"^https?://([^./]+)\.darwinbox\.(?:in|com)"),
+    },
+    "workday": {
+        "hosts": ["myworkdayjobs.com"],
+        # Stored as "tenant:region:site" -- the same three parts the job URLs
+        # are built from (see boardURL's workday case backend-side), so a
+        # single capture group is not enough here.
+        "slug_re": re.compile(
+            r"^https?://([^.]+)\.([^.]+)\.myworkdayjobs\.com/[^/]+/([^/?#]+)"),
+        "slug_builder": lambda m: f"{m.group(1)}:{m.group(2)}:{m.group(3)}",
+    },
+    "recruitee": {
+        "hosts": ["recruitee.com"],
+        "slug_re": re.compile(r"^https?://([^./]+)\.recruitee\.com"),
+    },
+    "personio": {
+        "hosts": ["jobs.personio.de", "jobs.personio.com"],
+        # The slug IS the full host here, not a label -- Personio splits
+        # tenants across .de and .com with no way to tell which without
+        # having already matched it (see personioLinkRe backend-side).
+        "slug_re": re.compile(r"^https?://([a-zA-Z0-9-]+\.jobs\.personio\.(?:de|com))"),
+    },
+    "freshteam": {
+        "hosts": ["freshteam.com"],
+        "slug_re": re.compile(r"^https?://([^./]+)\.freshteam\.com"),
+    },
+    "gem": {
+        "hosts": ["jobs.gem.com"],
+        "slug_re": re.compile(r"^https?://jobs\.gem\.com/([a-zA-Z0-9_-]+)"),
+    },
 }
 
 # Path segments that match the board patterns but are the platform's own pages
@@ -172,6 +209,14 @@ def pick_weighted_city(hub_weight=0.7):
 PROVIDER_NAMES = list(PROVIDERS)
 
 
+def slug_from_match(cfg, m):
+    """Most providers are a single capture group; workday's board identity
+    is three (tenant, region, site), so its cfg carries a slug_builder that
+    composes them the same way the backend's boardURL does."""
+    builder = cfg.get("slug_builder", lambda mm: mm.group(1))
+    return builder(m)
+
+
 def slot_from_clock(tick_seconds):
     """One (provider, city, role), chosen by the clock rather than remembered.
 
@@ -247,7 +292,7 @@ def search(provider, city, role, pages, pause, timeout, verbose=True):
                 m = cfg["slug_re"].match(url)
                 if not m:
                     continue
-                slug = m.group(1).lower().strip("-")
+                slug = slug_from_match(cfg, m).lower().strip("-")
                 if slug in SKIP_SLUGS or len(slug) < 2 or ".." in slug:
                     continue
                 if slug not in found:

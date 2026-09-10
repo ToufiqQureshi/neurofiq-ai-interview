@@ -24,7 +24,7 @@ import time
 
 from discover_companies import (
     PROVIDER_NAMES, PROVIDERS, ROLES, SKIP_SLUGS,
-    build_query, fetch_page, pick_weighted_city, push,
+    build_query, fetch_page, pick_weighted_city, push, slug_from_match,
 )
 
 MIN_GAP = (3.0, 5.0)  # global gap between ANY two requests to SearXNG
@@ -79,7 +79,7 @@ def walk_all_pages(pacer, worker_id, provider, city, role, max_pages, timeout):
                 m = cfg["slug_re"].match(url)
                 if not m:
                     continue
-                slug = m.group(1).lower().strip("-")
+                slug = slug_from_match(cfg, m).lower().strip("-")
                 if slug in SKIP_SLUGS or len(slug) < 2 or ".." in slug:
                     continue
                 if slug not in found:
