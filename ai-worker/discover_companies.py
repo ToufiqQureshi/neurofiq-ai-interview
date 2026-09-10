@@ -11,12 +11,17 @@ polite pacing deeper than the metered API it replaced — one query walked five
 pages returned 51 distinct companies against 45 for a paid Exa call on the same
 slot. Nothing here spends money, so nothing here needs a budget guard.
 
-Every run asks something different. The slot — provider, city, role — comes
-from the clock: 6 providers x ~659 districts x 20 roles is around 79,000 slots,
-so a two-minute cron runs for months before it repeats a question. City is a
-district name (see load_india_districts), not a literal PIN code — a search
-engine has nothing to match a 6-digit code against, since postings are never
-tagged by one, but every district name here has actually appeared on one.
+Every run asks something different. The slot — provider, city — comes from the
+clock: 12 providers x ~659 districts is around 7,900 slots, so a two-minute
+cron runs for eleven days before it repeats a question. City is a district
+name (see load_india_districts), not a literal PIN code — a search engine has
+nothing to match a 6-digit code against, since postings are never tagged by
+one, but every district name here has actually appeared on one.
+
+Role is not part of the query, on purpose — see slot_from_clock's docstring
+for the measurement: a role term roughly halves the unique boards a query
+finds, for a small set of companies a role-less query would have missed
+anyway. --role still exists for the rare case someone wants one on purpose.
 
 Nothing is remembered between runs, on purpose. A local list of boards already
 sent grew to 1,827 entries and was skipping every one of them for good,
@@ -222,25 +227,38 @@ def slug_from_match(cfg, m):
 
 
 def slot_from_clock(tick_seconds):
-    """One (provider, city, role), chosen by the clock rather than remembered.
+    """One (provider, city), chosen by the clock rather than remembered.
 
     Consecutive runs land on different work with nothing to keep in sync, and a
     second machine on the same cron asks the same question rather than drifting
     into its own private rotation.
+
+    Role used to be a third axis here, but a live A/B (jobs.lever.co, Pune)
+    showed a role term in the query roughly HALVES unique boards found: 13
+    against 25 for the same host and city with the role dropped, and the
+    broader query still caught 22 of those 13 -- it strictly dominates except
+    for a handful of cases (Palantir, Netomi, Getmidas showed up only with a
+    role term) that are not worth doubling every request to catch. ROLES and
+    --role remain for that rare case where someone wants one on purpose.
     """
     idx = int(time.time() // max(tick_seconds, 1))
     provider = PROVIDER_NAMES[idx % len(PROVIDER_NAMES)]
     city = CITIES[(idx // len(PROVIDER_NAMES)) % len(CITIES)]
-    role = ROLES[(idx // (len(PROVIDER_NAMES) * len(CITIES))) % len(ROLES)]
-    return provider, city, role
+    return provider, city
 
 
-def build_query(host, city, role):
+def build_query(host, city, role=None):
     # site: is a real operator to SearXNG's engines, which are keyword engines,
     # and it is what keeps a page of results on one ATS host. (Exa, which this
     # replaced, is not a keyword engine — the same shape cost it half its
     # yield, 23 distinct companies against 45 for a plain sentence.)
-    return f"site:{host} {role} {city} India"
+    #
+    # role is optional and omitted by default -- see slot_from_clock's
+    # docstring for why a role term costs roughly half the unique boards a
+    # query would otherwise find.
+    if role:
+        return f"site:{host} {role} {city} India"
+    return f"site:{host} {city} India"
 
 
 def fetch_page(query, page, timeout):
@@ -251,7 +269,7 @@ def fetch_page(query, page, timeout):
         return json.loads(resp.read().decode("utf-8", "ignore"))
 
 
-def search(provider, city, role, pages, pause, timeout, verbose=True):
+def search(provider, city, pages, pause, timeout, role=None, verbose=True):
     """Walk pages until they stop paying, pausing like a reader between them.
 
     The pause is the whole reason this works. Five pages requested back to back
@@ -358,7 +376,9 @@ def main():
     ap.add_argument("--tick", type=int, default=120, help="cron interval, for slot rotation")
     ap.add_argument("--provider", choices=PROVIDER_NAMES, help="pin instead of taking the slot")
     ap.add_argument("--city", help="pin instead of taking the slot")
-    ap.add_argument("--role", help="pin instead of taking the slot")
+    ap.add_argument("--role", help="narrow the query to one role -- costs roughly "
+                                    "half the unique boards a query otherwise finds, "
+                                    "see slot_from_clock's docstring; off by default")
     ap.add_argument("--dry-run", action="store_true", help="search only, push nothing")
     ap.add_argument("--api", default="http://localhost:8080")
     args = ap.parse_args()
@@ -366,16 +386,16 @@ def main():
     try:
         lo, hi = (float(x) for x in args.pause.split(","))
     except ValueError:
-        sys.exit("--pause wants min,max seconds, e.g. 6,10")
+        sys.exit("--pause wants min,max seconds, e.g. 3,8")
 
-    provider, city, role = slot_from_clock(args.tick)
+    provider, city = slot_from_clock(args.tick)
     provider = args.provider or provider
     city = args.city or city
-    role = args.role or role
+    role = args.role
 
-    print(f"slot: {provider} / {city} / {role}")
+    print(f"slot: {provider} / {city}" + (f" / {role}" if role else ""))
 
-    slugs, trouble = search(provider, city, role, args.pages, (lo, hi), args.timeout)
+    slugs, trouble = search(provider, city, args.pages, (lo, hi), args.timeout, role=role)
     fresh = slugs[:args.max]
     print(f"{len(slugs)} boards found, reporting {len(fresh)}")
 
