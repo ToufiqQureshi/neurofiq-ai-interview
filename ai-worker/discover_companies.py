@@ -351,8 +351,8 @@ def main():
                     help="max SearXNG pages to walk per host (default 8) -- "
                          "search() already stops early the moment a page "
                          "comes back empty, so this is a ceiling, not a fixed count")
-    ap.add_argument("--pause", default="6,10",
-                    help="seconds between pages, min,max (default 6,10)")
+    ap.add_argument("--pause", default="3,8",
+                    help="seconds between pages, min,max (default 3,8)")
     ap.add_argument("--timeout", type=int, default=60, help="per-request timeout")
     ap.add_argument("--max", type=int, default=100, help="most boards to report in one run")
     ap.add_argument("--tick", type=int, default=120, help="cron interval, for slot rotation")

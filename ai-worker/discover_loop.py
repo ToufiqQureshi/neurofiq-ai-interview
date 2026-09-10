@@ -27,7 +27,7 @@ from discover_companies import (
     build_query, fetch_page, pick_weighted_city, push, slug_from_match,
 )
 
-MIN_GAP = (3.0, 5.0)  # global gap between ANY two requests to SearXNG
+MIN_GAP = (3.0, 8.0)  # global gap between ANY two requests to SearXNG
 
 
 class GlobalPacer:
