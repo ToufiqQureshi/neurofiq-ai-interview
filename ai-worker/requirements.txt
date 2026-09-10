@@ -9,3 +9,4 @@ grpcio-tools
 protobuf
 duckduckgo-search
 beautifulsoup4
+pgeocode
